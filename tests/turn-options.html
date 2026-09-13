@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>会话选项状态回归检查</title>
+<!-- npm run dev, open /tests/turn-options.html. Uses only fake catalog data. -->
+<div id="root"></div><output id="result">RUNNING</output>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {TurnOptions} from '/src/web/TurnOptions.tsx';
+import '/src/web/style.css';
+const models=['model-a','model-b'].map(model=>({model,displayName:model,supportedReasoningEfforts:['low','high'],defaultReasoningEffort:'low'}));
+window.fetch=async path=>new Response(JSON.stringify(path.endsWith('/models')?{data:models}:{current:'ask',modes:['ask','full-access','custom'].map(id=>({id,available:true}))}));
+const root=createRoot(document.querySelector('#root'));
+let value={},props={effectiveModel:'model-a',effectiveEffort:'high',permissions:{approvalPolicy:'never',approvalsReviewer:'user',sandbox:{type:'dangerFullAccess'}}};
+const render=()=>root.render(React.createElement(TurnOptions,{...props,value,onChange:next=>{value=next;render();}}));
+const select=label=>document.querySelector(`select[aria-label="${label}"]`);
+const selected=label=>select(label)?.selectedOptions[0]?.textContent;
+const permission=()=>document.querySelector('.permission-picker>button');
+const check=(value,message)=>{if(!value)throw new Error(message);};
+async function until(predicate,message){const end=Date.now()+5000;while(!predicate()){if(Date.now()>end)throw new Error(message);await new Promise(resolve=>setTimeout(resolve,20));}}
+function choose(label,value){select(label).value=value;select(label).dispatchEvent(new Event('change',{bubbles:true}));}
+try{
+ render();await until(()=>selected('模型')==='model-a（当前）'&&select('模型').options.length===3,'Current model missing');
+ check(selected('推理强度')==='high（当前）','Current effort missing');
+ check(permission().textContent.includes('完全访问权限'),'Confirmed permission missing');
+ check(Object.keys(value).length===0,'Displaying settings must not create overrides');
+ props={...props,effectiveModel:'model-b',effectiveEffort:'low'};render();
+ await until(()=>selected('模型')==='model-b（当前）'&&selected('推理强度')==='low（当前）','Refresh must update current values');
+ props={...props,permissions:undefined};render();await until(()=>permission().textContent.includes('恢复后确认权限'),'Unloaded permission must be explicit');
+ permission().click();await until(()=>document.querySelector('[role="menu"]'),'Permission menu missing');
+ check(!document.querySelector('[role="menuitemradio"][aria-checked="true"]'),'Unknown permission must not pretend to have a selection');
+ [...document.querySelectorAll('[role="menuitemradio"]')].find(b=>b.textContent.includes('完全访问权限')).click();
+ await until(()=>permission().textContent.includes('完全访问权限'),'Chosen permission hidden by unverified label');
+ choose('模型','model-a');await until(()=>selected('推理强度')==='low（模型默认）','Changed model must use its default effort label');
+ choose('推理强度','high');await until(()=>value.effort==='high','Explicit effort not retained');
+ check(document.querySelector('.turn-options').textContent.includes('下条消息生效'),'Override scope missing');
+ value={};props={effectiveModel:'unlisted-model',effectiveEffort:'xhigh'};render();
+ await until(()=>selected('模型')==='unlisted-model（当前）'&&selected('推理强度')==='xhigh（当前）','Values outside catalog must remain visible');
+ props={effectiveModel:null,effectiveEffort:null};render();
+ await until(()=>selected('模型')==='当前模型未返回'&&selected('推理强度')==='未指定或未返回','Missing values must not be presented as known defaults');
+ document.querySelector('#result').textContent='PASS: 当前模型 / 推理强度 / 权限 / 刷新 / 手动覆盖 / 未知状态';
+}catch(error){document.querySelector('#result').textContent='FAIL: '+error.message;console.error(error);}
+</script></html>

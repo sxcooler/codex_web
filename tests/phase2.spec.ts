@@ -1,0 +1,150 @@
+import { test, expect } from '@playwright/test';
+test('pane drag persists ratios and navigating releases old session while preserving its draft',async({page})=>{
+  const releases:string[]=[];
+  await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
+  await page.route('**/api/**',async route=>{
+    const url=new URL(route.request().url()),path=url.pathname,body=route.request().postDataJSON();
+    let data:any={};
+    if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
+    else if(path==='/api/projects')data={projects:[{id:'p',name:'project',path:'C:/project'}]};
+    else if(path==='/api/sessions')data={data:[{id:'a',name:'会话 A'},{id:'b',name:'会话 B'}],nextCursor:null};
+    else if(path==='/api/models')data={data:[{id:'model',model:'model',displayName:'模型',supportedReasoningEfforts:[{reasoningEffort:'medium'}],inputModalities:['text','image']}]};
+    else if(path==='/api/permission-modes')data={modes:[{id:'ask',label:'请求批准',available:true},{id:'auto-review',label:'帮我批准',available:true},{id:'full-access',label:'完全访问权限',available:true},{id:'custom',label:'自定义（config.toml）',available:true}],current:'ask'};
+    else if(/\/sessions\/[ab]$/.test(path))data={thread:{id:path.split('/').pop(),name:path.endsWith('a')?'会话 A':'会话 B',cwd:'C:/project',turns:[]},project:{id:'p',path:'C:/project'},phase:'IDLE',pending:[],permissions:{approvalPolicy:'on-request',approvalsReviewer:'user',sandbox:{type:'workspaceWrite'}}};
+    else if(path.endsWith('/release-on-leave')){releases.push(path);data={status:'released',handoffReady:true};}
+    else if(path.endsWith('/git/files'))data={files:[],revision:'one'};
+    else if(path.endsWith('/git/status'))data={entries:[]};
+    else if(path.endsWith('/git/diff'))data={text:'',hunks:[]};
+    else if(path.endsWith('/files'))data={entries:[]};
+    await route.fulfill({json:data});
+  });
+  await page.goto('/sessions/a');
+  await expect(page.getByRole('separator',{name:'调整导航宽度'})).toBeVisible();
+  await page.locator('#message').fill('保留的草稿');
+  const handle=page.getByRole('separator',{name:'调整导航宽度'}),box=(await handle.boundingBox())!;
+  await page.mouse.move(box.x+box.width/2,box.y+100);await page.mouse.down();await page.mouse.move(box.x+60,box.y+100);await page.mouse.up();
+  const saved=await page.evaluate(()=>localStorage.getItem('codex-web:layout:v1'));
+  expect(saved).toBeTruthy();
+  await page.getByRole('button',{name:'会话 B',exact:true}).click();
+  await expect(page.locator('h1')).toHaveText('会话 B');
+  expect(releases.some(x=>x.includes('/a/'))).toBe(true);
+  await page.getByRole('button',{name:'会话 A',exact:true}).click();
+  await expect(page.locator('#message')).toHaveValue('保留的草稿');
+  await page.reload();expect(await page.evaluate(()=>localStorage.getItem('codex-web:layout:v1'))).toBe(saved);
+  await page.getByRole('button',{name:/审批方式/}).click();
+  await expect(page.getByRole('menuitemradio',{name:/帮我批准/})).toBeVisible();
+  await page.screenshot({path:'output/playwright/desktop-permissions.png',fullPage:true});
+  await page.getByRole('menuitemradio',{name:/帮我批准/}).click();
+  await expect(page.getByRole('button',{name:/审批方式：帮我批准/})).toBeVisible();
+  await page.setViewportSize({width:831,height:900});
+  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeInViewport();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.setViewportSize({width:390,height:844});
+  await expect(page.getByRole('separator',{name:'调整导航宽度'})).not.toBeVisible();
+  await page.locator('#message').fill('手机上的任务');
+  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeInViewport();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.screenshot({path:'output/playwright/mobile-chat.png',fullPage:true});
+});
+
+test('release waits for confirmation and reconnect never resubmits an uncertain message',async({page})=>{
+ let sends=0,releases=0;let body:any;const id='recovery';
+ await page.clock.install();
+ await page.addInitScript(()=>{(window as any).sources=[];window.EventSource=class extends EventTarget{constructor(){super();(window as any).sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
+ await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;let data:any={};let status=200;
+  if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
+  else if(path==='/api/projects')data={projects:[]};
+  else if(path==='/api/sessions')data={data:[{id,name:'恢复测试'}],nextCursor:null};
+  else if(path==='/api/models')data={data:[]};
+  else if(path==='/api/permission-modes')data={modes:[],current:'custom'};
+  else if(path==='/api/sessions/'+id)data={thread:{id,name:'恢复测试',turns:[]},phase:'IDLE',project:null,pending:[],retry:{message:'暂时断线，正在重试'}};
+  else if(path.endsWith('/messages')){sends++;body=route.request().postDataJSON();status=504;data={error:'结果未知'};}
+  else if(path.endsWith('/release')){releases++;data={status:'released',handoffReady:releases>1,warning:'仍在等待释放占用'};}
+  await route.fulfill({json:data,status});
+ });
+ await page.goto('/sessions/'+id);
+ await expect(page.getByText('Codex 正在重试：暂时断线，正在重试')).toBeVisible();
+ await page.locator('#message').fill('仅发送一次');await page.getByRole('button',{name:'发送',exact:true}).click();
+ await expect(page.getByText('提交结果待核实，请先检查历史。')).toBeVisible();expect(sends).toBe(1);expect(body.text).toBe('仅发送一次');
+ const sourceCount=await page.evaluate(()=>(window as any).sources.length);
+ await page.clock.fastForward(50_000);
+ expect(await page.evaluate(()=>(window as any).sources.length)).toBeGreaterThan(sourceCount);expect(sends).toBe(1);
+ await page.getByRole('button',{name:'释放并关闭',exact:true}).click();
+ await expect(page).toHaveURL(/\/sessions\/recovery$/);await expect(page.getByText('仍在等待释放占用')).toBeVisible();
+ await page.getByRole('button',{name:'释放并关闭',exact:true}).click();await expect(page).toHaveURL(/\/$/);expect(sends).toBe(1);
+});
+
+test('file diff and an attachment-only task use the selected options',async({page})=>{
+ let sent:any;
+ await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
+ await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;let data:any={};
+  if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
+  else if(path==='/api/projects')data={projects:[{id:'p',name:'project'}]};
+  else if(path==='/api/sessions'&&route.request().method()==='GET')data={data:[],nextCursor:null};
+  else if(path==='/api/sessions'){sent=route.request().postDataJSON();data={threadId:'files'};}
+  else if(path==='/api/models')data={data:[{id:'m',model:'m',displayName:'测试模型',supportedReasoningEfforts:[{reasoningEffort:'high'}],isDefault:true}]};
+  else if(path==='/api/permission-modes')data={current:'ask',modes:[{id:'ask',available:true}]};
+  else if(path==='/api/uploads')data={uploadId:'00000000-0000-4000-8000-000000000011',name:'note.txt',size:5,kind:'file'};
+  else if(path==='/api/sessions/files')data={thread:{name:'文件测试',turns:[]},project:{id:'p'},phase:'IDLE',pending:[]};
+  else if(path.endsWith('/git/files'))data={files:[{path:'note.txt',status:'M',added:1,deleted:1}]};
+  else if(path.endsWith('/git/diff'))data={hunks:[{oldStart:1,oldLines:1,newStart:1,newLines:1,lines:[{kind:'delete',text:'before',oldLine:1},{kind:'add',text:'after',newLine:1}]}]};
+  await route.fulfill({json:data});
+ });
+ await page.goto('/');
+ await page.locator('input[type=file]').setInputFiles({name:'note.txt',mimeType:'text/plain',buffer:Buffer.from('hello')});
+ await expect(page.getByText(/KiB · 就绪/)).toBeVisible();
+ await page.getByRole('combobox',{name:'模型',exact:true}).selectOption('m');
+ await page.getByRole('combobox',{name:'推理强度'}).selectOption('high');
+ await page.getByRole('button',{name:'开始任务 →'}).click();
+ await expect(page.getByRole('heading',{name:'文件测试'})).toBeVisible();
+ expect(sent.model).toBe('m');expect(sent.effort).toBe('high');expect(sent.attachmentIds).toHaveLength(1);expect(sent.prompt).toBeUndefined();
+ await page.getByRole('button',{name:/note.txt/}).click();
+ await expect(page.locator('.unified-cell code').filter({hasText:'before'})).toBeVisible();
+ await page.getByRole('button',{name:'并排视图'}).click();
+ await expect(page.locator('.split-cell code').filter({hasText:'after'})).toBeVisible();
+ await expect(page.getByRole('link',{name:'下载 patch'})).toHaveAttribute('href',/path=note.txt/);
+ await page.locator('#message').evaluate(element=>{const clipboardData=new DataTransfer();clipboardData.items.add(new File(['image'],'pasted.png',{type:'image/png'}));element.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}));});
+ await expect(page.locator('.attachments li')).toHaveCount(1);
+});
+
+test('rapid return cancels release only after the delayed leave request completes',async({page})=>{
+ let completeLeave:(()=>void)|undefined;const calls:string[]=[];
+ await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
+ await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;let data:any={};
+  if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
+  else if(path==='/api/projects')data={projects:[]};
+  else if(path==='/api/sessions')data={data:[{id:'a',name:'甲'},{id:'b',name:'乙'}],nextCursor:null};
+  else if(/\/sessions\/[ab]$/.test(path))data={thread:{name:path.endsWith('a')?'甲':'乙',turns:[]},phase:'IDLE',pending:[]};
+  else if(path==='/api/sessions/a/release-on-leave'){calls.push('leave-start');await new Promise<void>(resolve=>{completeLeave=resolve;});calls.push('leave-done');}
+  else if(path==='/api/sessions/a/cancel-release')calls.push('cancel');
+  await route.fulfill({json:data});
+ });
+ await page.goto('/sessions/a');await expect(page.locator('h1')).toHaveText('甲');calls.length=0;
+ await page.getByRole('button',{name:'乙',exact:true}).click();await expect(page.locator('h1')).toHaveText('乙');
+ await expect.poll(()=>!!completeLeave).toBe(true);
+ await page.getByRole('button',{name:'甲',exact:true}).click();await expect(page).toHaveURL(/sessions\/a$/);
+ await page.getByRole('button',{name:'刷新当前会话'}).click();await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+ await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
+ expect(calls).toEqual(['leave-start']);completeLeave!();
+ await expect(page.locator('h1')).toHaveText('甲');expect(calls).toEqual(['leave-start','leave-done','cancel']);
+});
+
+test('creation context survives navigation and late-created tasks are automatically released',async({page})=>{
+ let finishCreate:(()=>void)|undefined,sent:any;const released:string[]=[];
+ await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
+ await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;let data:any={};
+  if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
+  else if(path==='/api/projects')data={projects:[{id:'p',name:'正确项目'}]};
+  else if(path==='/api/sessions'&&route.request().method()==='GET')data={data:[{id:'other',name:'其他会话'}],nextCursor:null};
+  else if(path==='/api/sessions'){sent=route.request().postDataJSON();await new Promise<void>(resolve=>{finishCreate=resolve;});data={threadId:'late'};}
+  else if(path==='/api/sessions/other')data={thread:{name:'其他会话',turns:[]},phase:'IDLE',pending:[]};
+  else if(path.endsWith('/release-on-leave'))released.push(path);
+  await route.fulfill({json:data});
+ });
+ await page.goto('/');await page.getByRole('combobox',{name:'项目',exact:true}).selectOption('p');await page.getByRole('textbox',{name:'任务',exact:true}).fill('项目任务');
+ await page.getByRole('button',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');
+ await page.getByRole('button',{name:'＋ 新任务'}).click();await expect(page.getByRole('combobox',{name:'项目',exact:true})).toHaveValue('p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toHaveValue('项目任务');
+ await page.getByRole('button',{name:'开始任务 →'}).click();await expect.poll(()=>!!finishCreate).toBe(true);expect(sent.projectId).toBe('p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toBeDisabled();
+ await page.getByRole('button',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');finishCreate!();
+ await expect.poll(()=>released.includes('/api/sessions/late/release-on-leave')).toBe(true);await expect(page).toHaveURL(/sessions\/other$/);
+});

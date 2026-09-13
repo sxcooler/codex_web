@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话恢复与释放回归检查</title>
+<!-- npm run dev, then open /tests/session-lifecycle.html. No real API or model calls. -->
+<div id="root"></div>
+<output id="result" style="position:fixed;bottom:0;right:0;z-index:100;background:#111;padding:8px">RUNNING</output>
+<script type="module">
+  const id = 'flow-test', sources = [];
+  let reads = 0, sends = 0, releases = 0, hang = false, aborted = 0, failRelease = true;
+  let snapshot = {thread:{id,name:'恢复测试',turns:[]},phase:'IDLE',activeTurnId:null,pending:[],project:null};
+  const response = (data, status = 200) => new Response(JSON.stringify(data), {status});
+  history.replaceState(null, '', '/sessions/' + id);
+  Object.defineProperty(document, 'visibilityState', {configurable:true,value:'visible'});
+  window.EventSource = class extends EventTarget {
+    closed = false;
+    constructor() {super();sources.push(this);queueMicrotask(() => {if(!this.closed)this.dispatchEvent(new Event('ready'));});}
+    close() {this.closed = true;}
+  };
+  window.fetch = async (path, options = {}) => {
+    if(path === '/api/auth/session') return response({authenticated:true,csrfToken:'test'});
+    if(path === '/api/projects') return response({projects:[]});
+    if(path === '/api/sessions') return response({data:[snapshot.thread],nextCursor:null});
+    if(path === '/api/sessions/' + id) {
+      reads++;
+      if(hang) return new Promise((resolve,reject) => options.signal.addEventListener('abort', () => {aborted++;reject(new DOMException('Aborted','AbortError'));},{once:true}));
+      return response(snapshot);
+    }
+    if(path.endsWith('/messages')) {sends++;snapshot={...snapshot,phase:'IDLE'};return response({status:'completed'});}
+    if(path.endsWith('/release')) {releases++;return failRelease?response({error:'模拟释放失败'},409):response({status:'released'});}
+    throw new Error('Unexpected API: ' + path);
+  };
+  const check = (value,message) => {if(!value)throw new Error(message);};
+  async function until(predicate,message) {
+    const deadline = Date.now() + 5000;
+    while(!predicate()) {if(Date.now()>deadline)throw new Error(message);await new Promise(r=>setTimeout(r,20));}
+  }
+  const button = text => [...document.querySelectorAll('button')].find(b=>b.textContent===text);
+  const refresh = () => document.querySelector('[aria-label="刷新当前会话"]');
+  const ready = () => refresh()?.getAttribute('aria-busy')==='false';
+  const draft = text => {
+    const el=document.querySelector('#message');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(el,text);
+    el.dispatchEvent(new Event('input',{bubbles:true}));
+  };
+  try {
+    await import('/src/web/main.tsx');
+    await until(()=>ready()&&button('释放并关闭'),'Initial session did not load');
+    for(const event of ['pageshow','focus','online','visibilitychange']) {
+      const previous=reads;snapshot={...snapshot,phase:'RUNNING',activeTurnId:'turn-1'};
+      (event==='visibilitychange'?document:window).dispatchEvent(new Event(event));
+      await until(()=>reads>previous&&ready()&&document.querySelector('.connection').textContent.includes('运行中'),event+' must refresh status');
+      check(button('释放并关闭').disabled,'Running work must not be released');
+    }
+    snapshot={...snapshot,phase:'RELEASED',activeTurnId:null};
+    hang=true;refresh().click();
+    await until(()=>refresh().getAttribute('aria-busy')==='true','Expected hung read');
+    hang=false;refresh().click();
+    await until(()=>aborted>0&&ready()&&document.querySelector('.connection').textContent.includes('已释放'),'Manual refresh must replace a hung read');
+    draft('继续原会话');
+    await until(()=>button('发送')&&!button('发送').disabled,'Released session must allow sending');
+    button('发送').click();
+    await until(()=>sends===1&&ready()&&document.querySelector('#message').value==='','Send must succeed once and clear draft');
+    draft('不要丢掉草稿');window.confirm=()=>false;
+    button('释放并关闭').click();
+    check(releases===0&&document.querySelector('#message').value==='不要丢掉草稿','Cancel must preserve draft and avoid release');
+    draft('');
+    button('释放并关闭').click();
+    await until(()=>ready()&&document.querySelector('[role="alert"]')?.textContent.includes('模拟释放失败'),'Release failure must remain visible');
+    check(location.pathname==='/sessions/'+id,'Failed release must keep session open');
+    failRelease=false;button('释放并关闭').click();
+    await until(()=>location.pathname==='/'&&document.querySelector('h1')?.textContent==='新任务','Successful release must close session');
+    check(sources.every(s=>s.closed),'Closing the session must close event subscriptions');
+    check(document.querySelector('[role="status"]')?.textContent.includes('已释放并关闭'),'Release success must be explained');
+    snapshot={...snapshot,phase:'RELEASED'};button('恢复测试').click();
+    await until(()=>ready()&&document.querySelector('.connection').textContent.includes('已释放'),'Recent session must reopen');
+    check(sends===1&&releases===2,'Reopening and refresh must not resend or release again');
+    document.querySelector('#result').textContent='PASS: 页面恢复 / 状态同步 / 挂起重试 / 继续会话 / 释放关闭 / 草稿保护';
+  } catch(error) {
+    document.querySelector('#result').textContent='FAIL: '+error.message;
+    console.error(error);
+  }
+</script>
+</html>

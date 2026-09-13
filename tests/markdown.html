@@ -1,0 +1,43 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"><link rel="icon" href="/icon.svg"><title>Markdown 渲染回归</title>
+<!-- npm run dev, then open /tests/markdown.html. No native API or model tasks. -->
+<style>body{padding:20px}.fixtures{width:min(100%,900px);margin:auto}.narrow{width:350px;max-width:100%}#result{position:fixed;right:8px;bottom:8px;z-index:100;background:#17251e;padding:10px}h1{white-space:normal}</style>
+<div class="fixtures"><h1>Markdown 渲染回归</h1><div id="root"></div></div><output id="result">RUNNING</output>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {Message} from '/src/web/Conversation.tsx';
+import '/src/web/style.css';
+const h=React.createElement,root=createRoot(document.querySelector('#root')),copies=[];
+let copyFails=false;
+Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{if(copyFails)throw Error('denied');copies.push(text);}}});
+const check=(value,message)=>{if(!value)throw Error(message);};
+const until=async(predicate,message)=>{const end=Date.now()+12000;while(!predicate()){if(Date.now()>end)throw Error(message);await new Promise(r=>setTimeout(r,25));}};
+const tick=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+const fence='```',code='const greeting = "你好";\n  console.log(greeting);';
+const table='| 名称 | 描述 |\n| --- | --- |\n| 模型 | '+ '非常长的内容'.repeat(24)+' |';
+const source='# 验收标题\n\n**粗体**、*斜体*、~~删除~~、`行内代码`。\n\n> 引用\n\n1. 第一项\n2. 第二项\n\n- [x] 已完成\n- [ ] 未完成\n\n'+table+'\n\n'+fence+'js\n'+code+'\n'+fence+'\n\n[官网](https://openai.com)\n\n[恶意](javascript:alert%281%29) [本机](file:///C:/secret.txt)\n\n![远程图片](https://example.invalid/tracker.png)\n\n<script>window.markdownExecuted=true<\/script>\n\n<iframe src="https://example.invalid"></iframe>\n\n<b>原始 HTML</b>';
+const render=(text,streaming=false)=>root.render(h('div',{className:'narrow'},h(Message,{item:{type:'agentMessage',id:'agent',text},threadId:'test',streaming}),h(Message,{item:{type:'userMessage',content:[{type:'text',text:'**保持用户原文**\nC:\\work\\task'}]},threadId:'test'})));
+try{
+ render(source);await until(()=>document.querySelector('.markdown-message h1'),'Markdown heading missing');
+ check(document.querySelector('.markdown-message strong')?.textContent==='粗体','Strong missing');
+ check(document.querySelectorAll('.markdown-message table tbody tr').length===1,'GFM table missing');
+ check(document.querySelectorAll('.markdown-message input[type=checkbox]:disabled').length===2,'Task list must be read-only');
+ check(!document.querySelector('.markdown-message script,.markdown-message iframe,.markdown-message img')&&!window.markdownExecuted,'Unsafe HTML or remote image rendered');
+ check(![...document.querySelectorAll('.markdown-message a')].some(a=>/^(javascript|file|data):/.test(a.getAttribute('href')||'')),'Unsafe URL rendered');
+ check(document.querySelector('.markdown-message a[href="https://openai.com/"]')||document.querySelector('.markdown-message a[href="https://openai.com"]'),'Safe link missing');
+ check(document.querySelector('.message.user .prose').textContent==='**保持用户原文**\nC:\\work\\task','User prompt was changed');
+ await until(()=>document.querySelector('.markdown-message [data-streamdown="code-block-body"] code span[style*="--sdm-c: #"]'),'Syntax highlighting missing');
+ const buttons=()=>[...document.querySelectorAll('button')];
+ buttons().find(b=>b.textContent==='复制代码').click();await until(()=>copies.length===1,'Code copy failed');check(copies[0]===code+'\n','Code copy changed source');
+ buttons().find(b=>b.textContent==='复制 Markdown').click();await until(()=>copies.length===2,'Message copy failed');check(copies[1]===source,'Message copy must retain original Markdown');
+ copyFails=true;buttons().find(b=>b.textContent==='复制 Markdown').click();await until(()=>document.body.textContent.includes('复制失败'),'Clipboard failure needs visible feedback');copyFails=false;
+ check(document.documentElement.scrollWidth<=innerWidth,'Page overflows horizontally');
+ const parts=['**还在生成',fence+'js\nconst answer =',fence+'js\nconst answer = 42;\n'+fence,'[链接](https://openai'];
+ for(const text of parts){render(text,true);await tick();check(document.querySelector('.markdown-message'),'Streaming render disappeared');}
+ const first='//'+ 'a'.repeat(110)+'\nconst value = 1;\n//'+ 'z'.repeat(110),second=first.replace('= 1','= 2');
+ render(fence+'js\n'+first+'\n'+fence);await until(()=>document.querySelector('[data-streamdown="code-block-body"]')?.textContent.includes('value = 1'),'First code missing');await new Promise(r=>setTimeout(r,150));
+ render(fence+'js\n'+second+'\n'+fence);await until(()=>document.querySelector('[data-streamdown="code-block-body"]')?.textContent.includes('value = 2'),'Similar code was replaced by stale cached content');await new Promise(r=>setTimeout(r,150));check(!document.querySelector('[data-streamdown="code-block-body"]').textContent.includes('value = 1'),'Highlighter cache changed source');
+ render(fence+'unknown-language\n'+code+'\n'+fence);await until(()=>document.querySelector('[data-streamdown="code-block-body"]')?.textContent.includes('greeting'),'Unknown language lost code');
+ render(source);await tick();document.querySelector('.narrow').classList.remove('narrow');document.querySelector('#result').textContent='PASS: 格式 / 流式 / 代码高亮 / 复制 / 安全 / 窄屏 / 缓存一致性';
+}catch(error){document.querySelector('#result').textContent='FAIL: '+error.message;console.error(error);}
+</script></html>

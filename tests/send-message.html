@@ -1,0 +1,79 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><link rel="icon" href="/icon.svg"><title>即时发送与插话回归</title>
+<!-- npm run dev, then open /tests/send-message.html. Only fake API calls. -->
+<div id="root"></div><output id="result" style="position:fixed;bottom:0;right:0;z-index:100;background:#111;padding:8px">RUNNING</output>
+<script type="module">
+const id='send-test',requests=[];
+let holdRead=false,finishRead,listReads=0;
+let snapshot={thread:{id,name:'发送测试',model:'m',reasoningEffort:'high',turns:[]},phase:'IDLE',activeTurnId:null,pending:[]};
+const response=(data,status=200)=>new Response(JSON.stringify(data),{status});
+history.replaceState(null,'','/sessions/'+id);
+window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};
+window.fetch=async(path,options={})=>{
+ if(path==='/api/auth/session')return response({authenticated:true,csrfToken:'test'});
+ if(path==='/api/projects')return response({projects:[]});
+ if(path==='/api/settings')return response({origin:location.origin,nodeVersion:'test',workRoot:'test',runtime:{}});
+ if(path==='/api/models')return response({data:[]});
+ if(path.startsWith('/api/permission-modes'))return response({modes:[]});
+ if(path==='/api/sessions'){listReads++;await new Promise(resolve=>setTimeout(resolve,100));return response({data:[snapshot.thread,{id:'other',name:'另一会话'}],nextCursor:null});}
+ if(path==='/api/sessions/'+id)return holdRead?new Promise(resolve=>{finishRead=()=>resolve(response(snapshot));}):response(snapshot);
+ if(path==='/api/sessions/other')return response({thread:{id:'other',name:'另一会话',turns:[]},phase:'IDLE',pending:[]});
+ if(path.endsWith('/cancel-release')||path.endsWith('/release-on-leave'))return response({});
+ if(path.endsWith('/messages'))return new Promise((resolve,reject)=>requests.push({payload:JSON.parse(options.body),resolve,reject}));
+ throw Error('Unexpected API '+path);
+};
+const check=(value,message)=>{if(!value)throw Error(message);};
+async function until(predicate,message){const end=Date.now()+6000;while(!predicate()){if(Date.now()>end)throw Error(message);await new Promise(resolve=>setTimeout(resolve,20));}}
+const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent===text);
+const ready=()=>document.querySelector('[aria-label="刷新当前会话"]')?.getAttribute('aria-busy')==='false';
+const draft=text=>{const el=document.querySelector('#message');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(el,text);el.dispatchEvent(new Event('input',{bubbles:true}));};
+const echo=(request,turnId)=>({id:turnId,status:'inProgress',items:[{type:'userMessage',id:'user-'+request.payload.clientRequestId,clientId:request.payload.clientRequestId,content:[{type:'text',text:request.payload.text}]}]});
+try{
+ await import('/src/web/main.tsx');await until(()=>ready(),'Initial load failed');
+ await until(()=>document.querySelector('.session-menu'),'Session list missing');check(listReads===1,'首次加载重复请求会话列表');
+ window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));window.dispatchEvent(new Event('online'));await until(()=>!document.querySelector('[aria-label="刷新最近会话"]').disabled,'Wake list refresh');check(listReads===2,'并发唤醒重复请求会话列表');const menu=document.querySelector('.session-menu');menu.querySelector('summary').click();check(menu.open,'会话菜单未打开');menu.querySelector('div').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));check(menu.open,'点击菜单内部不应关闭');document.querySelector('.timeline').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));check(!menu.open,'点击空白处应关闭菜单');
+ draft('先执行这个任务');await until(()=>button('发送')&&!button('发送').disabled,'Send unavailable');button('发送').click();
+ await until(()=>requests.length===1&&document.querySelector('.outgoing-message')?.textContent.includes('发送中')&&document.querySelector('#message').value==='','Message must appear before response');
+ check(requests[0].payload.expectedTurnId===undefined,'Idle send must start a new turn');
+ draft('保留下一条草稿');button('另一会话').click();await until(()=>document.querySelector('h1')?.textContent==='另一会话','Navigation failed');
+ button('发送测试').click();await until(()=>ready()&&document.querySelector('#message')?.value==='保留下一条草稿','Draft and pending send must survive navigation');
+ check(document.querySelectorAll('.outgoing-message').length===1&&requests.length===1,'Navigation must not resend');
+ snapshot={...snapshot,phase:'RUNNING',activeTurnId:'turn-1',thread:{...snapshot.thread,turns:[echo(requests[0],'turn-1')]}};
+ requests[0].resolve(response({turnId:'turn-1',status:'inProgress'}));
+ await until(()=>ready()&&button('插话')&&!button('插话').disabled&&!document.querySelector('.outgoing-message'),'Native echo must replace optimistic message');
+ check(document.querySelectorAll('.message.user').length===1,'User message was duplicated');
+ check(document.querySelector('#message').value==='保留下一条草稿','Late response erased new draft');
+ check(button('中止'),'Running task must retain Abort');
+ check(button('中止').parentElement===button('插话').parentElement&&button('中止').nextElementSibling===button('插话'),'Abort and steer must be adjacent in one action group');
+ check(document.querySelector('[data-panel-toggle=left]')&&document.querySelector('[data-panel-toggle=right]'),'Both sidebar controls must stay available');
+ holdRead=true;document.querySelector('[aria-label="刷新当前会话"]').click();
+ await until(()=>!ready()&&finishRead,'Background snapshot read did not start');
+ check(!button('插话').disabled,'Background streaming refresh must not disable steering');button('插话').click();
+ await until(()=>requests.length===2&&document.querySelector('.outgoing-message')?.textContent.includes('保留下一条草稿'),'Steer must appear immediately');
+ check(requests[1].payload.expectedTurnId==='turn-1'&&!requests[1].payload.model&&!requests[1].payload.permissionMode,'Steer must target current turn without settings overrides');
+ holdRead=false;finishRead();
+ draft('不能被失败响应覆盖');requests[1].resolve(response({error:'当前轮次已结束'},409));
+ await until(()=>button('重新编辑'),'Rejected send must stay editable');check(button('重新编辑').disabled&&document.querySelector('#message').value==='不能被失败响应覆盖','Failure must preserve new draft');
+ draft('');await until(()=>!button('重新编辑').disabled,'Edit did not unlock');button('重新编辑').click();
+ await until(()=>document.querySelector('#message').value==='保留下一条草稿'&&!document.querySelector('.outgoing-message'),'Edit must restore original text');
+ await until(()=>ready()&&button('插话')&&!button('插话').disabled,'Retry unavailable');button('插话').click();await until(()=>requests.length===3,'Retry missing');
+ check(requests[2].payload.clientRequestId!==requests[1].payload.clientRequestId,'Confirmed rejection needs a new request id');
+ requests[2].reject(Error('network lost'));await until(()=>button('已核对历史，允许重新编辑'),'Unknown outcome must require history check');
+ check(requests.length===3,'Unknown outcome must not automatically resend');
+ snapshot.thread.turns[0].items.push(echo(requests[2],'turn-1').items[0]);document.querySelector('[aria-label="刷新当前会话"]').click();
+ await until(()=>ready()&&!document.querySelector('.outgoing-message'),'Native confirmation must reconcile unknown outcome');
+ check(document.querySelectorAll('.message.user').length===2,'Steering must appear exactly once');
+ snapshot.thread.turns[0].items.push({type:'agentMessage',id:'streamed-reply',text:'**生成中的回复'});document.querySelector('[aria-label="刷新当前会话"]').click();
+ await until(()=>document.querySelector('.markdown-message[data-streaming="true"] strong')?.textContent==='生成中的回复','Active turn must use streaming Markdown');
+ snapshot.phase='IDLE';snapshot.activeTurnId=null;snapshot.thread.turns[0].status='completed';snapshot.thread.turns[0].items.at(-1).text='## 已完成\n\n回复支持 **Markdown**。';document.querySelector('[aria-label="刷新当前会话"]').click();
+ await until(()=>ready()&&document.querySelector('.markdown-message[data-streaming="false"] h2')?.textContent==='已完成','Completed turn must use static Markdown');
+ const stableHeading=document.querySelector('.markdown-message h2');
+ snapshot.thread.turns[0].items.push(...Array.from({length:60},(_,i)=>({type:'agentMessage',id:'history-'+i,text:'历史段落 '+i+'\n\n'+('用于验证长历史滚动。'.repeat(10))})));
+ document.querySelector('[aria-label="刷新当前会话"]').click();await until(()=>ready()&&document.querySelectorAll('.markdown-message').length===61,'Long history missing');
+ const timeline=document.querySelector('.timeline');await until(()=>timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<5,'Async Markdown layout did not follow bottom');
+ check(stableHeading===document.querySelector('.markdown-message h2'),'Unchanged historical Markdown remounted');timeline.scrollTop=0;timeline.dispatchEvent(new Event('scroll'));await new Promise(r=>setTimeout(r,40));
+ snapshot.thread.turns[0].items.at(-1).text+='\n\n新增正文';document.querySelector('[aria-label="刷新当前会话"]').click();await until(()=>ready()&&document.body.textContent.includes('新增正文'),'History update failed');
+ check(timeline.scrollTop<5,'Updating Markdown stole reader scroll position');
+ if(innerWidth<=1000){for(const [route,selector] of [['/','.home'],['/settings','.settings']]){history.pushState(null,'',route);window.dispatchEvent(new PopStateEvent('popstate'));await until(()=>document.querySelector(selector),'Page missing');document.querySelector('[data-panel-toggle=left]').click();await until(()=>document.querySelector(selector).inert,'Drawer background must be inert on '+route);window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));await until(()=>!document.querySelector(selector).inert,'Escape must restore page');}}
+ document.querySelector('#result').textContent='PASS: 即时显示 / 插话 / 去重 / 草稿保护 / 导航 / 失败编辑 / 未知结果';
+}catch(error){document.querySelector('#result').textContent='FAIL: '+error.message;console.error(error);}
+</script></html>

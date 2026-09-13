@@ -1,0 +1,20 @@
+import {useEffect,useMemo,useState,type ComponentProps} from 'react';
+import {Streamdown,CodeBlock,defaultRehypePlugins,useIsCodeFenceIncomplete,type CodeHighlighterPlugin,type Components} from 'streamdown';
+import {code} from '@streamdown/code';
+type HighlightResult=NonNullable<ReturnType<CodeHighlighterPlugin['highlight']>>;
+const plainTokens=(text:string):HighlightResult=>({tokens:text.split('\n').map(content=>[{content}])});
+const nativeCode:CodeHighlighterPlugin=code;
+// ponytail: upstream caches only code edges/length; keep exact source until its cache key is fixed.
+const checkedCode:CodeHighlighterPlugin={...code,highlight(options,callback){const check=(result:HighlightResult)=>result.tokens.map(line=>line.map(token=>token.content).join('')).join('\n')===options.code?result:plainTokens(options.code);const result=nativeCode.highlight(options,callback?value=>callback(check(value)):undefined);return result?check(result):null;}};
+type MarkdownNode={tagName?:string;properties?:Record<string,unknown>;children?:MarkdownNode[]};
+type LinkOptions={resolve:(url:string)=>string;scope:string};
+// ponytail: Streamdown keys processors by plugin names and JSON options; scope isolates file resolvers.
+const linkPlugin=({resolve}:LinkOptions)=>function visit(node:MarkdownNode){
+  if(node.tagName==='a'&&typeof node.properties?.href==='string')node.properties.href=resolve(node.properties.href);
+  node.children?.forEach(visit);
+};
+const theme:['github-dark','github-dark']=['github-dark','github-dark'];
+const safeRemote=(url:string)=>{if(/^#[a-zA-Z0-9_-]+$/.test(url))return url;try{const parsed=new URL(url);return ['http:','https:'].includes(parsed.protocol)?parsed.href:'';}catch{return '';}};
+function Copy({text,label}:{text:string;label:string}){const [feedback,setFeedback]=useState('');useEffect(()=>setFeedback(''),[text]);return <span className="markdown-copy"><button type="button" className="quiet" onClick={async()=>{try{await navigator.clipboard.writeText(text);setFeedback('已复制');}catch{setFeedback('复制失败，请选择文本复制');}}}>{label}</button><span role="status">{feedback}</span></span>;}
+function MarkdownCode(props:ComponentProps<'code'>&{node?:unknown;'data-block'?:string}){const incomplete=useIsCodeFenceIncomplete();if(!('data-block' in props))return <code>{props.children}</code>;const text=String(props.children??''),language=/language-([^\s]+)/.exec(props.className??'')?.[1]??'text';return <CodeBlock key={text} code={text} language={language} isIncomplete={incomplete} lineNumbers={false}><Copy text={text} label="复制代码"/></CodeBlock>;}
+export function Markdown({text,streaming=false,resolveUrl=safeRemote,onLink,linkScope='chat'}:{text:string;streaming?:boolean;resolveUrl?:(url:string)=>string;onLink?:(url:string)=>boolean;linkScope?:string}){const rehypePlugins=useMemo(()=>[defaultRehypePlugins.sanitize,[linkPlugin,{resolve:resolveUrl,scope:linkScope}] as [typeof linkPlugin,LinkOptions],defaultRehypePlugins.harden],[resolveUrl,linkScope]);const components:Components={code:MarkdownCode,strong:({children})=><strong>{children}</strong>,a:({href,children})=>{const url=safeRemote(href??'');return url?<a href={url} onClick={event=>{if(onLink?.(href??''))event.preventDefault();}} {...(url.startsWith('#')?{}:{target:'_blank',rel:'noopener noreferrer'})}>{children}</a>:<span>{children}</span>;},img:({alt})=><span className="muted">[图片{alt?'：'+alt:''}]</span>,input:({checked})=><input type="checkbox" checked={!!checked} disabled aria-label={checked?'已完成':'未完成'}/>};return <div className="markdown-message" data-streaming={streaming}><Streamdown mode={streaming?'streaming':'static'} isAnimating={streaming} parseIncompleteMarkdown={streaming} plugins={streaming?{}:{code:checkedCode}} shikiTheme={theme} components={components} rehypePlugins={rehypePlugins} skipHtml urlTransform={safeRemote} controls={{code:false,table:false,image:false,mermaid:false}} lineNumbers={false} tableMaxHeight={0} codeBlockMaxHeight={0}>{text}</Streamdown><Copy text={text} label="复制 Markdown"/></div>;}

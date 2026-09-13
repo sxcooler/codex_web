@@ -1,0 +1,11 @@
+export type PanelTab='changes'|'files'|'history';
+type Reading={listScroll:number;previewScroll:number;contentScroll:number};
+export type PanelState={tab:PanelTab;changes:{staged:boolean;path:string;split:boolean}&Reading;files:{directory:string;path:string;mode:'preview'|'source'}&Reading;history:{ref:string;commit:string;parent:string;path:string;scroll:number;listScroll:number;pages:number}};
+export type StorageLike=Pick<Storage,'getItem'|'setItem'>;
+const initial=():PanelState=>({tab:'changes',changes:{staged:false,path:'',split:false,listScroll:0,previewScroll:0,contentScroll:0},files:{directory:'',path:'',mode:'preview',listScroll:0,previewScroll:0,contentScroll:0},history:{ref:'HEAD',commit:'',parent:'',path:'',scroll:0,listScroll:0,pages:1}});
+const key=(projectId:string)=>'codex.project-panel.'+projectId;
+const string=(value:unknown,fallback='')=>typeof value==='string'?value:fallback;
+const number=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:0;
+const reading=(value:any):Reading=>({listScroll:number(value?.listScroll),previewScroll:number(value?.previewScroll),contentScroll:number(value?.contentScroll)});
+export function loadPanelState(storage:StorageLike,projectId:string):PanelState{try{const value=JSON.parse(storage.getItem(key(projectId))??'null'),fallback=initial();if(!value||!['changes','files','history'].includes(value.tab))return fallback;return {tab:value.tab,changes:{staged:typeof value.changes?.staged==='boolean'?value.changes.staged:false,path:string(value.changes?.path),split:typeof value.changes?.split==='boolean'?value.changes.split:false,...reading(value.changes)},files:{directory:string(value.files?.directory),path:string(value.files?.path),mode:['preview','source'].includes(value.files?.mode)?value.files.mode:'preview',...reading(value.files)},history:{ref:string(value.history?.ref,'HEAD'),commit:string(value.history?.commit),parent:string(value.history?.parent),path:string(value.history?.path),scroll:number(value.history?.scroll),listScroll:number(value.history?.listScroll),pages:Number.isInteger(value.history?.pages)&&value.history.pages>=1&&value.history.pages<=100?value.history.pages:1}};}catch{return initial();}}
+export function savePanelState(storage:StorageLike,projectId:string,state:PanelState){try{storage.setItem(key(projectId),JSON.stringify(state));}catch{}}
