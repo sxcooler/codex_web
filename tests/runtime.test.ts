@@ -13,6 +13,12 @@ function start(t: { after: (fn: () => Promise<void>) => void }, idleMs = 60_000,
   return runtime;
 }
 
+test('missing CLI reports the executable and configuration remedy', async t => {
+  const runtime = new Runtime({ executable: '/missing/codex-web-cli', cwd });
+  t.after(() => runtime.close());
+  await assert.rejects(runtime.list(), (error: any) => error.statusCode === 503 && /CODEX_BIN/.test(error.message) && /missing/.test(error.message));
+});
+
 test('all concurrent first calls wait until initialize and initialized complete', async (t) => {
   const runtime = start(t, 60_000, 'delayed-init');
   const [listed, diagnostics] = await Promise.all([runtime.list(), runtime.diagnostics()]);

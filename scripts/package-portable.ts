@@ -77,8 +77,9 @@ async function main() {
     await mkdir(join(portable, 'runtime'));
     await writeFile(join(portable, 'runtime', 'node.exe'), binary); await writeFile(join(portable, 'runtime', 'NODE-LICENSE.txt'), license);
     await writeFile(join(portable, 'Start.cmd'), '@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\n"%~dp0runtime\\node.exe" "%~dp0scripts\\portable.ts" %*\r\nif errorlevel 1 pause\r\n');
-    await copy(join(repo, 'docs', 'portable.md'), join(portable, 'README.md'));
-    await copy(join(repo, 'docs', 'privacy-review.md'), join(portable, 'privacy-review.md'));
+    for (const path of ['README.md', 'README_EN.md', 'docs']) {
+      await copy(join(repo, path), join(portable, path), input => sourceAllowed(relative(repo, input).split(sep).join('/')));
+    }
     await writeFile(join(portable, 'THIRD-PARTY-NOTICES.txt'), 'Node.js: runtime/NODE-LICENSE.txt\nDependency licenses and notices are retained in node_modules.\nCodex CLI is not included; use your own installation and account.\n');
     execFileSync(join(portable, 'runtime', 'node.exe'), ['--input-type=module', '-e', "await import('./src/server/app.ts'); console.log('Packaged backend imports OK')"], { cwd: portable, stdio: 'inherit', windowsHide: true });
 

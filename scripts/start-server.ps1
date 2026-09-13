@@ -3,8 +3,8 @@ $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $dataDir = Join-Path $projectRoot '.local\web'
 $nodePath = Join-Path $projectRoot '.local\node24\node.exe'
 if (-not (Test-Path -LiteralPath $nodePath)) { $nodePath = (Get-Command node.exe -ErrorAction Stop).Source }
-if (-not (Test-Path -LiteralPath (Join-Path $dataDir 'auth.json'))) { throw 'Run npm.cmd run auth:setup first.' }
-if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'dist\index.html'))) { throw 'Run npm.cmd run build first.' }
+if (-not (Test-Path -LiteralPath (Join-Path $dataDir 'auth.json'))) { throw 'Run npm run auth:setup first.' }
+if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'dist\index.html'))) { throw 'Run npm run build first.' }
 $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($projectRoot.ToLowerInvariant())))
 $mutex = [Threading.Mutex]::new($false, "Local\CodexRemoteWeb-$hash")
 $owned = $false

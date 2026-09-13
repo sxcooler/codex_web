@@ -5,6 +5,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, unlinkS
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { AppServer } from '../src/codex/app-server.ts';
+import { resolveCodexExecutable } from '../src/codex/executable.ts';
+import { pathKey } from '../src/projects.ts';
 import { hasUserMarker, rejectionFor } from './probe-support.ts';
 import { runTurn } from './probe-turn.ts';
 import type { Thread } from '../.local/protocol/v2/Thread.ts';
@@ -14,11 +16,11 @@ import type { ThreadStartParams } from '../.local/protocol/v2/ThreadStartParams.
 const command = process.argv[2] ?? 'doctor';
 const allowed = ['doctor', 'start', 'read', 'verify', 'interrupt', 'approval', 'inspect', 'reverse', 'locate'];
 if (!allowed.includes(command)) throw new Error(`命令：${allowed.join(' | ')}`);
-const executable = process.env.CODEX_BIN ?? resolve(homedir(), 'AppData/Local/Programs/OpenAI/Codex/bin/codex.exe');
+const executable = resolveCodexExecutable();
 const cwd = resolve(import.meta.dirname, '..');
 const stateFile = resolve(cwd, '.local/probe.json');
 const expectedHome = resolve(homedir(), '.codex');
-if (process.env.CODEX_HOME && resolve(process.env.CODEX_HOME).toLowerCase() !== expectedHome.toLowerCase()) {
+if (process.env.CODEX_HOME && pathKey(resolve(process.env.CODEX_HOME)) !== pathKey(expectedHome)) {
   throw new Error('CODEX_HOME 与默认用户存储不同；先确认环境，未启动验证。');
 }
 const version = execFileSync(executable, ['--version'], { encoding: 'utf8', windowsHide: true }).trim();

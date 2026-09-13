@@ -1,9 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { resolveCodexExecutable } from '../src/codex/executable.ts';
 
-const executable = process.env.CODEX_BIN ?? resolve(homedir(), 'AppData/Local/Programs/OpenAI/Codex/bin/codex.exe');
+const executable = resolveCodexExecutable();
 const version = execFileSync(executable, ['--version'], { encoding: 'utf8', windowsHide: true }).trim();
 if (version !== 'codex-cli 0.153.4') throw new Error(`需要先审阅新版本协议：${version}（基线 0.153.4）`);
 mkdirSync('.local', { recursive: true });

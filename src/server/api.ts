@@ -1,7 +1,8 @@
-import { join, resolve } from 'node:path';
+import { join, resolve, isAbsolute } from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Runtime } from '../codex/runtime.ts';
 import type { Projects } from '../projects.ts';
+import { pathKey } from '../projects.ts';
 import { MetadataStore } from './metadata.ts';
 import { parseTestReport } from './test-reports.ts';
 import type { UploadService } from './uploads.ts';
@@ -48,7 +49,9 @@ export function registerApi(app: FastifyInstance, options: {
 
   async function associated(threadId: string, window = false) {
     const snapshot = await runtime.snapshot(threadId, { window });
-    const project = (await projects.list()).find(p => snapshot.thread.cwd && resolve(p.path).toLowerCase() === resolve(snapshot.thread.cwd).toLowerCase()) ?? null;
+    const cwd = snapshot.thread.cwd;
+    const project = typeof cwd === 'string' && isAbsolute(cwd) && (process.platform === 'win32' || !cwd.startsWith('//'))
+      ? (await projects.list()).find(p => pathKey(resolve(p.path)) === pathKey(resolve(cwd))) ?? null : null;
     const warning = saveMeta(threadId, project?.path ?? null, null);
     return { ...snapshot, project, metadata: readMeta(threadId), warning };
   }

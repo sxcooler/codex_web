@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 
 import { buildServer } from './app.ts';
 import { Runtime } from '../codex/runtime.ts';
+import { resolveCodexExecutable } from '../codex/executable.ts';
 import { Projects } from '../projects.ts';
 
 const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
@@ -21,7 +22,7 @@ async function main(): Promise<void> {
   if (port < 1 || port > 65_535) throw new Error('Invalid port');
 
   const workRoot = await realpath(process.env.WORK_ROOT ?? config.workRoot ?? join(homedir(), 'work'));
-  const executable = process.env.CODEX_BIN ?? config.codexBin ?? join(homedir(), 'AppData', 'Local', 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe');
+  const executable = resolveCodexExecutable(config.codexBin);
   const runtime = new Runtime({ executable, cwd: workRoot });
   const app = await buildServer({ dataDir, origin, runtime, projects: new Projects(workRoot), distDir: join(projectRoot, 'dist') });
   try {

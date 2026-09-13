@@ -21,6 +21,8 @@ test('extracted release runs with bundled Node and isolated data', { skip: !root
     assert.equal(createHash('sha256').update(bytes).digest('hex'), entry.sha256);
   }
   const executable = join(directory, 'runtime', 'node.exe');
+  const codexBin = process.env.PORTABLE_TEST_CODEX;
+  assert.ok(codexBin, 'Set PORTABLE_TEST_CODEX to an installed Codex .exe; startup only checks --version');
   const env = { ...process.env, PATH: join(process.env.SystemRoot!, 'System32'), WEB_DATA_DIR: 'invalid-inherited-data', WEB_ORIGIN: 'invalid-inherited-origin', PORT: 'invalid', WORK_ROOT: 'invalid', CODEX_BIN: 'invalid' };
   const first = spawnSync(executable, ['scripts/portable.ts', '--no-browser'], { cwd: directory, env, encoding: 'utf8', windowsHide: true });
   assert.equal(first.status, 1);
@@ -32,8 +34,8 @@ test('extracted release runs with bundled Node and isolated data', { skip: !root
   const origin = `http://localhost:${port}`;
   const data = join(directory, '.local', 'web'), workRoot = join(directory, '.local', 'test work');
   await mkdir(workRoot, { recursive: true });
-  // Runtime is lazy; no model request is made and this dummy executable is never launched.
-  await writeFile(join(data, 'config.json'), JSON.stringify({ port, origin, workRoot, codexBin: executable }));
+  // Startup verifies --version; the app-server remains lazy and makes no model request.
+  await writeFile(join(data, 'config.json'), JSON.stringify({ port, origin, workRoot, codexBin }));
   try {
     const busy = spawnSync(executable, ['scripts/portable.ts', '--no-browser'], { cwd: directory, env, encoding: 'utf8', windowsHide: true });
     assert.equal(busy.status, 1); assert.match(busy.stderr, new RegExp(String(port))); assert.equal(listener.listening, true);

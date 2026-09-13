@@ -14,6 +14,6 @@ export function registerStatic(app: FastifyInstance, directory: string) {
       const bytes = await readFile(join(directory,file));
       reply.header('cache-control',file.startsWith('assets/')?'public, max-age=31536000, immutable':'no-cache');
       return reply.type(types[file.split('.').pop()!] ?? 'application/octet-stream').send(bytes);
-    } catch { return reply.code(404).send({error:'Web build missing. Run npm.cmd run build.'}); }
+    } catch { return reply.code(404).send({error:'Web build missing. Run npm run build.'}); }
   });
 }

@@ -6,7 +6,8 @@ import { promisify } from 'node:util';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 
 const run = promisify(execFile);
-const fold = (path: string) => path.toLowerCase();
+export const pathKey = (path: string, platform: string = process.platform) => platform === 'win32' ? path.toLowerCase() : path;
+const fold = pathKey;
 const sensitivePath = (path: string) => /(?:^|\/)\.git(?:\/|$)/i.test(path) || /(?:^|\/)\.env(?:\.|$)/i.test(path) || /(?:^|\/)(?:credentials?|secrets?)(?:\.|$)/i.test(path) || path === '.codex-uploads' || path.startsWith('.codex-uploads/');
 const MAX_VIEW_BYTES = 1024 * 1024;
 const MAX_VIEW_LINES = 20_000;
@@ -31,10 +32,10 @@ function problem(message: string, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode, code: 'PROJECT_ERROR' });
 }
 
-export function validateFolder(name: string): string {
-  if (typeof name !== 'string' || !name || name.startsWith('.') || name.length > 80 || /[\x00-\x1f<>:"/\\|?*]/.test(name)
-    || /[. ]$/.test(name) || /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|clock\$)(\.|$)/i.test(name)) {
-    throw problem('Invalid Windows folder name');
+export function validateFolder(name: string, platform: string = process.platform): string {
+  if (typeof name !== 'string' || !name || name.startsWith('.') || name.length > 80 || /[\x00-\x1f/\\]/.test(name)
+    || (platform === 'win32' && (/[<>:"|?*]/.test(name) || /[. ]$/.test(name) || /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|clock\$)(\.|$)/i.test(name)))) {
+    throw problem('Invalid project folder name');
   }
   return name;
 }
@@ -160,8 +161,15 @@ export class Projects {
     return { project, target, rel: rel.split(sep).join('/') };
   }
 
-  #validateRelative(value:string){if(typeof value!=='string'||value.includes('\0')||isAbsolute(value)||/^[\\/]{2}/.test(value)||(value&&value.split(/[\\/]/).some(part=>!part||part==='..'||part.includes(':')||/^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i.test(part))))throw problem('Invalid project-relative path');}
-  async #safeGitPath(id:string,value:string){const project=await this.resolve(id);this.#validateRelative(value);const rel=value.replaceAll('\\','/');const parent=await realpath(dirname(join(project.path,rel))).catch(()=>{throw problem('Parent directory not found',404)});const inside=relative(await realpath(project.path),parent);if(inside.startsWith(`..${sep}`)||inside==='..'||isAbsolute(inside))throw problem('Path escapes project',403);return {project,rel};}
+  #validateRelative(value: string) {
+    const windows = process.platform === 'win32';
+    if (typeof value !== 'string' || value.includes('\0') || isAbsolute(value) || /^[\\/]{2}|^[a-z]:[\\/]/i.test(value)
+      || (value && value.split(windows ? /[\\/]/ : /\//).some(part => !part || part === '..'
+        || (windows && (part.includes(':') || /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i.test(part)))))) {
+      throw problem('Invalid project-relative path');
+    }
+  }
+  async #safeGitPath(id:string,value:string){const project=await this.resolve(id);this.#validateRelative(value);const rel=value.split(sep).join('/');const parent=await realpath(dirname(join(project.path,rel))).catch(()=>{throw problem('Parent directory not found',404)});const inside=relative(await realpath(project.path),parent);if(inside.startsWith(`..${sep}`)||inside==='..'||isAbsolute(inside))throw problem('Path escapes project',403);return {project,rel};}
 
   async listFiles(id: string, directory = '') {
     const { project, target, rel } = await this.#safePath(id, directory, false);
@@ -207,7 +215,7 @@ export class Projects {
       const path = entry.path; let added=0, deleted=0, binary=false;
       if (status === 'untracked') { const content=await this.readFile(id,path); binary=content.binary; if (!binary) added=content.text.split('\n').length-(content.text.endsWith('\n')?1:0); }
       else {
-        const stat=(await git(project.path,['diff','--numstat',...(staged?['--cached']:[]),'--',path])).trim().split(/\s+/);
+        const stat=(await git(project.path,['diff','--numstat',...(staged?['--cached']:[]),'--',':(literal)'+path])).trim().split(/\s+/);
         if (stat[0]==='-') binary=true; else { added=Number(stat[0])||0; deleted=Number(stat[1])||0; }
       }
       files.push({path, ...(entry.originalPath?{oldPath:entry.originalPath}:{}), status: status === 'R' ? 'renamed' : status, added, deleted, binary});
@@ -221,7 +229,7 @@ export class Projects {
     if (untracked) {
       const {target}=await this.#safePath(id,rel,true);await this.#checkVisible(project.path,rel);const info=await lstat(target);if(info.size>MAX_PATCH_BYTES)throw problem('Patch exceeds 5 MiB',413);const bytes=await this.#readBounded(target,MAX_PATCH_BYTES);if(bytes.subarray(0,8192).includes(0))return '';let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{return '';}const finalNewline=text.endsWith('\n');const lines=text.split('\n');if(finalNewline)lines.pop();const body=lines.map(line=>`+${line}`).join('\n');return `diff --git a/${rel} b/${rel}\nnew file mode 100644\n--- /dev/null\n+++ b/${rel}\n@@ -0,0 +1,${lines.length} @@\n${body}${finalNewline?'\n':'\n\\ No newline at end of file\n'}`;
     }
-    const patch=await git(project.path,['diff','--no-ext-diff','--no-textconv','--no-color',...(staged?['--cached']:[]),'--',rel],30_000,MAX_PATCH_BYTES+1);if(Buffer.byteLength(patch)>MAX_PATCH_BYTES)throw problem('Patch exceeds 5 MiB',413);return patch;
+    const patch=await git(project.path,['diff','--no-ext-diff','--no-textconv','--no-color',...(staged?['--cached']:[]),'--',':(literal)'+rel],30_000,MAX_PATCH_BYTES+1);if(Buffer.byteLength(patch)>MAX_PATCH_BYTES)throw problem('Patch exceeds 5 MiB',413);return patch;
   }
 
   async gitFileDiff(id: string, path: string, staged = false) {
@@ -239,7 +247,7 @@ export class Projects {
   }
 
   #historyCommit(value:string) { if(!/^[0-9a-f]{40,64}$/i.test(value))throw problem('Invalid commit'); return value; }
-  #historyPath(value:string,sensitive=true) { this.#validateRelative(value); const rel=value.replaceAll('\\','/'); if(sensitive&&this.#sensitiveHistoryPath(rel))throw problem('Sensitive file is not readable',403); return rel; }
+  #historyPath(value:string,sensitive=true) { this.#validateRelative(value); const rel=value.split(sep).join('/'); if(sensitive&&this.#sensitiveHistoryPath(rel))throw problem('Sensitive file is not readable',403); return rel; }
   #sensitiveHistoryPath(rel:string){return sensitivePath(rel);}
 
   async gitLog(id:string,ref='HEAD',cursor?:string) {

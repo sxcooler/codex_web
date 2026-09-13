@@ -5,7 +5,7 @@ import { get } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative } from 'node:path';
 import { initializeAuth } from '../src/server/auth.ts';
 import { buildServer } from '../src/server/app.ts';
 import { Projects } from '../src/projects.ts';
@@ -50,6 +50,19 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal((await app.inject({method:'POST',url:'/api/sessions',headers,payload:{projectId,clientRequestId:'oversize-request-1',prompt:'验'.repeat(100_000)}})).statusCode,400);
     const snapshot=await app.inject({url:'/api/sessions/thread-1',headers});
     assert.equal(snapshot.json().project.id,projectId);
+    if (process.platform === 'linux') {
+      const other = await app.inject({ method:'POST', url:'/api/projects', headers, payload:{name:'Case-sensitive',folderName:'Test'} });
+      assert.equal(other.statusCode,200,other.body);
+      created.cwd = join(root,'Test');
+      assert.equal((await app.inject({url:'/api/sessions/thread-1',headers})).json().project.id,other.json().project.id);
+      created.cwd = 'C:\\Windows\\foreign-project';
+      assert.equal((await app.inject({url:'/api/sessions/thread-1',headers})).json().project,null);
+      created.cwd = relative(process.cwd(), join(root,'test'));
+      assert.equal((await app.inject({url:'/api/sessions/thread-1',headers})).json().project,null);
+      created.cwd = '/' + join(root,'test');
+      assert.equal((await app.inject({url:'/api/sessions/thread-1',headers})).json().project,null);
+      created.cwd = join(root,'test');
+    }
     assert.deepEqual((await app.inject({url:'/api/sessions/thread-1/history?before=turn-20',headers})).json(),{turns:[{id:'turn-20'}],nextCursor:null,attachmentPreviews:[]});
     assert.deepEqual((await app.inject({url:'/api/sessions/thread-1/turns/turn-20/items/command-1/output',headers})).json(),{output:'turn-20:command-1'});
     for(const url of ['/api/sessions/thread-1/history','/api/sessions/thread-1/history?before=','/api/sessions/thread-1/history?before=ok&extra=1','/api/sessions/thread-1/history?before=bad%2Fid','/api/sessions/thread-1/turns/bad%2Fid/items/command/output','/api/sessions/thread-1/turns/turn/items/bad%20id/output','/api/sessions/thread-1/turns/turn/items/command/output?extra=1']) assert.equal((await app.inject({url,headers})).statusCode,400,url);

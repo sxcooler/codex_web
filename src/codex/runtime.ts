@@ -1203,6 +1203,9 @@ export class Runtime extends EventEmitter {
 
   private mapError(error: unknown, method?: string, params?: unknown): Error & { statusCode: number; code: string } {
     if (isObject(error) && typeof error.statusCode === 'number' && typeof error.code === 'string' && error.code.startsWith('RUNTIME_')) return error as any;
+    if (isObject(error) && ['ENOENT', 'EACCES', 'ENOEXEC'].includes(error.code) && typeof error.syscall === 'string' && error.syscall.startsWith('spawn')) {
+      return runtimeError(503, 'RUNTIME_UNAVAILABLE', `无法启动 Codex：${this.options.executable}。请检查文件、执行权限以及 CODEX_BIN 或 codexBin 配置。`);
+    }
     const message = error instanceof Error ? error.message : '';
     if (method === 'turn/steer' && /no active turn|expected.*turn|turn.*mismatch/i.test(message)) return runtimeError(409, 'RUNTIME_STEER_CONFLICT', '当前轮次已结束或变化，请刷新后重新发送');
     if (method === 'thread/turns/list' && message.trim().toLowerCase() === 'list_turns is not supported yet') return runtimeError(503, 'RUNTIME_HISTORY_UNSUPPORTED', 'Native turn history is not supported');

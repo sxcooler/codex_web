@@ -7,11 +7,43 @@ import { execFileSync } from 'node:child_process';
 import { Projects, validateFolder, validateRepoUrl } from '../src/projects.ts';
 
 test('Windows names and clone transports cannot escape the project root', () => {
-  for (const name of ['..','.hidden','.git','../x','C:\\x','a/b','a\\b','CON','nul.txt','COM¹','foo.','foo ','x:y','\\\\host\\share','a\0b']) assert.throws(()=>validateFolder(name),name);
+  for (const name of ['..','.hidden','.git','../x','C:\\x','a/b','a\\b','CON','nul.txt','COM¹','foo.','foo ','x:y','\\\\host\\share','a\0b']) assert.throws(()=>validateFolder(name, 'win32'),name);
   assert.equal(validateFolder('example-review-tool'), 'example-review-tool');
   for(const url of ['file:///tmp/x','ext::sh x','-u','https://user:pass@example.org/a','ssh://host/-x','http://host/repo']) assert.throws(()=>validateRepoUrl(url),url);
   assert.equal(validateRepoUrl('git@github.com:owner/repo.git'),'git@github.com:owner/repo.git');
   assert.equal(validateRepoUrl('https://github.com/owner/repo.git'),'https://github.com/owner/repo.git');
+});
+
+test('Linux projects preserve case and native filenames while rejecting escapes', { skip: process.platform !== 'linux' }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'codex-linux-paths-'));
+  try {
+    const projects = new Projects(root);
+    const upper = await projects.create({ name: 'Repo', folderName: 'Repo' });
+    const lower = await projects.create({ name: 'repo', folderName: 'repo' });
+    assert.notEqual(upper.id, lower.id);
+    assert.equal((await projects.resolve(upper.id)).path, join(root, 'Repo'));
+    assert.equal((await projects.resolve(lower.id)).path, join(root, 'repo'));
+    await projects.create({ name: 'CON', folderName: 'CON' });
+    for (const name of ['CON', 'time:stamp.txt', 'back\\slash.txt']) {
+      await writeFile(join(upper.path, name), name);
+      assert.equal((await projects.readFile(upper.id, name)).text, name);
+      assert.match((await projects.gitFileDiff(upper.id, name)).hunks[0].lines[0].text, /CON|stamp|slash/);
+    }
+    await writeFile(join(upper.path, 'a?b.txt'), 'literal');
+    await writeFile(join(upper.path, 'axb.txt'), 'neighbor');
+    execFileSync('git', ['add', '.'], { cwd: upper.path });
+    execFileSync('git', ['-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m','base'], { cwd: upper.path });
+    await writeFile(join(upper.path, 'a?b.txt'), 'literal changed');
+    await writeFile(join(upper.path, 'axb.txt'), 'neighbor changed');
+    const patch = await projects.gitPatch(upper.id, 'a?b.txt');
+    assert.match(patch, /literal changed/);
+    assert.doesNotMatch(patch, /neighbor changed/);
+    await writeFile(join(lower.path, 'outside.txt'), 'outside');
+    await symlink(lower.path, join(upper.path, 'outside'), 'dir');
+    await assert.rejects(projects.readFile(upper.id, 'outside/outside.txt'), /escapes/);
+    await assert.rejects(projects.readFile(upper.id, '../repo/outside.txt'));
+    await assert.rejects(projects.readFile(upper.id, 'C:\\Windows\\win.ini'));
+  } finally { assert.equal(dirname(root), tmpdir()); await rm(root, { recursive: true, force: true }); }
 });
 
 test('project creation, special filenames, Git diff and stale junction rejection', async () => {
@@ -20,7 +52,7 @@ test('project creation, special filenames, Git diff and stale junction rejection
     const projects=new Projects(root);
     const project=await projects.create({name:'Review Tool',folderName:'review-tool'});
     assert.equal((await projects.list()).length,1);
-    await assert.rejects(projects.create({name:'same',folderName:'REVIEW-TOOL'}));
+    await assert.rejects(projects.create({name:'same',folderName:process.platform === 'win32' ? 'REVIEW-TOOL' : 'review-tool'}));
     await writeFile(join(project.path,'中文 name.txt'),'before\n');
     execFileSync('git',['add','--','中文 name.txt'],{cwd:project.path,windowsHide:true});
     execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m','test'],{cwd:project.path,windowsHide:true});

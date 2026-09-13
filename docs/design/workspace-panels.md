@@ -30,4 +30,22 @@ Git 历史从服务端解析当前 session 对应项目，客户端不能指定�
 - Git 查询不会越过项目目录向上发现父仓库；敏感目录不能成为项目，历史敏感路径被省略并拒绝直接查询。文件与目录互换的冲突路径不递归展开为 patch，以免隐含读取敏感子文件。
 - Markdown 通过共享惰性加载外壳渲染；链接在语法树中转换，原文与复制内容不变。解析器缓存按消息或项目文件作用域隔离，避免消息链接策略串入文件预览。
 - 日志滚动随异步内容恢复；失败不清空同一资源的缓存。项目内链接定位到目标目录，含空格、百分号和井号的文件名按 URL 边界只解码一次。
-- 全量测试、桌面/手机浏览器及生产资源验收通过；详细命令与结果见同日期实施计划。后端新接口需服务重启生效，本次保留了运行中的服务与会话。
+- 全量测试、桌面/手机浏览器及生产资源验收通过；详细命令与结果见下文历史验收记录。后端新接口需服务重启生效，本次保留了运行中的服务与会话。
+
+
+## 接口与实施记录
+
+GET /api/sessions/:id/git/log?ref=HEAD|all|refs/…&cursor=… 返回 {repository,commits:[{id,parents,subject,author,date,refs}],branches:[{name,ref,current}],nextCursor}；GET /git/commit?commit=…&parent=… 返回 {commit:{id,parents,subject,message,author,date,refs},parent,files}；GET /git/commit/diff?commit=…&parent=…&path=… 返回既有 hunks/binary/truncated 结构。
+
+实现复用 Projects/Git 只读接口、布局与 Markdown 外壳；删除被共享组件替代的 MarkdownMessage。后端真实仓库、前端标签/折叠、生产资源及独立审查均分步完成；不新增直接依赖，不持久化正文，不执行 Git 写操作。
+
+
+
+- `npm test`：138 项，137 通过、0 失败、1 跳过。跳过项为需独立便携发布包的运行验收，非本次功能测试。
+- `npm run build`：TypeScript 与 Vite 通过。既有 Markdown/语法高亮依赖仍有大分块提示；主包约 263 kB，Markdown 按需加载；未增加依赖。
+- Chrome：桌面 1600px、手机 390px 的完整页面通过折叠保留 DOM、标签选择、Markdown/源码切换、项目内相对链接、失败保留、图谱/合并父提交/diff、重载恢复、中止中状态与无横向溢出检查。
+- `tests/workspace-panels.html`：通过日志/文件滚动恢复、加载中切标签、资源消失、项目隔离、消息渲染后文件链接、空格/字面百分号/井号/引用式链接与源码原样回归。
+- `tests/git-history.html`、`tests/panes.html`：通过分页不重复请求、刷新不混淆资源、折叠与抽屉焦点回归；既有 Markdown 与发送页面在桌面/手机通过。模拟 Markdown/高亮模块加载失败时原文仍可读。
+- 生产 `dist`：独立本机预览使用模拟 API，在实际 CSP（仅测试入口额外 script nonce）下通过桌面/手机完整流程，Markdown 与高亮分块正常加载，无页面异常。
+- 独立只读审查发现并修复根提交 diff、精确历史文件路径、重命名、敏感路径、父仓库误发现、游标边界、布局极值、日志滚动、URL 解码与刷新状态问题；最终定向复核无剩余确定问题。
+- 当前运行中的后端不会自动加载源码修改；新 Git 历史接口需后端重启后生效。本次未中断现有服务或会话。

@@ -19,9 +19,9 @@ test('pane drag persists ratios and navigating releases old session while preser
     await route.fulfill({json:data});
   });
   await page.goto('/sessions/a');
-  await expect(page.getByRole('separator',{name:'调整导航宽度'})).toBeVisible();
+  await expect(page.getByRole('separator',{name:'调整左侧栏宽度'})).toBeVisible();
   await page.locator('#message').fill('保留的草稿');
-  const handle=page.getByRole('separator',{name:'调整导航宽度'}),box=(await handle.boundingBox())!;
+  const handle=page.getByRole('separator',{name:'调整左侧栏宽度'}),box=(await handle.boundingBox())!;
   await page.mouse.move(box.x+box.width/2,box.y+100);await page.mouse.down();await page.mouse.move(box.x+60,box.y+100);await page.mouse.up();
   const saved=await page.evaluate(()=>localStorage.getItem('codex-web:layout:v1'));
   expect(saved).toBeTruthy();
@@ -40,7 +40,7 @@ test('pane drag persists ratios and navigating releases old session while preser
   await expect(page.getByRole('button',{name:'发送',exact:true})).toBeInViewport();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.setViewportSize({width:390,height:844});
-  await expect(page.getByRole('separator',{name:'调整导航宽度'})).not.toBeVisible();
+  await expect(page.getByRole('separator',{name:'调整左侧栏宽度'})).not.toBeVisible();
   await page.locator('#message').fill('手机上的任务');
   await expect(page.getByRole('button',{name:'发送',exact:true})).toBeInViewport();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
@@ -65,7 +65,7 @@ test('release waits for confirmation and reconnect never resubmits an uncertain 
  await page.goto('/sessions/'+id);
  await expect(page.getByText('Codex 正在重试：暂时断线，正在重试')).toBeVisible();
  await page.locator('#message').fill('仅发送一次');await page.getByRole('button',{name:'发送',exact:true}).click();
- await expect(page.getByText('提交结果待核实，请先检查历史。')).toBeVisible();expect(sends).toBe(1);expect(body.text).toBe('仅发送一次');
+ await expect(page.getByText('提交结果待核实，请先刷新历史：结果未知')).toBeVisible();expect(sends).toBe(1);expect(body.text).toBe('仅发送一次');
  const sourceCount=await page.evaluate(()=>(window as any).sources.length);
  await page.clock.fastForward(50_000);
  expect(await page.evaluate(()=>(window as any).sources.length)).toBeGreaterThan(sourceCount);expect(sends).toBe(1);
