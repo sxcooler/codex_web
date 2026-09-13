@@ -66,4 +66,4 @@ After upgrading the CLI, regenerate the protocol, review differences, and verify
 
 ## Public releases
 
-Public examples use generalized usernames, paths, and conversation IDs. The original Git history still contains personal environment records. For publication, **create a new repository from a clean source archive without `.git`**. Do not upload `.local/`, native Codex data, credentials, attachments, databases, logs, screenshots, or test artifacts. See the [publishing guide](docs/guides/publishing.md) for the reviewed scope and its limits.
+Public examples use generalized usernames, paths, and conversation IDs. The original Git history still contains personal environment records. For publication, **create a new repository from a clean source archive without `.git`**. Do not upload `.local/`, native Codex data, credentials, attachments, databases, logs, unredacted screenshots, or test artifacts. Reviewed, redacted showcase images in `docs/assets/screenshots/` may be published with the documentation. See the [publishing guide](docs/guides/publishing.md) for the reviewed scope and its limits.

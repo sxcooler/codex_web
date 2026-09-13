@@ -1,6 +1,6 @@
 # 当前架构
 
-Codex Remote Web 是单用户远程客户端：React 页面经同源 Fastify API 与 SSE 连接宿主上的官方独立 `codex app-server`。原生 Thread ID 就是 Web Session ID；不另建聊天后端。平台验证范围见 [首页](../../README.md)，部署见 [指南](../guides/deployment.md)。
+Codex Web 是单用户远程客户端：React 页面经同源 Fastify API 与 SSE 连接宿主上的官方独立 `codex app-server`。原生 Thread ID 就是 Web Session ID；不另建聊天后端。平台验证范围见 [首页](../../README.md)，部署见 [指南](../guides/deployment.md)。
 
 ```mermaid
 flowchart LR

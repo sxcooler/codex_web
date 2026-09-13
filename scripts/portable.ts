@@ -102,7 +102,7 @@ export async function loadPortableConfig(dataDir: string, terminal?: Terminal) {
   }
   let config = saved;
   if (!config) {
-    process.stdout.write('Codex Remote Web · 首次配置\nNode 已包含。CLI 安装与账户登录分别完成。\n');
+    process.stdout.write('Codex Web · 首次配置\nNode 已包含。CLI 安装与账户登录分别完成。\n');
     const workRoot = resolve((await terminal!.question(`工作目录 [${join(homedir(), 'work')}]: `)).trim() || join(homedir(), 'work'));
     const port = parsePort((await terminal!.question('本地端口 [3000]: ')).trim() || '3000');
     config = { origin: `http://localhost:${port}`, port, workRoot };

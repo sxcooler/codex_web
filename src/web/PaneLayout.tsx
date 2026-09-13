@@ -37,7 +37,7 @@ export function PaneLayout({children,className}:{children:ReactNode;className:st
 export function PaneToolbar(){
   const panes=usePanes();
   const button=(side:Side)=>{const shown=side==='left'?panes.leftVisible:panes.rightVisible,label=(shown?'收起':'展开')+(side==='left'?'左侧栏':'右侧栏');return <button type="button" className="quiet pane-toggle" data-panel-toggle={side} title={label} aria-label={label} aria-expanded={shown} aria-controls={side==='left'?'left-sidebar':'right-sidebar'} disabled={side==='right'&&!panes.rightAvailable} onClick={()=>panes.toggle(side)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d={side==='left'?'M9 4v16':'M15 4v16'}/><rect x={side==='left'?4:16} y="5" width="4" height="14" fill="currentColor" opacity={shown?'.35':'0'}/></svg></button>;};
-  return <div className="pane-toolbar">{button('left')}<span className="muted small">Codex Remote</span>{button('right')}</div>;
+  return <div className="pane-toolbar">{button('left')}<span className="muted small">Codex Web</span>{button('right')}</div>;
 }
 export function PaneSeparator({side}:{side:Side}) {
   const panes=usePanes(),drag=useRef<{x:number;base:Layout}|null>(null),value=side==='left'?panes.layout.left:1-panes.layout.right;

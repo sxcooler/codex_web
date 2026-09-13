@@ -58,7 +58,7 @@ export class AppServer extends EventEmitter {
 
   initialize(): Promise<unknown> {
     return this.initialization ??= this.request('initialize', {
-      clientInfo: { name: 'codex_remote_web', title: 'Codex Remote Web', version: '0.1.0' },
+      clientInfo: { name: 'codex_remote_web', title: 'Codex Web', version: '0.1.0' },
       capabilities: { experimentalApi: false },
     }).then((result) => { this.notify('initialized', {}); return result; });
   }

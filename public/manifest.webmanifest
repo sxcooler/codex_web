@@ -1,1 +1,1 @@
-{"id":"/","name":"Codex Remote Web","short_name":"Codex Remote","lang":"zh-CN","start_url":"/","scope":"/","display":"standalone","background_color":"#101214","theme_color":"#101214","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
+{"id":"/","name":"Codex Web","short_name":"Codex Web","lang":"zh-CN","start_url":"/","scope":"/","display":"standalone","background_color":"#101214","theme_color":"#101214","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}

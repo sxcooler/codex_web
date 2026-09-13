@@ -5,7 +5,7 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
   if (event.request.mode === 'navigate') {
-    event.respondWith(fetch(event.request).catch(()=>new Response('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Codex Remote · 离线</title><h1>暂时无法连接</h1><p>请连接 Tailscale 并确认家里的电脑在线。任务不会因为页面断线而停止。</p><a href="/">重新连接</a></html>',{headers:{'content-type':'text/html; charset=utf-8'}})));
+    event.respondWith(fetch(event.request).catch(()=>new Response('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Codex Web · 离线</title><h1>暂时无法连接</h1><p>请连接 Tailscale 并确认家里的电脑在线。任务不会因为页面断线而停止。</p><a href="/">重新连接</a></html>',{headers:{'content-type':'text/html; charset=utf-8'}})));
   } else if (/^\/assets\/[\w.-]+$/.test(url.pathname)) {
     event.respondWith(caches.open(CACHE).then(async cache => (await cache.match(event.request)) ?? fetch(event.request).then(async response=>{if(response.ok)await cache.put(event.request,response.clone());return response;})));
   }

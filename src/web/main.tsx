@@ -19,7 +19,7 @@ const titleOf=(thread:Json)=>String(thread.name||thread.metadata?.web_title||thr
 const pretty=(value:unknown)=>typeof value==='string'?value:JSON.stringify(value,null,2);
 const phases:Record<string,string>={IDLE:'就绪',RUNNING:'运行中',WAITING_APPROVAL:'等待审批',WAITING_INPUT:'等待输入',RELEASED:'已释放，可继续',EXTERNAL:'其他客户端运行中',UNKNOWN:'状态待核实'};
 function ErrorBox({error}:{error:string}) { return error?<div role="alert" className="notice error">{error}</div>:null; }
-function Brand(){return <div className="brand"><img src="/icon.svg" alt=""/><span>Codex Remote</span></div>;}
+function Brand(){return <div className="brand"><img src="/icon.svg" alt=""/><span>Codex Web</span></div>;}
 
 function App() {
   const [authenticated,setAuthenticated]=useState<boolean|null>(null),[error,setError]=useState(''),[notice,setNotice]=useState('');

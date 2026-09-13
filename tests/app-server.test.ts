@@ -37,7 +37,7 @@ test('drops inherited client identity while preserving all other environment val
 test('initialize completes before initialized is sent', async (t) => {
   const server = start(t);
   assert.deepEqual(await server.initialize(), {
-    clientInfo: { name: 'codex_remote_web', title: 'Codex Remote Web', version: '0.1.0' },
+    clientInfo: { name: 'codex_remote_web', title: 'Codex Web', version: '0.1.0' },
     capabilities: { experimentalApi: false },
   });
   assert.equal(await server.request('ready', {}), true);

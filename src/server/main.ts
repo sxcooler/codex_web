@@ -27,7 +27,7 @@ async function main(): Promise<void> {
   const app = await buildServer({ dataDir, origin, runtime, projects: new Projects(workRoot), distDir: join(projectRoot, 'dist') });
   try {
     await app.listen({ host: '127.0.0.1', port });
-    process.stdout.write(`Codex Remote Web listening at ${origin}\n`);
+    process.stdout.write(`Codex Web listening at ${origin}\n`);
     let closing = false;
     for (const signal of ['SIGINT','SIGTERM'] as const) process.on(signal, async () => {
       if (closing) return; closing = true;
@@ -40,6 +40,6 @@ async function main(): Promise<void> {
 }
 
 main().catch(() => {
-  process.stderr.write('Failed to start Codex Remote Web. Run the authentication setup first and check WEB_ORIGIN/PORT.\n');
+  process.stderr.write('Failed to start Codex Web. Run the authentication setup first and check WEB_ORIGIN/PORT.\n');
   process.exitCode = 1;
 });

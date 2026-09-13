@@ -154,7 +154,7 @@ try {
     state = { version, cwd, threadId: thread.id, source: thread.source, historyMode: thread.historyMode,
       marker, externalMarker: `VSCODE-REPLY-${randomUUID()}`, startedAt: new Date().toISOString() };
     save();
-    const turn = await runTurn(client, thread.id, `Codex Remote Web 兼容性验证。请只回复“收到 ${marker}”。不要调用工具、读写文件或执行命令。`);
+    const turn = await runTurn(client, thread.id, `Codex Web 兼容性验证。请只回复“收到 ${marker}”。不要调用工具、读写文件或执行命令。`);
     assert.equal(turn.status, 'completed');
     assert.ok(hasUserMarker(await readThread(thread.id), marker));
     state.firstTurnId = turn.id;
