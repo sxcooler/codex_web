@@ -12,3 +12,5 @@
 Windows 使用用户计划任务；Linux 使用用户级 systemd，也支持前台运行。前置配置、日志、停用自启及升级步骤见 [部署指南](../docs/guides/deployment.md)。旧版 Windows 用户升级后重新运行 `windows/install-startup.ps1`，迁移已有任务路径。
 
 根目录的 TypeScript 文件保留为 npm 命令入口，包括密码设置、协议生成、探测和打包工具；不改变现有 npm 命令。`npm run package:portable` 在 Windows x64 / Linux x64 glibc 上分别生成对应平台的便携包，共用 `scripts/portable.ts` 配置流程。详见 [便携包指南](../docs/guides/portable.md)。
+
+`node scripts/generate-icons.ts` 从 `public/icon.svg` 生成手机桌面 PNG。调整 `scale` 控制主体大小（当前 0.8，对应约 60% 图形宽度、20% 左右边距）；原 SVG 用于网页标签。修改后递增 `revision` 并同步 `index.html`、`public/manifest.webmanifest` 的版本路径，避免静态缓存继续使用旧图标；然后运行 `node --test tests/icons.test.ts` 和 `npm run build`。已安装的桌面快捷方式可能需要重新添加。
