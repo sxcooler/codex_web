@@ -8,6 +8,6 @@ dist/
 *.log
 .worktrees/
 test-results/
-output/playwright/
+output/
 playwright-report/
 releases/

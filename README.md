@@ -10,7 +10,7 @@
 
 - 选择已有项目、无项目、新建 Git 项目或 Clone，持续对话、插话、中止与释放接力。
 - 实时增量同步、历史分页、按需命令输出、安全 Markdown 与原文复制。
-- 可调整并记忆的三栏布局，文件预览、统一 / 并排 diff、只读 Git 日志和 JUnit 报告。
+- 可调整并记忆的三栏布局，文本 / Markdown / 图片预览、统一 / 并排 diff、只读 Git 日志和 JUnit 报告。
 - 原生模型 / 推理与审批方式选择，重命名、收藏、Web 隐藏和元数据清除。
 - 私有文件 / 图片附件、Web Push，以及只缓存静态外壳的 PWA。
 
@@ -50,6 +50,10 @@ npm start
 默认工作根目录为当前用户的 `~/work`（Windows 为 `%USERPROFILE%\work`），仅发现一级项目目录。`.local/web/config.json` 配置 `origin`、`port`、`workRoot`、`codexBin`；对应 `WEB_ORIGIN`、`PORT`、`WORK_ROOT`、`CODEX_BIN` 环境变量优先，`WEB_DATA_DIR` 可更换数据目录。Windows 默认查找独立 CLI 官方安装位置，Linux 默认使用 PATH 中的 `codex`。
 
 部署脚本按平台放在 [`scripts/windows/` 和 `scripts/linux/`](scripts/README.md)。Linux 可用 `bash scripts/linux/start-server.sh` 前台启动，或 `bash scripts/linux/install-startup.sh --start` 安装用户级 systemd 自启；先完成上述构建与密码设置。停止、日志和 Tailscale 配置见部署指南。
+
+Windows 可双击 `scripts/windows/start-server.cmd` 后台启动源码部署的服务，日志写入 `.local/web/server.log`，关闭启动窗口不会停止服务；双击 `stop-server.cmd` 停止。CMD 入口优先调用已有 PowerShell 7，否则使用系统自带的 Windows PowerShell 5.1，无需额外安装。其他同名 CMD 分别配置自启和网络入口。
+
+右侧“文件”支持 PNG、JPEG、WebP、GIF、AVIF 和 SVG 图片预览，按面板宽度缩放。SVG 转成静态图，动图显示首帧；文件上限 10 MiB、4000 万像素，预览最长边 2048 像素。图片同样受项目目录、登录状态和忽略规则约束。
 
 ## 本地与跨设备访问
 

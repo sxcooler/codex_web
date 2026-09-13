@@ -4,6 +4,7 @@ import { lstat, mkdir, readdir, realpath, open } from 'node:fs/promises';
 import { basename, dirname, join, isAbsolute, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
+import sharp from 'sharp';
 
 const run = promisify(execFile);
 export const pathKey = (path: string, platform: string = process.platform) => platform === 'win32' ? path.toLowerCase() : path;
@@ -186,6 +187,22 @@ export class Projects {
       files.push({ path, type: info.isDirectory() ? 'directory' : 'file', size: info.isFile() ? info.size : 0 });
     }
     return { files: files.sort((a,b) => a.path.localeCompare(b.path)) };
+  }
+
+  async readImage(id: string, path: string) {
+    const { project, target, rel } = await this.#safePath(id, path, true);
+    await this.#checkVisible(project.path, rel);
+    const limit = 10 * 1024 * 1024;
+    if ((await lstat(target)).size > limit) throw problem('Image exceeds 10 MiB', 413);
+    const bytes = await this.#readBounded(target, limit);
+    if (bytes.length > limit) throw problem('Image exceeds 10 MiB', 413);
+    try {
+      const image = sharp(bytes, { limitInputPixels:40_000_000, failOn:'error' });
+      const metadata = await image.metadata();
+      if (!['png','jpeg','webp','gif','avif','heif','svg'].includes(metadata.format ?? '')) throw new Error('Unsupported image');
+      // Rasterize SVG and the first animation frame; never serve executable source.
+      return await image.rotate().resize({ width:2048, height:2048, fit:'inside', withoutEnlargement:true }).webp({ quality:85 }).toBuffer();
+    } catch { throw problem('Image is invalid, unsupported or exceeds 40 megapixels', 415); }
   }
 
   async readFile(id: string, path: string) {

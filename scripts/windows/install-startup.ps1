@@ -3,18 +3,21 @@ param([switch]$Start)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $taskName = 'Codex Remote Web'
-$pwshPath = (Get-Command pwsh.exe -ErrorAction Stop).Source
+$systemShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$pwshPath = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+if (-not $pwshPath) { $pwshPath = $systemShell }
 # Store updates remove versioned executables; the per-user app execution alias survives them.
 $storePattern = Join-Path $env:ProgramFiles 'WindowsApps\Microsoft.PowerShell_*\pwsh.exe'
 $storeAlias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
 if ($pwshPath -like $storePattern -and (Test-Path -LiteralPath $storeAlias)) { $pwshPath = $storeAlias }
 $scriptPath = Join-Path $PSScriptRoot 'start-server.ps1'
-$arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$scriptPath`""
+$arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
 $legacyScript = Join-Path $projectRoot 'scripts\start-server.ps1'
 $legacyArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$legacyScript`""
+$previousArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$scriptPath`""
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existing -and (($existing.Actions.Arguments -notin @($arguments, $legacyArguments)) -or
-    ($existing.Actions.Execute -ne $pwshPath -and -not ($pwshPath -eq $storeAlias -and $existing.Actions.Execute -like $storePattern)))) {
+if ($existing -and (($existing.Actions.Arguments -notin @($arguments, $previousArguments, $legacyArguments, $arguments.Replace($scriptPath, $legacyScript))) -or
+    ($existing.Actions.Execute -notin @($pwshPath, $systemShell) -and -not ($pwshPath -eq $storeAlias -and $existing.Actions.Execute -like $storePattern)))) {
     throw 'A different task already uses this name. It was not overwritten.'
 }
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name

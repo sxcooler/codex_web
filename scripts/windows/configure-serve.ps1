@@ -17,10 +17,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Serve was not configured. Follow the Tailscale
 $dataDir = Join-Path ([System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))) '.local\web'
 $configPath = Join-Path $dataDir 'config.json'
 $config = @{}
-if (Test-Path -LiteralPath $configPath) { $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable }
+if (Test-Path -LiteralPath $configPath) {
+    $saved = [IO.File]::ReadAllText($configPath) | ConvertFrom-Json
+    foreach ($property in $saved.PSObject.Properties) { $config[$property.Name] = $property.Value }
+}
 $config.origin = "https://$dnsName"
 $config.port = $Port
 $temporary = "$configPath.tmp"
-$config | ConvertTo-Json | Set-Content -LiteralPath $temporary
+[IO.File]::WriteAllText($temporary, ($config | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Move-Item -LiteralPath $temporary -Destination $configPath -Force
 Write-Output "Configured private HTTPS at https://$dnsName. Restart the Web server to use this origin."

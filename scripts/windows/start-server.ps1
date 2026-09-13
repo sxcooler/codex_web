@@ -1,3 +1,5 @@
+[CmdletBinding()]
+param([switch]$Background)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $dataDir = Join-Path $projectRoot '.local\web'
@@ -5,7 +7,17 @@ $nodePath = Join-Path $projectRoot '.local\node24\node.exe'
 if (-not (Test-Path -LiteralPath $nodePath)) { $nodePath = (Get-Command node.exe -ErrorAction Stop).Source }
 if (-not (Test-Path -LiteralPath (Join-Path $dataDir 'auth.json'))) { throw 'Run npm run auth:setup first.' }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'dist\index.html'))) { throw 'Run npm run build first.' }
-$hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($projectRoot.ToLowerInvariant())))
+if ($Background) {
+    $shellPath = (Get-Process -Id $PID).Path
+    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $child = Start-Process -FilePath $shellPath -WorkingDirectory $projectRoot -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    Write-Output "Background startup requested (PID $($child.Id))."
+    Write-Output "Log: $(Join-Path $dataDir 'server.log')"
+    Write-Output 'Use stop-server.cmd to stop this server.'
+    exit 0
+}
+$sha = [Security.Cryptography.SHA256]::Create()
+try { $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($projectRoot.ToLowerInvariant()))).Replace('-', '') } finally { $sha.Dispose() }
 $mutex = [Threading.Mutex]::new($false, "Local\CodexRemoteWeb-$hash")
 $owned = $false
 try {

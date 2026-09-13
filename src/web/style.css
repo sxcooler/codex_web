@@ -87,3 +87,5 @@
 .execution-process>summary:focus-visible,.step-toggle:focus-visible{outline:2px solid #82d9b4;outline-offset:2px}
 @media(max-width:1250px){.execution-process{margin-left:0}}
 @media(max-width:600px){.execution-process>summary{gap:7px;padding:10px}.execution-steps{padding:0 10px 6px}.execution-status{font-size:11px}.step-heading{gap:7px}}
+
+.image-preview{min-width:0}.image-preview img{display:block;max-width:100%;max-height:60vh;object-fit:contain;margin:12px auto;background:#20262b;border:1px solid #354047;border-radius:6px}.image-preview a{display:inline-block;font-size:12px}.image-preview .small{line-height:1.5}

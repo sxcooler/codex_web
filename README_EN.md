@@ -8,7 +8,7 @@ A lightweight web client for Codex running on your development machine, accessib
 
 - Select an existing project, use no-project mode, create a Git project or clone a repository; continue conversations, steer running tasks, interrupt, and release for handoff.
 - Live incremental synchronization, paginated history, on-demand command output, safe Markdown, and original-text copying.
-- Resizable, remembered three-pane layout; file previews, unified/split diffs, read-only Git history, and JUnit reports.
+- Resizable, remembered three-pane layout; text, Markdown, and image previews, unified/split diffs, read-only Git history, and JUnit reports.
 - Native model, reasoning, and approval choices; rename, favorite, hide from Web, and clear Web metadata.
 - Private file/image attachments, Web Push, and a PWA that caches only the static shell.
 
@@ -48,6 +48,10 @@ Skip setup if a password already exists. Set a 12–256-character password in yo
 The default work root is the current user's `~/work` (`%USERPROFILE%\work` on Windows); only immediate project directories are discovered. `.local/web/config.json` configures `origin`, `port`, `workRoot`, and `codexBin`. The corresponding `WEB_ORIGIN`, `PORT`, `WORK_ROOT`, and `CODEX_BIN` environment variables take precedence; `WEB_DATA_DIR` changes the data directory. Windows defaults to the official standalone CLI installation location; Linux defaults to `codex` on PATH.
 
 Deployment scripts are organized into [`scripts/windows/` and `scripts/linux/`](scripts/README.md). After building and setting a password, Linux users can run `bash scripts/linux/start-server.sh` in the foreground, or install a user systemd service with `bash scripts/linux/install-startup.sh --start`. See the deployment guide for stopping, logs, and Tailscale configuration.
+
+On Windows, double-click `scripts/windows/start-server.cmd` to start a source deployment in the background. Logs are written to `.local/web/server.log`; closing the launcher window does not stop the service. Double-click `stop-server.cmd` to stop it. CMD launchers prefer an existing PowerShell 7 installation and otherwise use built-in Windows PowerShell 5.1; no extra PowerShell installation is required. Matching CMD launchers also configure startup and network access.
+
+The right-hand Files tab previews PNG, JPEG, WebP, GIF, AVIF, and SVG images, scaled to fit the panel. SVG is rasterized and animations show their first frame. Limits are 10 MiB and 40 megapixels per image, with a preview long edge of at most 2048 pixels. Project boundaries, authentication, and ignore rules also apply to images.
 
 ## Local and cross-device access
 
