@@ -21,6 +21,36 @@ async function commit(repo: string, subject: string, file: string, value = subje
   return git(repo, 'rev-parse', 'HEAD');
 }
 
+test('remote tracking refs decorate commits, can be selected, and contribute remote-only history', async () => {
+  const root=await mkdtemp(join(tmpdir(),'codex-remote-history-')),repo=join(root,'repo');
+  try {
+    await mkdir(repo);await git(repo,'init','-b','main');
+    await git(repo,'config','user.name','History Tester');await git(repo,'config','user.email','history@example.test');
+    const base=await commit(repo,'base','file.txt');
+    await git(repo,'update-ref','refs/remotes/origin/main',base);
+    await git(repo,'symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/main');
+    const local=await commit(repo,'local ahead','file.txt');
+    const tree=await git(repo,'rev-parse','HEAD^{tree}');
+    const remote=await git(repo,'commit-tree',tree,'-p',base,'-m','remote only');
+    await git(repo,'update-ref','refs/remotes/origin/topic',remote);
+    const projects=new Projects(root),project=(await projects.list())[0];
+    const current=await projects.gitLog(project.id);
+    assert.ok(current.commits.find(item=>item.id===local)?.refs.includes('refs/heads/main'));
+    assert.deepEqual(current.commits.find(item=>item.id===base)?.refs,['refs/remotes/origin/HEAD','refs/remotes/origin/main']);
+    assert.ok(current.branches.some(branch=>branch.name==='origin/main'&&branch.ref==='refs/remotes/origin/main'&&!branch.current));
+    assert.ok(!current.branches.some(branch=>branch.ref==='refs/remotes/origin/HEAD'),'symbolic HEAD is a label, not another branch');
+    assert.ok(!current.commits.some(item=>item.id===remote));
+    const all=await projects.gitLog(project.id,'all');
+    assert.ok(all.commits.some(item=>item.id===remote));assert.equal(new Set(all.commits.map(item=>item.id)).size,all.commits.length);
+    const selected=await projects.gitLog(project.id,'refs/remotes/origin/topic');
+    assert.equal(selected.commits[0].id,remote);assert.ok(!selected.commits.some(item=>item.id===local));
+    assert.ok((await projects.gitCommit(project.id,base)).commit.refs.includes('refs/remotes/origin/main'));
+    await git(repo,'update-ref','-d','refs/remotes/origin/topic');
+    assert.ok(!(await projects.gitLog(project.id,'all')).commits.some(item=>item.id===remote));
+    await assert.rejects(projects.gitLog(project.id,'refs/remotes/origin/topic'),{statusCode:404});
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
 test('git history covers roots, merges, branches, rename/delete, and frozen 100-item pages', async () => {
   const root = await mkdtemp(join(tmpdir(), 'codex-history-'));
   const repo = join(root, 'repo');

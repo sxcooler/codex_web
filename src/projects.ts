@@ -294,9 +294,9 @@ export class Projects {
 
   async #historyRefs(projectPath:string) {
     const current=(await git(projectPath,['symbolic-ref','--quiet','HEAD']).catch(()=>'')).trim();
-    const text=await git(projectPath,['for-each-ref','--format=%(objectname)%00%(refname)%00%(*objectname)','refs/heads','refs/tags']);
+    const text=await git(projectPath,['for-each-ref','--format=%(objectname)%00%(refname)%00%(*objectname)%00%(symref)','refs/heads','refs/remotes','refs/tags']);
     const refs=new Map<string,string[]>(); const branches:{name:string;ref:string;current:boolean}[]=[];
-    for(const line of text.split('\n')){if(!line)continue;const [object,ref,peeled]=line.split('\0');const id=peeled||object;if(!refs.has(id))refs.set(id,[]);refs.get(id)!.push(ref);if(ref.startsWith('refs/heads/'))branches.push({name:ref.slice(11),ref,current:ref===current});}
+    for(const line of text.split('\n')){if(!line)continue;const [object,ref,peeled,symbolic]=line.split('\0');const id=peeled||object;if(!refs.has(id))refs.set(id,[]);refs.get(id)!.push(ref);if(ref.startsWith('refs/heads/')||ref.startsWith('refs/remotes/')&&!symbolic)branches.push({name:ref.replace(/^refs\/(heads|remotes)\//,''),ref,current:ref===current});}
     if(current&&!branches.some(branch=>branch.ref===current))branches.push({name:current.slice(11),ref:current,current:true});
     return {refs,branches:branches.sort((a,b)=>a.name.localeCompare(b.name))};
   }
@@ -311,7 +311,7 @@ export class Projects {
     let tips:string[]; let skip=0;
     if(cursor){try{if(typeof cursor!=='string'||cursor.length>4096)throw new Error();const value=JSON.parse(inflateRawSync(Buffer.from(cursor,'base64url'),{maxOutputLength:64*1024}).toString());if(Object.keys(value).sort().join(',')!=='ref,skip,tips'||value.ref!==ref||!Array.isArray(value.tips)||value.tips.length>512||!value.tips.every((tip:any)=>/^[0-9a-f]{40,64}$/i.test(tip))||!Number.isSafeInteger(value.skip)||value.skip<1)throw new Error();({tips,skip}=value);}catch{throw problem('Invalid history cursor');}}
     else if(ref==='HEAD') { const head=(await git(path,['rev-parse','--verify','HEAD^{commit}']).catch(()=>'')).trim(); tips=head?[head]:[]; }
-    else if(ref==='all') { tips=[...new Set((await git(path,['for-each-ref','--format=%(objectname)','refs/heads','refs/tags'])).split(/\s+/).filter(Boolean))]; }
+    else if(ref==='all') { tips=[...new Set((await git(path,['for-each-ref','--format=%(objectname)','refs/heads','refs/remotes','refs/tags'])).split(/\s+/).filter(Boolean))]; }
     else { if(!/^refs\/(?:heads|tags|remotes)\//.test(ref)||/[\x00-\x1f]/.test(ref))throw problem('Invalid Git ref');await git(path,['check-ref-format',ref]).catch(()=>{throw problem('Invalid Git ref')});const tip=(await git(path,['rev-parse','--verify',ref+'^{commit}']).catch(()=>'')).trim();if(!tip)throw problem('Git ref not found',404);tips=[tip]; }
     if(tips.length>512)throw problem('分支过多，请选择具体分支',409);
     const {refs,branches}=await this.#historyRefs(path);

@@ -53,6 +53,8 @@ On Windows, double-click `scripts/windows/start-server.cmd` to start a source de
 
 The Files, Changes, and Git History tabs preview PNG, JPEG, WebP, GIF, AVIF, and SVG images, scaled to fit the panel. Changes show before/after images from the actual worktree, index, or commit, including additions, deletions, and renames. SVG is rasterized and animations show their first frame. Limits are 10 MiB and 40 megapixels per image, with a preview long edge of at most 2048 pixels. Files also lists and reads files excluded by `.gitignore`; project boundaries, authentication, and sensitive-file protection still apply. The Changes list follows Git tracking rules and clears selections that disappear after a successful refresh.
 
+Git History shows local branches, remote-tracking branches, and tags. You can select remote branches such as `origin/main`; All branches also includes commits reachable only from remote-tracking branches. Remote state reflects the last local fetch. Refreshing the log does not contact the remote repository; fetch updates in your Git client, then refresh.
+
 ## Local and cross-device access
 
 Local use does not require a virtual network. For cross-device access, connect the client and development machine to the same LAN or an authorized virtual network, and keep the machine and service online. **Direct public-internet exposure is not recommended. Prefer a virtual network with authentication, encryption, and access controls; Tailscale is one example.**
