@@ -12,6 +12,16 @@ A lightweight web client for Codex running on your development machine, accessib
 - Native model, reasoning, and approval choices; rename, favorite, hide from Web, and clear Web metadata.
 - Private file/image attachments, Web Push, and a PWA that caches only the static shell.
 
+## Screenshots
+
+**Desktop**
+
+![Codex Web desktop: project list, conversation, and project sidebar](docs/assets/screenshots/desktop.png)
+
+**Mobile**
+
+<img src="docs/assets/screenshots/mobile.png" alt="Codex Web mobile: conversation history and message composer" width="360">
+
 ## Platforms and prerequisites
 
 | Host platform | Scope |

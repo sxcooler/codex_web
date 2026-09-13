@@ -12,6 +12,16 @@
 - 原生模型 / 推理与审批方式选择，重命名、收藏、Web 隐藏和元数据清除。
 - 私有文件 / 图片附件、Web Push，以及只缓存静态外壳的 PWA。
 
+## 界面展示
+
+**PC 端**
+
+![Codex Web PC 端：项目列表、会话与右侧项目面板](docs/assets/screenshots/desktop.png)
+
+**手机端**
+
+<img src="docs/assets/screenshots/mobile.png" alt="Codex Web 手机端：会话历史与消息输入区" width="360">
+
 ## 平台与前置条件
 
 | 宿主平台 | 范围 |
