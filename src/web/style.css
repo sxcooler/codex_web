@@ -92,8 +92,8 @@
 
 .image-diff{display:grid;gap:16px}.image-diff>section{min-width:0}.image-diff h4{margin:12px 0}.image-diff.split{grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:600px){.image-diff.split{grid-template-columns:1fr}}
 
-.git-ref{display:inline-block;padding:0 4px;margin-right:4px;border-radius:3px;background:#293a33;color:#82d9b4}.git-ref.remote{background:#263849;color:#a9d2ff}.git-ref.tag{background:#40382a;color:#ead09c}
+.git-ref{display:inline-flex;align-items:center;gap:3px;vertical-align:middle;white-space:nowrap;padding:0 4px;margin-right:4px;border-radius:3px;background:#293a33;color:#82d9b4}.git-ref.remote{background:#263849;color:#a9d2ff}.git-ref.tag{background:#40382a;color:#ead09c}
 
-.git-ref svg{vertical-align:-2px;margin-right:3px}.fetch-result p{margin:6px 0}
+.git-ref svg{flex-shrink:0}.fetch-result p{margin:6px 0}
 
 .session-locked{display:flex;align-items:center;gap:12px}.session-locked>svg{flex-shrink:0}.session-locked>span{flex:1}.session-locked>button{flex-shrink:0}
