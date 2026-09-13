@@ -22,7 +22,7 @@ test('imports bounded JUnit only for a command item in the same snapshot', async
   await writeFile(join(p.path,'evil.xml'),'<!DOCTYPE x [<!ENTITY x SYSTEM "file:///etc/passwd">]><testsuite/>');
   await assert.rejects(parseTestReport(projects,p.id,snapshot,{commandItemId:'cmd-1',relativePath:'evil.xml',format:'junit'}));
   await writeFile(join(p.path,'.gitignore'),'ignored.xml\n'); await writeFile(join(p.path,'ignored.xml'),'<testsuite/>');
-  await assert.rejects(parseTestReport(projects,p.id,snapshot,{commandItemId:'cmd-1',relativePath:'ignored.xml',format:'junit'}));
+  assert.equal((await parseTestReport(projects,p.id,snapshot,{commandItemId:'cmd-1',relativePath:'ignored.xml',format:'junit'})).cases.length,0);
   await writeFile(join(p.path,'.env.xml'),'<testsuite/>'); await assert.rejects(parseTestReport(projects,p.id,snapshot,{commandItemId:'cmd-1',relativePath:'.env.xml',format:'junit'}));
   await writeFile(join(p.path,'nested.xml'),'<testsuites><testsuite name="outer"><testsuite name="inner"><testcase name="nested"/></testsuite></testsuite></testsuites>');
   const nested=await parseTestReport(projects,p.id,snapshot,{commandItemId:'cmd-1',relativePath:'nested.xml',format:'junit'}); assert.equal(nested.cases[0].suite,'outer / inner');

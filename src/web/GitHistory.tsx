@@ -1,4 +1,5 @@
 import {useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
+import {ImageDiff} from './ImagePreview.tsx';
 import {api,type Json} from './api.ts';
 import type {PanelState} from './panelState.ts';
 import {layoutGitGraph} from './gitGraph.ts';
@@ -59,7 +60,7 @@ export function GitHistory({id,tick,visible,state,onChange}:{id:string;tick:numb
     {graph.pending.length?<p className="muted small">{graph.pending.length} 条连线延续至尚未加载的历史。</p>:null}
     {currentLog?.nextCursor?<button disabled={busy||pages>=100} onClick={()=>update({pages:pages+1})}>{pages>=100?'已加载 10000 条，请筛选分支':'加载更早的 100 条'}</button>:null}
     {state.commit?<section className="commit-details">{failure(detailError,detailKey,!!currentDetail)}{currentDetail?<><h3>{currentDetail.commit.subject||'(无标题)'}</h3><code className="commit-hash">{currentDetail.commit.id}</code><p className="muted small">{currentDetail.commit.author} · {date(currentDetail.commit.date)}</p><p className="commit-message">{currentDetail.commit.message}</p>{currentDetail.commit.parents?.length>1?<select aria-label="比较父提交" value={currentDetail.parent??''} onChange={e=>update({parent:e.target.value,path:''})}>{currentDetail.commit.parents.map((parent:string,index:number)=><option value={parent} key={parent}>父提交 {index+1} · {parent.slice(0,8)}</option>)}</select>:<p className="muted small">{currentDetail.parent?'比较父提交 '+currentDetail.parent.slice(0,8):'根提交 · 与空树比较'}</p>}<div className="file-list">{(currentDetail.files??[]).map((file:Json)=><button className={state.path===file.path?'active':''} key={file.path} onClick={()=>update({path:file.path})}><span>{file.oldPath?file.oldPath+' → '+file.path:file.path}</span><small>{file.status??''}</small></button>)}{!currentDetail.files?.length?<p className="muted">没有可显示的文件变更。</p>:null}</div></>:detailError?.key!==detailKey?<p className="muted">读取提交…</p>:null}
-      {state.path?<section className="file-preview"><h3>{state.path}</h3>{failure(diffError,diffKey,!!currentDiff)}{currentDiff?<><DiffView content={currentDiff}/>{!currentDiff.binary&&!currentDiff.hunks?.length?<p className="muted">没有文本差异（可能仅重命名或权限变更）。</p>:null}{currentDiff.truncated?<p className="notice">差异超过显示上限，已截断。</p>:null}</>:diffError?.key!==diffKey?<p className="muted">读取差异…</p>:null}</section>:null}
+      {state.path?<section className="file-preview"><h3>{state.path}</h3>{failure(diffError,diffKey,!!currentDiff)}{currentDiff?<>{currentDiff.images?<ImageDiff id={id} images={currentDiff.images} version={tick+'-'+revision}/>:<DiffView content={currentDiff}/>}{!currentDiff.images&&!currentDiff.binary&&!currentDiff.hunks?.length?<p className="muted">没有文本差异（可能仅重命名或权限变更）。</p>:null}{currentDiff.truncated?<p className="notice">差异超过显示上限，已截断。</p>:null}</>:diffError?.key!==diffKey?<p className="muted">读取差异…</p>:null}</section>:null}
     </section>:commits.length?<p className="muted small">选择一条提交，查看详情和文件变更。</p>:null}
   </section>;
 }

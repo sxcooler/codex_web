@@ -53,7 +53,7 @@ npm start
 
 Windows 可双击 `scripts/windows/start-server.cmd` 后台启动源码部署的服务，日志写入 `.local/web/server.log`，关闭启动窗口不会停止服务；双击 `stop-server.cmd` 停止。CMD 入口优先调用已有 PowerShell 7，否则使用系统自带的 Windows PowerShell 5.1，无需额外安装。其他同名 CMD 分别配置自启和网络入口。
 
-右侧“文件”支持 PNG、JPEG、WebP、GIF、AVIF 和 SVG 图片预览，按面板宽度缩放。SVG 转成静态图，动图显示首帧；文件上限 10 MiB、4000 万像素，预览最长边 2048 像素。图片同样受项目目录、登录状态和忽略规则约束。
+右侧“文件”“变更”和“Git 日志”均支持 PNG、JPEG、WebP、GIF、AVIF 和 SVG 图片预览，按面板宽度缩放。变更预览分别读取工作区、暂存区或提交中的实际版本，展示变更前后图片，支持新增、删除和重命名。SVG 转成静态图，动图显示首帧；文件上限 10 MiB、4000 万像素，预览最长边 2048 像素。“文件”也显示并允许读取 `.gitignore` 忽略的文件；项目目录边界、登录验证及凭据等敏感文件保护仍然生效。Git 变更列表继续遵循 Git 的跟踪规则，刷新后会清除已不在列表中的选中项。
 
 ## 本地与跨设备访问
 

@@ -94,7 +94,8 @@ test('safe files and structured diffs cover untracked, staged, rename and binary
     await assert.rejects(projects.readFile(project.id,'C:\\Windows\\win.ini'));
     await assert.rejects(projects.readFile(project.id,'new name.txt:stream'));
     await writeFile(join(project.path,'.gitignore'),'ignored.txt\n'); await writeFile(join(project.path,'ignored.txt'),'secret');
-    await assert.rejects(projects.readFile(project.id,'ignored.txt'));
+    assert.equal((await projects.readFile(project.id,'ignored.txt')).text,'secret');
+    assert.ok((await projects.listFiles(project.id)).files.some(file=>file.path==='ignored.txt'));
     await assert.rejects(projects.readFile(project.id,'.git/config'));
     const patch=await projects.gitPatch(project.id,'untracked.txt',false); assert.match(patch,/\+fresh/);
     assert.match(patch,/@@ -0,0 \+1,1 @@/); assert.doesNotMatch(patch,/\n\+\n?$/);

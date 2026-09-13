@@ -89,3 +89,5 @@
 @media(max-width:600px){.execution-process>summary{gap:7px;padding:10px}.execution-steps{padding:0 10px 6px}.execution-status{font-size:11px}.step-heading{gap:7px}}
 
 .image-preview{min-width:0}.image-preview img{display:block;max-width:100%;max-height:60vh;object-fit:contain;margin:12px auto;background:#20262b;border:1px solid #354047;border-radius:6px}.image-preview a{display:inline-block;font-size:12px}.image-preview .small{line-height:1.5}
+
+.image-diff{display:grid;gap:16px}.image-diff>section{min-width:0}.image-diff h4{margin:12px 0}.image-diff.split{grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:600px){.image-diff.split{grid-template-columns:1fr}}

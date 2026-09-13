@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
 import { get } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, rm, mkdir, copyFile } from 'node:fs/promises';
@@ -51,6 +52,11 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal(image.rawPayload.subarray(8,12).toString(),'WEBP');
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files/image',headers})).statusCode,400);
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files/image?path=missing.png',headers})).statusCode,404);
+    assert.equal((await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png&revision=HEAD',headers})).statusCode,400);
+    execFileSync('git',['add','picture.png'],{cwd:join(root,'test'),windowsHide:true});
+    const stagedImage=await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png&revision=index',headers});
+    assert.equal(stagedImage.statusCode,200,stagedImage.body);
+    assert.deepEqual(stagedImage.rawPayload,image.rawPayload);
     const chinesePrompt='验'.repeat(12_000);
     const chinese=await app.inject({method:'POST',url:'/api/sessions',headers,payload:{projectId,clientRequestId:'chinese-request-1',prompt:chinesePrompt}});
     assert.equal(chinese.statusCode,200,chinese.body);

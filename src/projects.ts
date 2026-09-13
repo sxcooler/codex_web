@@ -13,6 +13,7 @@ const sensitivePath = (path: string) => /(?:^|\/)\.git(?:\/|$)/i.test(path) || /
 const MAX_VIEW_BYTES = 1024 * 1024;
 const MAX_VIEW_LINES = 20_000;
 const MAX_PATCH_BYTES = 5 * 1024 * 1024;
+const imagePath = (path: string) => /\.(png|jpe?g|webp|gif|avif|svg)$/i.test(path);
 const HISTORY_PAGE_SIZE = 100;
 export type Project = { id: string; name: string; path: string };
 function parsePatch(path: string, patch: string, extra: Record<string, unknown> = {}) {
@@ -52,12 +53,12 @@ export function validateRepoUrl(value: string): string {
   } catch { throw problem('Use an HTTPS or SSH repository URL without embedded credentials'); }
 }
 
-async function git(cwd: string, args: string[], timeout = 30_000, maxBuffer = 2 * 1024 * 1024): Promise<string> {
+async function gitBytes(cwd: string, args: string[], timeout = 30_000, maxBuffer = 2 * 1024 * 1024): Promise<Buffer> {
   try {
     const env = { ...process.env };
     for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[key];
     const result = await run('git', ['-c', 'core.fsmonitor=false', ...args], {
-      cwd, windowsHide: true, timeout, maxBuffer, encoding: 'utf8',
+      cwd, windowsHide: true, timeout, maxBuffer, encoding: 'buffer',
       env: { ...env, GIT_CEILING_DIRECTORIES: dirname(cwd), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_OPTIONAL_LOCKS: '0',
         GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=yes' },
     });
@@ -66,6 +67,10 @@ async function git(cwd: string, args: string[], timeout = 30_000, maxBuffer = 2 
     if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw problem('Git output exceeds the response limit; narrow changes locally', 413);
     throw problem(error.killed ? 'Git timed out; inspect the project before retrying' : 'Git failed; check the repository and local Git credentials', 409);
   }
+}
+
+async function git(cwd: string, args: string[], timeout = 30_000, maxBuffer = 2 * 1024 * 1024) {
+  return (await gitBytes(cwd, args, timeout, maxBuffer)).toString('utf8');
 }
 
 export class Projects {
@@ -174,6 +179,7 @@ export class Projects {
 
   async listFiles(id: string, directory = '') {
     const { project, target, rel } = await this.#safePath(id, directory, false);
+    this.#checkVisible(rel);
     const files: { path: string; type: 'file'|'directory'; size: number }[] = [];
     for (const entry of await readdir(target, { withFileTypes: true })) {
       if (entry.isSymbolicLink() || entry.name === '.git' || /^\.env(?:\.|$)/i.test(entry.name)
@@ -182,19 +188,39 @@ export class Projects {
       const full = join(target, entry.name);
       const resolved = await realpath(full).catch(() => null); if (!resolved) continue;
       const inside = relative(await realpath(project.path), resolved); if (inside.startsWith(`..${sep}`) || isAbsolute(inside)) continue;
-      try { await run('git',['check-ignore','-q','--',path],{cwd:project.path,windowsHide:true,env:{...process.env,GIT_CEILING_DIRECTORIES:dirname(project.path)}}); continue; } catch (error:any) { if (error.code !== 1 && error.code !== 128) continue; }
       const info = await lstat(resolved); if (!info.isFile() && !info.isDirectory()) continue;
       files.push({ path, type: info.isDirectory() ? 'directory' : 'file', size: info.isFile() ? info.size : 0 });
     }
     return { files: files.sort((a,b) => a.path.localeCompare(b.path)) };
   }
 
-  async readImage(id: string, path: string) {
-    const { project, target, rel } = await this.#safePath(id, path, true);
-    await this.#checkVisible(project.path, rel);
+  async readImage(id: string, path: string, revision?: string) {
     const limit = 10 * 1024 * 1024;
-    if ((await lstat(target)).size > limit) throw problem('Image exceeds 10 MiB', 413);
-    const bytes = await this.#readBounded(target, limit);
+    let bytes: Buffer;
+    if (revision !== undefined) {
+      const project = await this.resolve(id), rel = this.#historyPath(path);
+      if (revision !== 'index') {
+        this.#historyCommit(revision);
+        const commit = (await git(project.path, ['rev-parse','--verify',revision+'^{commit}']).catch(()=>'')).trim();
+        if (commit !== revision.toLowerCase()) throw problem('Commit not found',404);
+      }
+      const listing = await git(project.path, revision === 'index'
+        ? ['ls-files','--stage','-z','--',':(literal)'+rel]
+        : ['--literal-pathspecs','ls-tree','-z',revision,'--',rel]);
+      const entry = listing.split('\0').find(line => line.slice(line.indexOf('\t')+1) === rel);
+      if (!entry) throw problem('Image version not found',404);
+      const [mode, second, third] = entry.slice(0,entry.indexOf('\t')).split(' ');
+      if (!['100644','100755'].includes(mode) || (revision === 'index' ? third !== '0' : second !== 'blob')) throw problem('Not a regular file version',400);
+      const object = revision === 'index' ? second : third;
+      if (!/^[0-9a-f]{40,64}$/.test(object)) throw problem('Invalid Git object',400);
+      if (Number((await git(project.path,['cat-file','-s',object])).trim()) > limit) throw problem('Image exceeds 10 MiB',413);
+      bytes = await gitBytes(project.path,['cat-file','blob',object],30_000,limit+1);
+    } else {
+      const { target, rel } = await this.#safePath(id, path, true);
+      this.#checkVisible(rel);
+      if ((await lstat(target)).size > limit) throw problem('Image exceeds 10 MiB',413);
+      bytes = await this.#readBounded(target, limit);
+    }
     if (bytes.length > limit) throw problem('Image exceeds 10 MiB', 413);
     try {
       const image = sharp(bytes, { limitInputPixels:40_000_000, failOn:'error' });
@@ -207,7 +233,7 @@ export class Projects {
 
   async readFile(id: string, path: string) {
     const { project, target, rel } = await this.#safePath(id, path, true);
-    await this.#checkVisible(project.path,rel);
+    this.#checkVisible(rel);
     const info = await lstat(target); const bytes = await this.#readBounded(target,MAX_VIEW_BYTES);
     const binary = bytes.subarray(0, 8192).includes(0);
     if (binary) return { path: rel, text: '', size: info.size, truncated: false, binary: true };
@@ -217,9 +243,9 @@ export class Projects {
     return { path: rel, text, size: info.size, truncated, binary: false };
   }
 
-  async #checkVisible(projectPath:string,rel:string){if(sensitivePath(rel))throw problem('Sensitive file is not readable',403);try{await run('git',['check-ignore','-q','--',rel],{cwd:projectPath,windowsHide:true,env:{...process.env,GIT_CEILING_DIRECTORIES:dirname(projectPath)}});throw problem('Ignored file is not readable',403);}catch(error:any){if(error?.code!=='PROJECT_ERROR'&&error?.code!==1&&error?.code!==128)throw problem('Cannot validate file visibility',409);if(error?.code==='PROJECT_ERROR')throw error;}}
+  #checkVisible(rel:string){if(sensitivePath(rel))throw problem('Sensitive file is not readable',403);}
   async #readBounded(path:string,maxBytes:number){const handle=await open(path,'r');try{const bytes=Buffer.allocUnsafe(maxBytes+1);const {bytesRead}=await handle.read(bytes,0,bytes.length,0);return bytes.subarray(0,bytesRead);}finally{await handle.close();}}
-  async readReportFile(id:string,path:string,maxBytes:number){const {project,target,rel}=await this.#safePath(id,path,true);await this.#checkVisible(project.path,rel);const info=await lstat(target);if(info.size>maxBytes)throw problem('Report exceeds size limit',413);return {path:rel,bytes:await this.#readBounded(target,maxBytes),mtimeMs:info.mtimeMs};}
+  async readReportFile(id:string,path:string,maxBytes:number){const {project,target,rel}=await this.#safePath(id,path,true);this.#checkVisible(rel);const info=await lstat(target);if(info.size>maxBytes)throw problem('Report exceeds size limit',413);return {path:rel,bytes:await this.#readBounded(target,maxBytes),mtimeMs:info.mtimeMs};}
 
   async #revision(projectPath: string) { try { return (await git(projectPath,['rev-parse','HEAD'])).trim(); } catch { return null; } }
 
@@ -244,13 +270,25 @@ export class Projects {
     const { project, rel } = await this.#safeGitPath(id,path);
     const status=await this.gitStatus(id); const untracked=!staged&&status.entries.some(e=>e.path===rel&&e.index==='?');
     if (untracked) {
-      const {target}=await this.#safePath(id,rel,true);await this.#checkVisible(project.path,rel);const info=await lstat(target);if(info.size>MAX_PATCH_BYTES)throw problem('Patch exceeds 5 MiB',413);const bytes=await this.#readBounded(target,MAX_PATCH_BYTES);if(bytes.subarray(0,8192).includes(0))return '';let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{return '';}const finalNewline=text.endsWith('\n');const lines=text.split('\n');if(finalNewline)lines.pop();const body=lines.map(line=>`+${line}`).join('\n');return `diff --git a/${rel} b/${rel}\nnew file mode 100644\n--- /dev/null\n+++ b/${rel}\n@@ -0,0 +1,${lines.length} @@\n${body}${finalNewline?'\n':'\n\\ No newline at end of file\n'}`;
+      const {target}=await this.#safePath(id,rel,true);this.#checkVisible(rel);const info=await lstat(target);if(info.size>MAX_PATCH_BYTES)throw problem('Patch exceeds 5 MiB',413);const bytes=await this.#readBounded(target,MAX_PATCH_BYTES);if(bytes.subarray(0,8192).includes(0))return '';let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{return '';}const finalNewline=text.endsWith('\n');const lines=text.split('\n');if(finalNewline)lines.pop();const body=lines.map(line=>`+${line}`).join('\n');return `diff --git a/${rel} b/${rel}\nnew file mode 100644\n--- /dev/null\n+++ b/${rel}\n@@ -0,0 +1,${lines.length} @@\n${body}${finalNewline?'\n':'\n\\ No newline at end of file\n'}`;
     }
     const patch=await git(project.path,['diff','--no-ext-diff','--no-textconv','--no-color',...(staged?['--cached']:[]),'--',':(literal)'+rel],30_000,MAX_PATCH_BYTES+1);if(Buffer.byteLength(patch)>MAX_PATCH_BYTES)throw problem('Patch exceeds 5 MiB',413);return patch;
   }
 
   async gitFileDiff(id: string, path: string, staged = false) {
-    const { project, rel } = await this.#safeGitPath(id,path); const patch=await this.gitPatch(id,rel,staged);
+    const rel = this.#historyPath(path);
+    if (imagePath(rel)) {
+      const {project,entries} = await this.gitStatus(id);
+      const entry = entries.find(item => item.path === rel), code = entry && (staged ? entry.index : entry.worktree);
+      if (!entry || !code?.trim() || (staged && code === '?')) throw problem('Path is not a changed file');
+      const head = await this.#revision(project.path);
+      const oldPath = /[RC]/.test(code) && entry.originalPath ? this.#historyPath(entry.originalPath) : rel;
+      return {path:rel,staged,revision:head,images:{
+        before: code === 'A' || code === '?' || (staged && !head) ? null : {path:oldPath,revision:staged ? head : 'index'},
+        after: code === 'D' ? null : {path:rel,...(staged ? {revision:'index'} : {})},
+      }};
+    }
+    const { project } = await this.#safeGitPath(id,rel); const patch=await this.gitPatch(id,rel,staged);
     return parsePatch(rel,patch,{staged,revision:await this.#revision(project.path)});
   }
 
@@ -304,5 +342,5 @@ export class Projects {
     return {commit:info,parent:selected,files};
   }
 
-  async gitCommitDiff(id:string,commit:string,parent:string|undefined,pathValue:string){const project=await this.resolve(id);const path=this.#historyPath(pathValue);const info=await this.#commitInfo(project.path,commit);const parentId=parent===undefined?info.parents[0]??null:this.#historyCommit(parent);if(parentId&&!info.parents.includes(parentId))throw problem('Parent is not a parent of commit');const changed=await this.gitCommit(id,info.id,parentId??undefined);const file=changed.files.find((item:any)=>item.path===path);if(!file)throw problem('Path is not a changed file');const patch=await this.#historyPatch(project.path,info.id,parentId,[...(file?.oldPath?[file.oldPath]:[]),path]);return parsePatch(path,patch,{commit:info.id,parent:parentId});}
+  async gitCommitDiff(id:string,commit:string,parent:string|undefined,pathValue:string){const project=await this.resolve(id);const path=this.#historyPath(pathValue);const info=await this.#commitInfo(project.path,commit);const parentId=parent===undefined?info.parents[0]??null:this.#historyCommit(parent);if(parentId&&!info.parents.includes(parentId))throw problem('Parent is not a parent of commit');const changed=await this.gitCommit(id,info.id,parentId??undefined);const file=changed.files.find((item:any)=>item.path===path);if(!file)throw problem('Path is not a changed file');if(imagePath(path))return {path,commit:info.id,parent:parentId,images:{before:!parentId||file.status==='added'?null:{path:file.oldPath??path,revision:parentId},after:file.status==='deleted'?null:{path,revision:info.id}}};const patch=await this.#historyPatch(project.path,info.id,parentId,[...(file?.oldPath?[file.oldPath]:[]),path]);return parsePatch(path,patch,{commit:info.id,parent:parentId});}
 }

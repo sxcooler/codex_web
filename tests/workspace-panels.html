@@ -6,12 +6,33 @@ import React from 'react';import{createRoot}from'react-dom/client';import{GitPan
 const h=React.createElement,root=createRoot(document.querySelector('#root')),check=(v,m)=>{if(!v)throw Error(m)},tick=(ms=80)=>new Promise(r=>setTimeout(r,ms));
 let failed=new Set(),requests=[],holdList=false,releaseList;const markdown='[child](child.txt)\n\n[space](guide%20one.md)\n\n[percent](guide%2520one.md)\n\n[hash](guide%23one.md)\n\n[reference][ref]\n\n[ref]: child.txt';
 globalThis.fetch=async input=>{const url=String(input);requests.push(url);if(url.includes('/git/log'))return Response.json({repository:true,commits:Array.from({length:30},(_,i)=>({id:String(i).padStart(40,'0'),parents:i===29?[]:[String(i+1).padStart(40,'0')],subject:'Commit '+i,author:'QA',date:'2026-09-11T00:00:00Z',refs:[]})),branches:[],nextCursor:null});if(url.includes('/files?directory=')&&holdList)await new Promise(resolve=>{releaseList=resolve;});if(url.includes('/files?directory='))return Response.json({files:[{path:'photo.png',type:'file'},{path:'broken.png',type:'file'},{path:'note.txt',type:'file'},{path:'README.md',type:'file'},{path:'child.txt',type:'file'},{path:'missing.txt',type:'file'},...Array.from({length:20},(_,index)=>({path:'filler-'+index+'.txt',type:'file'}))]});if(url.includes('/files/content?path=')){const path=decodeURIComponent(url.split('path=')[1]);if(failed.has(path))return Response.json({error:'gone'},{status:404});return Response.json({text:path==='README.md'?markdown:path==='note.txt'?'old content':'child content'});}return Response.json({files:[]});};
+let changes=[{path:'photo.png',status:'M',binary:true}],changesFail=false;
+const baseFetch=globalThis.fetch,parent='1'.repeat(40),commit='2'.repeat(40);
+globalThis.fetch=async input=>{
+ const url=new URL(String(input),location.origin),query=url.searchParams;
+ if(url.pathname.endsWith('/git/files'))return changesFail?Response.json({error:'offline'},{status:503}):Response.json({files:changes});
+ if(url.pathname.endsWith('/git/diff'))return Response.json({images:{before:{path:'photo.png',revision:query.get('staged')==='true'?parent:'index'},after:{path:'photo.png',...(query.get('staged')==='true'?{revision:'index'}:{})}}});
+ if(url.pathname.endsWith('/git/commit'))return Response.json({commit:{id:commit,parents:[parent],subject:'Image commit',author:'QA',date:'2026-09-11T00:00:00Z'},parent,files:[{path:'photo.png',status:'modified',binary:true},{path:'deleted.png',status:'deleted',binary:true}]});
+ if(url.pathname.endsWith('/git/commit/diff'))return Response.json({images:{before:{path:query.get('path'),revision:parent},after:query.get('path')==='deleted.png'?null:{path:'photo.png',revision:commit}}});
+ return baseFetch(input);
+};
 const render=(project='one',session='session')=>root.render(h(React.Fragment,null,h(MarkdownView,{text:'[Chat link](https://example.com)'}),h(GitPanel,{key:project,id:session,projectId:project,tick:0,visible:true})));
 const button=text=>[...document.querySelectorAll('button')].find(node=>node.textContent===text);
 try{
  localStorage.clear();root.render(h(MarkdownView,{text:'[Chat link](https://example.com)'}));await tick(1200);render();await tick();button('文件').click();await tick();button('文件').click();await tick();check(button('文件').getAttribute('aria-pressed')==='true','重复点击重置标签');
  if(new URLSearchParams(location.search).has('images')){
  button('photo.png').click();await tick(400);let picture=document.querySelector('.image-preview img');check(picture?.naturalWidth>0,'图片未加载');check(!requests.some(url=>url.includes('/files/content?path=photo.png')),'图片仍请求全文 JSON');const previous=picture.src;button('↻ 刷新').click();await tick(400);check(document.querySelector('.image-preview img')?.src!==previous,'刷新未更新图片请求');button('broken.png').click();await tick(400);check(document.querySelector('.image-preview [role=alert]'),'图片失败无提示');button('photo.png').click();await tick(400);check(document.querySelector('.image-preview img')?.naturalWidth>0&&!document.querySelector('.image-preview [role=alert]'),'换图后仍保留旧错误');
+ button('变更').click();await tick();document.querySelector('.file-list button').click();await tick(400);
+ const sources=()=>[...document.querySelectorAll('.image-diff img')].filter(img=>!img.closest('[hidden]')).map(img=>{check(img.naturalWidth>0,'版本图片未加载');return new URL(img.src).searchParams.get('revision');});
+ check(JSON.stringify(sources())===JSON.stringify(['index',null]),'工作区图片版本错误');
+ button('暂存区').click();await tick(400);check(JSON.stringify(sources())===JSON.stringify([parent,'index']),'暂存区图片版本错误');
+ changesFail=true;button('↻ 刷新').click();await tick();check(document.querySelector('.file-preview h3')?.textContent==='photo.png','请求失败误清选中项');
+ changesFail=false;changes=[];button('↻ 刷新').click();await tick();check(!document.querySelector('.file-preview h3'),'空变更列表仍残留文件预览');
+ changes=[{path:'photo.png',status:'M',binary:true}];button('工作区').click();await tick();document.querySelector('.file-list button').click();await tick(400);
+ button('Git 日志').click();await tick();document.querySelector('.git-commit').click();await tick();document.querySelector('.commit-details .file-list button').click();await tick(400);
+ check(JSON.stringify(sources())===JSON.stringify([parent,commit]),'Git 历史未使用提交版本');
+ document.querySelectorAll('.commit-details .file-list button')[1].click();await tick(400);check(JSON.stringify(sources())===JSON.stringify([parent]),'历史删除图片版本错误');check(document.querySelector('.commit-details .image-diff')?.textContent.includes('已删除'),'删除版本无说明');
+ const branch=document.querySelector('[aria-label="Git 分支"]');branch.value='all';branch.dispatchEvent(new Event('change',{bubbles:true}));await tick();button('文件').click();await tick();
  }
  button('note.txt').click();await tick();check(document.querySelector('.file-preview')?.textContent.includes('old content'),'初次正文缺失');
  failed.add('note.txt');button('↻ 刷新').click();await tick();check(document.querySelector('.file-preview')?.textContent.includes('old content')&&document.querySelector('.file-preview [role=alert]'),'同资源失败未保留旧正文');

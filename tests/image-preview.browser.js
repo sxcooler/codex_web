@@ -22,4 +22,8 @@ async (page) => {
   if(bounds.width>390)throw Error('Image exceeds mobile viewport');
   await page.locator('#right-sidebar').screenshot({path:'output/playwright/image-preview-mobile.png'});
   console.log('MOBILE_IMAGE_WIDTH='+bounds.width);
+  await page.getByRole('button',{name:'变更',exact:true}).click();
+  await page.getByRole('button',{name:/photo.png/}).click();
+  await page.waitForFunction(()=>[...document.querySelectorAll('.image-diff img')].filter(img=>!img.closest('[hidden]')).every(img=>img.naturalWidth>0));
+  await page.locator('.image-diff:visible').screenshot({path:'output/playwright/image-diff-mobile.png'});
 }
