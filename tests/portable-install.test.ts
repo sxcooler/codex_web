@@ -7,16 +7,19 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import * as portable from '../scripts/portable.ts';
+const windows = process.platform === 'win32';
+const executableName = windows ? 'codex.exe' : 'codex';
 
 async function fixture(t: any) {
   const dir = await mkdtemp(join(tmpdir(), 'portable-install-'));
   const saved = { ...process.env };
   process.env.LOCALAPPDATA = dir;
+  if (!windows) process.env.HOME = dir;
   process.env.PATH = '';
   process.env.CODEX_BIN = join(dir, 'ignored-developer.exe');
   delete process.env.CODEX_INSTALL_DIR;
-  t.after(async () => { process.env = saved; await rm(dir, { recursive: true, force: true }); });
-  const bin = join(dir, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe');
+  t.after(async () => { for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key]; Object.assign(process.env, saved); await rm(dir, { recursive: true, force: true }); });
+  const bin = windows ? join(dir, 'Programs', 'OpenAI', 'Codex', 'bin', executableName) : join(dir, '.local', 'bin', executableName);
   await mkdir(join(bin, '..'), { recursive: true });
   const installed = new Set<string>();
   const installCalls: any[] = [];
@@ -40,7 +43,7 @@ async function fixture(t: any) {
 test('portable discovers verified configured, official and PATH executables without developer override', async t => {
   const f = await fixture(t);
   assert.equal(typeof portable.discoverPortableCodex, 'function');
-  const configured = join(f.dir, 'configured.exe'), pathBin = join(f.dir, 'codex.exe');
+  const configured = join(f.dir, windows ? 'configured.exe' : 'configured'), pathBin = join(f.dir, executableName);
   for (const file of [configured, f.bin, pathBin, process.env.CODEX_BIN!]) { await writeFile(file, 'fake'); f.installed.add(file); }
   process.env.PATH = f.dir;
   assert.equal(await portable.discoverPortableCodex(configured), configured);
@@ -73,10 +76,16 @@ test('portable retries consented installer failures and saves verified CLI witho
   assert.equal(f.prompts.filter(prompt => prompt.startsWith('工作目录')).length, 1);
   assert.equal(f.installCalls.length, 2);
   for (const call of f.installCalls) {
-    assert.ok(call.file.endsWith('powershell.exe'));
-    assert.ok(call.args.includes('-NoProfile'));
-    assert.ok(!call.args.includes('-NonInteractive'));
-    assert.match(call.args.at(-1), /https:\/\/chatgpt\.com\/codex\/install\.ps1/);
+    if (windows) {
+      assert.ok(call.file.endsWith('powershell.exe'));
+      assert.ok(call.args.includes('-NoProfile'));
+      assert.ok(!call.args.includes('-NonInteractive'));
+      assert.match(call.args.at(-1), /https:\/\/chatgpt\.com\/codex\/install\.ps1/);
+    } else {
+      assert.equal(call.file, 'bash');
+      assert.match(call.args.at(-1), /https:\/\/chatgpt\.com\/codex\/install\.sh/);
+      assert.match(call.args.at(-1), /pipefail/);
+    }
     assert.equal(call.options.env.CODEX_NON_INTERACTIVE, undefined);
     assert.equal(call.options.stdio, 'inherit');
     assert.equal(call.options.shell, false);
@@ -87,7 +96,7 @@ test('portable retries consented installer failures and saves verified CLI witho
 test('portable repairs invalid saved CLI with quoted path and preserves other configuration', async t => {
   const f = await fixture(t);
   assert.equal(typeof portable.loadPortableConfig, 'function');
-  const selected = join(f.dir, 'custom path', 'codex.exe');
+  const selected = join(f.dir, 'custom path', executableName);
   await mkdir(join(selected, '..')); await writeFile(selected, 'fake'); f.installed.add(selected);
   const original = { port: 3200, origin: 'https://example.test', workRoot: f.dir, codexBin: 'missing.exe', custom: 'preserved' };
   await writeFile(join(f.dir, 'config.json'), JSON.stringify(original));
@@ -116,7 +125,7 @@ test('portable missing CLI cannot install noninteractively or overwrite cancelle
   const original = { port: 3200, origin: 'http://localhost:3200', workRoot: f.dir, codexBin: 'missing.exe' };
   await writeFile(join(f.dir, 'config.json'), JSON.stringify(original));
   assert.equal(Boolean(process.stdin.isTTY), false, 'Run this test with noninteractive stdin');
-  await assert.rejects(portable.loadPortableConfig(f.dir), /Start\.cmd/);
+  await assert.rejects(portable.loadPortableConfig(f.dir), windows ? /Start\.cmd/ : /Start\.sh/);
   await assert.rejects(portable.loadPortableConfig(f.dir, f.terminal(['0'])), /退出|取消/);
   assert.deepEqual(JSON.parse(await readFile(join(f.dir, 'config.json'), 'utf8')), original);
   assert.equal(f.installCalls.length, 0);

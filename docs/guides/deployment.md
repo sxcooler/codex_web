@@ -15,7 +15,7 @@ npm start
 
 ## Windows 便携包
 
-Windows x64 可使用自带 Node 的便携包；首次配置、CLI 手动/辅助安装和构建检查集中见 [便携包指南](windows-portable.md)。Linux 本轮仅提供源码运行，不提供便携包。
+Windows x64 和 Linux x64 glibc 可使用各自自带 Node 的便携包；首次配置、CLI 手动/辅助安装和构建检查集中见 [便携包指南](portable.md)。包内生产依赖按平台安装，不能互换。
 
 ## 配置与数据
 

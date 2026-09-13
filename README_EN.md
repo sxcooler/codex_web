@@ -27,7 +27,7 @@ A lightweight web client for Codex running on your development machine, accessib
 | Host platform | Scope |
 | --- | --- |
 | Windows | Existing verification covers source execution, the Windows x64 portable package, and scheduled-task deployment; see the latest record for this round's regression status |
-| Linux | Source execution, live tasks, and sandbox boundaries have been verified as a non-root user on WSL2 Ubuntu 22.04; no claim covers all distributions |
+| Linux | An x64 glibc portable package is available; source execution, live tasks, and sandbox boundaries have been verified as a non-root user on WSL2 Ubuntu 22.04; no claim covers all distributions |
 | macOS | Not adapted or verified in this round |
 
 Running from source requires Node **>=24.20.0**, npm, the official standalone Codex CLI, and Git for project/Git features. `.node-version` declares the baseline; it does not switch Node automatically. Install and sign in using the [official Codex instructions](https://learn.chatgpt.com/docs/codex/cli). Linux/WSL must use the Linux CLI and its own environment's login. Do not rely on binaries inside the VS Code extension's private directory.
@@ -55,9 +55,19 @@ Local use does not require a virtual network. For cross-device access, connect t
 
 The service listens only on loopback, so cross-device access also requires a restricted proxy or tunnel. Options include a LAN HTTPS proxy, Tailscale, ZeroTier, NetBird, WireGuard, or SSH forwarding. See the [deployment guide](docs/guides/deployment.md#网络访问方式) for comparisons, official documentation, and a Tailscale HTTPS example.
 
-## Windows portable package
+## Portable packages
 
-Extract into a writable directory and double-click `Start.cmd`; Node and runtime dependencies are included. First-run setup asks for the work root, CLI, port, and password. If Codex is missing, open the official page to install manually, explicitly consent to running the official installer, or specify an existing CLI. Setup detects the installed CLI again and continues; account sign-in remains a separate step. Keep the startup window open and press Ctrl+C to stop. The package is for Windows x64 only; see the [portable package guide](docs/guides/windows-portable.md).
+Download the appropriate package from [GitHub Releases](https://github.com/sxcooler/codex_web/releases) and fully extract it into a writable directory:
+
+| Package | Start |
+| --- | --- |
+| `codex-web-VERSION-win-x64.zip` | Double-click `Start.cmd` |
+| `codex-web-VERSION-linux-x64.tar.gz` | Run `tar -xzf PACKAGE.tar.gz`, enter the extracted directory, then run `bash Start.sh` |
+| `codex-web-VERSION-source.zip` | Platform-independent clean source; follow the source setup above |
+
+Portable packages include Node and platform-specific production dependencies; Node/npm installation is unnecessary. Git and Codex CLI are separate prerequisites. First-run setup asks for the work root, CLI, port, and password. If Codex is missing, install manually using the official page or explicitly consent to running the official installer for your platform. Account sign-in remains separate. Keep the terminal open and press Ctrl+C to stop; use `--no-browser` on headless Linux hosts.
+
+The Linux package targets x64 glibc systems, with WSL2 Ubuntu 22.04 as the verification environment. ARM64, Alpine/musl, and macOS packages are not provided. Do not copy `node_modules` between platforms. Build natively with `npm ci` followed by `npm run package:portable`; artifacts are written to `releases/`. See the [portable package guide](docs/guides/portable.md) for configuration, upgrades, build prerequisites, and verification.
 
 ## Usage and boundaries
 
@@ -84,4 +94,4 @@ After upgrading the CLI, regenerate the protocol, review differences, and verify
 
 ## Public releases
 
-Public examples use generalized usernames, paths, and conversation IDs. The original Git history still contains personal environment records. For publication, **create a new repository from a clean source archive without `.git`**. Do not upload `.local/`, native Codex data, credentials, attachments, databases, logs, unredacted screenshots, or test artifacts. Reviewed, redacted showcase images in `docs/assets/screenshots/` may be published with the documentation. See the [publishing guide](docs/guides/publishing.md) for the reviewed scope and its limits.
+Public examples use generalized usernames, paths, and conversation IDs. Source archives **exclude `.git` and local runtime data**. Before pushing a repository, also review the Git history being published; deleting a current file does not remove its history. Do not upload `.local/`, native Codex data, credentials, attachments, databases, logs, unredacted screenshots, or test artifacts. Reviewed, redacted showcase images in `docs/assets/screenshots/` may be published with the documentation. See the [publishing guide](docs/guides/publishing.md) for the reviewed scope and its limits.

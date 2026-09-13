@@ -7,7 +7,7 @@
 ## 使用指南
 
 - [源码运行与私网部署](guides/deployment.md)：配置、Windows/Linux 差异、HTTPS、备份和故障处理。
-- [Windows x64 便携包](guides/windows-portable.md)：安装选择、启动、打包与独立产物验证。
+- [Windows / Linux x64 便携包](guides/portable.md)：安装选择、启动、打包与独立产物验证；[双平台验收](verification/2026-09-13-portable.md)。
 - [会话操作](guides/sessions.md)：打开、继续、中止、释放与失败恢复。
 - [公开发布](guides/publishing.md)：干净源码、新仓库与隐私审查范围。
 
@@ -35,7 +35,7 @@
 | 原文件 | 新位置与章节 |
 | --- | --- |
 | `docs/deployment.md` | [guides/deployment.md](guides/deployment.md)：正文与历史实施/验收附录 |
-| `docs/portable.md` | [guides/windows-portable.md](guides/windows-portable.md)：正文与历史实施/验收附录 |
+| `docs/portable.md` | [guides/portable.md](guides/portable.md)：正文与历史实施/验收附录 |
 | `docs/session-lifecycle.md` | [guides/sessions.md](guides/sessions.md)：正文与历史实施/验收附录 |
 | `docs/privacy-review.md` | [guides/publishing.md](guides/publishing.md)：正文与历史实施/验收附录 |
 | `docs/superpowers/specs/2026-09-11-execution-process-design.md` | [design/execution-process.md](design/execution-process.md)：正文与历史实施/验收附录 |

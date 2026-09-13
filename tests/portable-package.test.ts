@@ -10,6 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 // Run against a fresh extracted release, never a user's configured installation.
 const root = process.env.PORTABLE_TEST_DIR;
+const windows = process.platform === 'win32';
 test('extracted release runs with bundled Node and isolated data', { skip: !root, timeout: 30_000 }, async () => {
   const directory = root!;
   assert.equal(await access(join(directory, '.local')).then(() => true, () => false), false, 'Use a fresh extracted package');
@@ -20,13 +21,15 @@ test('extracted release runs with bundled Node and isolated data', { skip: !root
     assert.equal(bytes.length, entry.size);
     assert.equal(createHash('sha256').update(bytes).digest('hex'), entry.sha256);
   }
-  const executable = join(directory, 'runtime', 'node.exe');
+  const executable = join(directory, 'runtime', windows ? 'node.exe' : 'node');
   const codexBin = process.env.PORTABLE_TEST_CODEX;
-  assert.ok(codexBin, 'Set PORTABLE_TEST_CODEX to an installed Codex .exe; startup only checks --version');
-  const env = { ...process.env, PATH: join(process.env.SystemRoot!, 'System32'), WEB_DATA_DIR: 'invalid-inherited-data', WEB_ORIGIN: 'invalid-inherited-origin', PORT: 'invalid', WORK_ROOT: 'invalid', CODEX_BIN: 'invalid' };
-  const first = spawnSync(executable, ['scripts/portable.ts', '--no-browser'], { cwd: directory, env, encoding: 'utf8', windowsHide: true });
+  assert.ok(codexBin, 'Set PORTABLE_TEST_CODEX to an installed Codex executable; startup only checks --version');
+  const env = { ...process.env, PATH: windows ? join(process.env.SystemRoot!, 'System32') : '/usr/bin:/bin', WEB_DATA_DIR: 'invalid-inherited-data', WEB_ORIGIN: 'invalid-inherited-origin', PORT: 'invalid', WORK_ROOT: 'invalid', CODEX_BIN: 'invalid' };
+  const start = windows ? executable : 'bash';
+  const args = [windows ? 'scripts/portable.ts' : 'Start.sh', '--no-browser'];
+  const first = spawnSync(start, args, { cwd: directory, env, encoding: 'utf8', windowsHide: true });
   assert.equal(first.status, 1);
-  assert.match(first.stderr, /Start\.cmd/);
+  assert.match(first.stderr, windows ? /Start\.cmd/ : /Start\.sh/);
   const listener = createServer();
   await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
   const address = listener.address(); assert.ok(address && typeof address !== 'string');
@@ -37,13 +40,13 @@ test('extracted release runs with bundled Node and isolated data', { skip: !root
   // Startup verifies --version; the app-server remains lazy and makes no model request.
   await writeFile(join(data, 'config.json'), JSON.stringify({ port, origin, workRoot, codexBin }));
   try {
-    const busy = spawnSync(executable, ['scripts/portable.ts', '--no-browser'], { cwd: directory, env, encoding: 'utf8', windowsHide: true });
+    const busy = spawnSync(start, args, { cwd: directory, env, encoding: 'utf8', windowsHide: true });
     assert.equal(busy.status, 1); assert.match(busy.stderr, new RegExp(String(port))); assert.equal(listener.listening, true);
   } finally { await new Promise<void>(resolve => listener.close(() => resolve())); }
   const password = 'Portable-fixture-only-2468';
   const auth = spawnSync(executable, ['scripts/setup-auth.ts'], { cwd: directory, env, input: password + '\n', encoding: 'utf8', windowsHide: true });
   assert.equal(auth.status, 0, auth.stderr);
-  const child = spawn(executable, ['scripts/portable.ts', '--no-browser'], { cwd: directory, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const child = spawn(start, args, { cwd: directory, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   let output = ''; child.stdout.on('data', bytes => output += bytes); child.stderr.on('data', bytes => output += bytes);
   const closed = once(child, 'close');
   const url = origin;

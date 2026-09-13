@@ -2,6 +2,8 @@
 
 [English](README_EN.md)
 
+由于众所周知的原因，在某些国家和地区使用官方版的ChatGPT APP远程控制会有些不便，故产生了本项目。
+
 运行在自己开发机上的轻量 Codex 网页客户端，支持本地和远程访问。通过桌面或手机浏览器管理项目、继续原生 Codex Thread、查看实时执行和 Git 变更，并处理审批。Agent 执行和聊天历史由官方独立 Codex CLI 管理，Web 使用当前宿主用户的 Codex 登录。
 
 ## 主要功能
@@ -27,7 +29,7 @@
 | 宿主平台 | 范围 |
 | --- | --- |
 | Windows | 已有源码运行、Windows x64 便携包和计划任务部署记录；本轮回归状态见最新验证记录 |
-| Linux | 已在 WSL2 Ubuntu 22.04 普通用户下验证源码运行、真实任务和沙箱边界；不声明全部发行版已验证 |
+| Linux | 提供 x64 glibc 便携包；源码运行、真实任务和沙箱边界已在 WSL2 Ubuntu 22.04 普通用户下验证；不声明全部发行版已验证 |
 | macOS | 本轮未适配、未验证 |
 
 源码运行需要 Node **>=24.20.0**、npm、官方独立 Codex CLI，以及用于项目 /Git 功能的 Git。`.node-version` 声明版本基线，不会自动切换 Node。按 [Codex 官方说明](https://learn.chatgpt.com/docs/codex/cli) 安装并登录；Linux/WSL 应使用 Linux CLI 和该环境自己的登录。不要依赖 VS Code 扩展私有目录内的二进制。
@@ -51,13 +53,23 @@ npm start
 
 ## 本地与跨设备访问
 
-本机使用不需要虚拟网络。跨设备访问须保证设备与开发机连接到同一局域网或获准互通的虚拟网络，且开发机和服务在线。**不建议直接将服务暴露到公网；建议使用带身份认证、加密和访问控制的虚拟网络，以 Tailscale 为例。**
+本机使用不需要虚拟网络。跨设备访问须保证设备与开发机连接到同一局域网或获准互通的虚拟网络，且开发机和服务在线。**不建议直接将服务暴露到公网；建议使用带身份认证、加密和访问控制的虚拟网络，例如 Tailscale 。**
 
 服务仅监听回环地址，跨设备还需配置受限的代理或隧道入口。可选局域网 HTTPS 代理、Tailscale、ZeroTier、NetBird、WireGuard 或 SSH 转发；方案比较、官方文档和 Tailscale HTTPS 示例见 [部署指南](docs/guides/deployment.md#网络访问方式)。
 
-## Windows 便携包
+## 便携包
 
-解压到可写目录后双击 `Start.cmd`；包内自带 Node 和运行依赖。首次交互配置工作目录、CLI、端口和密码。缺少 Codex 时，可打开官方页面手动安装，或明确选择同意后运行官方安装脚本；也可指定已有 CLI。安装完成后重新检测并继续配置，账户登录仍须自行完成。保持启动窗口打开，按 Ctrl+C 停止。此包仅适用于 Windows x64，详见 [便携包指南](docs/guides/windows-portable.md)。
+从 [GitHub Releases](https://github.com/sxcooler/codex_web/releases) 下载对应平台的包，完整解压到可写目录：
+
+| 包 | 启动方式 |
+| --- | --- |
+| `codex-web-版本-win-x64.zip` | 双击 `Start.cmd` |
+| `codex-web-版本-linux-x64.tar.gz` | `tar -xzf 包名.tar.gz`，进入解压目录运行 `bash Start.sh` |
+| `codex-web-版本-source.zip` | 通用干净源码，按上方源码启动步骤运行 |
+
+便携包自带 Node 和当前平台的生产依赖，无需安装 Node/npm；Git 与 Codex CLI 需单独准备。首次配置工作目录、CLI、端口和密码。缺少 Codex 时，可打开官方页面手动安装，或明确同意后运行对应平台的官方安装脚本。账户登录仍须自行完成。保持终端打开，按 Ctrl+C 停止；`--no-browser` 可用于无桌面的 Linux 环境。
+
+Linux 包面向 x64 glibc 环境，验证环境为 WSL2 Ubuntu 22.04；暂不提供 ARM64、Alpine/musl 或 macOS 包。不要跨平台复制 `node_modules`。构建时在对应平台运行 `npm ci` 和 `npm run package:portable`，产物位于 `releases/`。配置、升级、构建依赖与校验方法见 [便携包指南](docs/guides/portable.md)。
 
 ## 使用与边界
 
@@ -82,4 +94,4 @@ CLI 升级后重新生成协议、审阅差异并验证兼容性；生成内容�
 
 ## 公开发布
 
-公开示例中的用户名、路径和会话 ID 均已泛化。原 Git 历史仍有个人环境记录，公开发布应使用 **不含 `.git` 的干净源码包新建仓库**。禁止上传 `.local/`、Codex 原生数据、凭据、附件、数据库、日志、未脱敏截图和测试产物；`docs/assets/screenshots/` 中经脱敏检查的展示图可随文档发布。范围与限制见 [发布指南](docs/guides/publishing.md)。
+公开示例中的用户名、路径和会话 ID 均已泛化。源码包 **不含 `.git` 和本地运行数据**；推送仓库前还须核对准备公开的 Git 历史，删除当前文件不等于清除历史。禁止上传 `.local/`、Codex 原生数据、凭据、附件、数据库、日志、未脱敏截图和测试产物；`docs/assets/screenshots/` 中经脱敏检查的展示图可随文档发布。范围与限制见 [发布指南](docs/guides/publishing.md)。
