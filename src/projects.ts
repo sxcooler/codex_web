@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { lstat, mkdir, readdir, realpath, open } from 'node:fs/promises';
 import { basename, dirname, join, isAbsolute, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -53,29 +53,46 @@ export function validateRepoUrl(value: string): string {
   } catch { throw problem('Use an HTTPS or SSH repository URL without embedded credentials'); }
 }
 
-async function gitBytes(cwd: string, args: string[], timeout = 30_000, maxBuffer = 2 * 1024 * 1024): Promise<Buffer> {
+function fetchProcess(cwd:string,args:string[],env:NodeJS.ProcessEnv,timeout:number,maxBuffer:number):Promise<Buffer>{
+  return new Promise((resolve,reject)=>{
+    const child=spawn('git',args,{cwd,env,windowsHide:true,detached:process.platform!=='win32',stdio:['ignore','pipe','pipe']});
+    const chunks:Buffer[]=[];let size=0,failure:Error|undefined;
+    const stop=(error:Error)=>{
+      if(failure)return;failure=error;const pid=child.pid;if(!pid)return;
+      if(process.platform==='win32')void run('taskkill',['/PID',String(pid),'/T','/F'],{windowsHide:true,timeout:5000}).catch(()=>child.kill('SIGKILL'));
+      else {try{process.kill(-pid,'SIGKILL');}catch{child.kill('SIGKILL');}}
+    };
+    const timer=setTimeout(()=>stop(problem('Git fetch timed out',504)),timeout);
+    child.stdout.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>maxBuffer)stop(problem('Git output exceeds the response limit',413));else chunks.push(chunk);});
+    child.stderr.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>maxBuffer)stop(problem('Git output exceeds the response limit',413));});
+    child.on('error',error=>{clearTimeout(timer);reject(error);});
+    child.on('close',code=>{clearTimeout(timer);if(failure)reject(failure);else if(code!==0)reject(problem('Git fetch failed',409));else resolve(Buffer.concat(chunks));});
+  });
+}
+
+async function gitBytes(cwd: string, args: string[], timeout = 30_000, maxBuffer = 2 * 1024 * 1024, killTree = false): Promise<Buffer> {
   try {
-    const env = { ...process.env };
+    const env = { ...process.env, GIT_CEILING_DIRECTORIES: dirname(cwd), GIT_TERMINAL_PROMPT:'0', GCM_INTERACTIVE:'never', GIT_OPTIONAL_LOCKS:'0', GIT_SSH_COMMAND:'ssh -o BatchMode=yes -o StrictHostKeyChecking=yes' };
     for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[key];
-    const result = await run('git', ['-c', 'core.fsmonitor=false', ...args], {
-      cwd, windowsHide: true, timeout, maxBuffer, encoding: 'buffer',
-      env: { ...env, GIT_CEILING_DIRECTORIES: dirname(cwd), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_OPTIONAL_LOCKS: '0',
-        GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=yes' },
-    });
-    return result.stdout;
+    const command=['-c','core.fsmonitor=false',...args];
+    if(killTree)return await fetchProcess(cwd,command,{...env,GIT_ASKPASS:'',SSH_ASKPASS:'',SSH_ASKPASS_REQUIRE:'never'},timeout,maxBuffer);
+    return (await run('git',command,{cwd,env,windowsHide:true,timeout,maxBuffer,encoding:'buffer'})).stdout;
   } catch (error: any) {
+    if(error.code==='PROJECT_ERROR')throw error;
     if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw problem('Git output exceeds the response limit; narrow changes locally', 413);
     throw problem(error.killed ? 'Git timed out; inspect the project before retrying' : 'Git failed; check the repository and local Git credentials', 409);
   }
 }
 
-async function git(cwd: string, args: string[], timeout = 30_000, maxBuffer = 2 * 1024 * 1024) {
-  return (await gitBytes(cwd, args, timeout, maxBuffer)).toString('utf8');
+async function git(cwd: string, args: string[], timeout = 30_000, maxBuffer = 2 * 1024 * 1024, killTree = false) {
+  return (await gitBytes(cwd, args, timeout, maxBuffer, killTree)).toString('utf8');
 }
 
 export class Projects {
   root: string;
   #items = new Map<string, Project>();
+  // One server process owns project refreshes; share work and briefly retain its result.
+  #fetches = new Map<string, Promise<{skipped?:string;remotes:{name:string;status:'updated'|'failed'|'timeout';error?:string}[]}>>();
   constructor(root: string) { this.root = root; }
 
   async refresh(): Promise<Project[]> {
@@ -135,6 +152,45 @@ export class Projects {
   }
 
   async clone(input: { name: string; folderName: string; repoUrl: string }) { return this.create(input); }
+
+  async fetchRemotes(id: string) {
+    const project=await this.resolve(id),key=fold(project.path);
+    let pending=this.#fetches.get(key);
+    if(!pending){
+      pending=this.#fetchRemotes(project.path);this.#fetches.set(key,pending);
+      const expire=()=>{setTimeout(()=>{if(this.#fetches.get(key)===pending)this.#fetches.delete(key);},10_000).unref();};
+      void pending.then(expire,expire);
+    }
+    return pending;
+  }
+
+  async #fetchRemotes(path: string) {
+    const remotes:{name:string;status:'updated'|'failed'|'timeout';error?:string}[]=[];
+    const deadline=Date.now()+60_000;
+    if(!(await git(path,['rev-parse','--is-inside-work-tree'],5000).catch(()=>'')).trim())return {skipped:'not-repository',remotes};
+    const names=(await git(path,['remote'],5000)).split('\n').filter(Boolean);
+    if(!names.length)return {skipped:'no-remotes',remotes};
+    for(const name of names){
+      const remaining=deadline-Date.now();
+      if(remaining<=0){remotes.push({name,status:'timeout',error:'获取超时，保留本地记录。'});continue;}
+      try {
+        if(name.startsWith('-')||/[\x00-\x20\x7f:*?\[\\]/.test(name))throw problem('Invalid remote');
+        if(names.some(other=>other!==name&&(other.startsWith(name+'/')||name.startsWith(other+'/'))))throw problem('Overlapping remote namespaces');
+        await git(path,['check-ref-format','refs/remotes/'+name+'/branch'],Math.min(5000,remaining));
+        const prefix='refs/remotes/'+name+'/';
+        const symbolic=(await git(path,['for-each-ref','--format=%(symref)',prefix],Math.max(1,Math.min(5000,deadline-Date.now())))).split('\n').filter(Boolean);
+        if(symbolic.some(target=>!target.startsWith(prefix)))throw problem('Remote ref points outside its namespace');
+        await git(path,[
+          '-c','protocol.allow=never','-c','protocol.https.allow=always','-c','protocol.ssh.allow=always','-c','protocol.file.allow=always',
+          '-c','core.askPass=','-c','credential.interactive=false','-c','fetch.pruneTags=false','-c','remote.'+name+'.pruneTags=false',
+          'fetch','--quiet','--prune','--no-prune-tags','--no-tags','--no-recurse-submodules','--no-write-fetch-head','--no-auto-maintenance',
+          '--refmap=','--',name,'+refs/heads/*:refs/remotes/'+name+'/*',
+        ],Math.max(1,Math.min(30_000,deadline-Date.now())),2*1024*1024,true);
+        remotes.push({name,status:'updated'});
+      } catch(error:any){remotes.push({name,status:error.statusCode===504?'timeout':'failed',error:error.statusCode===504?'获取超时，保留本地记录。':'获取失败，请检查网络、远程配置和本机 Git 凭据。'});}
+    }
+    return {remotes};
+  }
 
   async gitStatus(id: string) {
     const project = await this.resolve(id);

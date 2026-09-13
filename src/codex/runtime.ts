@@ -20,6 +20,8 @@ type Change = { id: string; threadId: string; kind: string; revision: number; pa
 type Waiter = { promise: Promise<'started' | 'completed' | 'failed'>; resolve: (value: 'started' | 'completed' | 'failed') => void };
 type PendingRequest = { requestId: string; nativeId: Id; method: string; params: Record<string, any>; epoch: string; threadId: string; turnId: string; answered: boolean };
 type ThreadState = {
+  openPromise?: Promise<any>;
+  externalWriter?: boolean;
   activeTurnId: string | null;
   cwd?: string;
   model?: string;
@@ -142,6 +144,38 @@ export class Runtime extends EventEmitter {
   async list(cursor?: string): Promise<{ data: any[]; nextCursor: string | null }> {
     const result = await this.call<any>('thread/list', { cursor: cursor ?? null, sourceKinds: SOURCE_KINDS, useStateDbOnly: true });
     return { data: Array.isArray(result?.data) ? result.data.map((thread: any) => ({ ...thread, ...(this.states.has(thread.id) ? { release: this.releaseState(this.states.get(thread.id)!) } : {}) })) : [], nextCursor: typeof result?.nextCursor === 'string' ? result.nextCursor : null };
+  }
+
+  open(threadId:string):Promise<any>{
+    this.requireString(threadId,'threadId');const state=this.state(threadId);
+    if(state.openPromise)return state.openPromise;
+    if(state.reserved||state.activeTurnId||state.pending.size||(state.loaded&&!state.released&&!state.error&&!state.externalWriter))return Promise.resolve({phase:this.phase(state)});
+    state.reserved=true;
+    const operation=async()=>{
+      try {
+        const read=await this.call<any>('thread/read',{threadId,includeTurns:false});
+        if(!isObject(read?.thread))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread status is unavailable');
+        state.cwd=read.thread.cwd;state.model=read.thread.model;
+        if(read.thread.status?.type==='active')throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread is active in another client');
+        const resumed=await this.mutation<any>('thread/resume',{threadId,excludeTurns:true});
+        if(!isObject(resumed?.thread))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread resume was not confirmed');
+        if(resumed.thread.status?.type==='active')throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread is active in another client');
+        state.loaded=true;state.released=false;state.handoffReady=false;state.externalWriter=false;
+        state.nativeStatus=resumed.thread.status;state.model=resumed.model;
+        state.permissions=this.verifyPermissions(resumed,undefined,state.cwd!);
+        state.error=undefined;state.recoverOnIdle=false;
+      } catch(error){
+        const mapped=this.mapError(error);state.externalWriter=mapped.code==='RUNTIME_THREAD_CONFLICT';
+        state.error=state.externalWriter?undefined:mapped.message;state.recoverOnIdle=false;
+        if(!state.externalWriter)throw mapped;
+      } finally {
+        state.reserved=false;state.openPromise=undefined;this.change(threadId,'status');
+        if(state.releaseRequested&&state.loaded)void this.requestRelease(threadId).catch(()=>{});
+        this.scheduleIdle();
+      }
+      return {phase:this.phase(state)};
+    };
+    state.openPromise=Promise.resolve().then(operation);return state.openPromise;
   }
 
   async snapshot(threadId: string, options?: { window: boolean }): Promise<any> {
@@ -387,7 +421,7 @@ export class Runtime extends EventEmitter {
         } catch { this.change(threadId, 'resync'); }
         return { threadId, turnId: result.turnId, status: 'steered' };
       }
-      if (state.releasePromise || state.reserved || state.activeTurnId || state.pending.size || state.error || ['active', 'systemError'].includes(state.nativeStatus?.type)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Thread already has active or unresolved work');
+      if (state.releasePromise || state.reserved || state.activeTurnId || state.pending.size || state.error || state.externalWriter || ['active', 'systemError'].includes(state.nativeStatus?.type)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Thread already has active or unresolved work');
       state.releaseRequested = false;
       state.handoffReady = false;
       state.reserved = true;
@@ -1112,7 +1146,7 @@ export class Runtime extends EventEmitter {
   private phase(state: ThreadState): string {
     if (state.pending.size) return [...state.pending.values()].some(({ method }) => method === 'item/tool/requestUserInput' || method === 'mcpServer/elicitation/request') ? 'WAITING_INPUT' : 'WAITING_APPROVAL';
     if (state.reserved || state.activeTurnId) return 'RUNNING';
-    if (state.nativeStatus?.type === 'active') return 'EXTERNAL';
+    if (state.externalWriter || state.nativeStatus?.type === 'active') return 'EXTERNAL';
     if (state.error || state.nativeStatus?.type === 'systemError') return 'UNKNOWN';
     if (state.released) return 'RELEASED';
     return 'IDLE';

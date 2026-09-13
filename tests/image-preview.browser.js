@@ -6,7 +6,7 @@ async (page) => {
   });
   for(const viewport of [{width:1280,height:900},{width:390,height:844}]) {
     await page.setViewportSize(viewport);
-    await page.goto('http://127.0.0.1:4181/tests/workspace-panels.html?images=1');
+    await page.goto('http://127.0.0.1:4181/tests/workspace-panels.html?images=1&fetch=1');
     await page.waitForFunction(()=>!document.querySelector('#result').textContent.startsWith('RUNNING'));
     const result=await page.locator('#result').textContent();
     if(!result.startsWith('PASS'))throw new Error(result);

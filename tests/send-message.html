@@ -3,12 +3,14 @@
 <div id="root"></div><output id="result" style="position:fixed;bottom:0;right:0;z-index:100;background:#111;padding:8px">RUNNING</output>
 <script type="module">
 const id='send-test',requests=[];
+const lockTest=new URLSearchParams(location.search).has('locked');let openCalls=0,failOpen=false;
 let holdRead=false,finishRead,listReads=0;
 let snapshot={thread:{id,name:'发送测试',model:'m',reasoningEffort:'high',turns:[]},phase:'IDLE',activeTurnId:null,pending:[]};
 const response=(data,status=200)=>new Response(JSON.stringify(data),{status});
 history.replaceState(null,'','/sessions/'+id);
 window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};
 window.fetch=async(path,options={})=>{
+ if(path==='/api/sessions/'+id+'/open'){openCalls++;if(failOpen)return response({error:'open unavailable'},503);if(lockTest&&openCalls===1)snapshot.phase='EXTERNAL';else if(lockTest&&openCalls===2)snapshot.phase='IDLE';return response({phase:snapshot.phase});}
  if(path==='/api/auth/session')return response({authenticated:true,csrfToken:'test'});
  if(path==='/api/projects')return response({projects:[]});
  if(path==='/api/settings')return response({origin:location.origin,nodeVersion:'test',workRoot:'test',runtime:{}});
@@ -17,7 +19,7 @@ window.fetch=async(path,options={})=>{
  if(path==='/api/sessions'){listReads++;await new Promise(resolve=>setTimeout(resolve,100));return response({data:[snapshot.thread,{id:'other',name:'另一会话'}],nextCursor:null});}
  if(path==='/api/sessions/'+id)return holdRead?new Promise(resolve=>{finishRead=()=>resolve(response(snapshot));}):response(snapshot);
  if(path==='/api/sessions/other')return response({thread:{id:'other',name:'另一会话',turns:[]},phase:'IDLE',pending:[]});
- if(path.endsWith('/cancel-release')||path.endsWith('/release-on-leave'))return response({});
+ if(path.endsWith('/open')||path.endsWith('/cancel-release')||path.endsWith('/release-on-leave'))return response({});
  if(path.endsWith('/messages'))return new Promise((resolve,reject)=>requests.push({payload:JSON.parse(options.body),resolve,reject}));
  throw Error('Unexpected API '+path);
 };
@@ -28,9 +30,10 @@ const ready=()=>document.querySelector('[aria-label="刷新当前会话"]')?.get
 const draft=text=>{const el=document.querySelector('#message');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(el,text);el.dispatchEvent(new Event('input',{bubbles:true}));};
 const echo=(request,turnId)=>({id:turnId,status:'inProgress',items:[{type:'userMessage',id:'user-'+request.payload.clientRequestId,clientId:request.payload.clientRequestId,content:[{type:'text',text:request.payload.text}]}]});
 try{
- await import('/src/web/main.tsx');await until(()=>ready(),'Initial load failed');
+ await import('/src/web/main.tsx');await until(()=>ready()&&document.querySelector('h1')?.textContent==='发送测试','Initial load failed');
  await until(()=>document.querySelector('.session-menu'),'Session list missing');check(listReads===1,'首次加载重复请求会话列表');
  window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));window.dispatchEvent(new Event('online'));await until(()=>!document.querySelector('[aria-label="刷新最近会话"]').disabled,'Wake list refresh');check(listReads===2,'并发唤醒重复请求会话列表');const menu=document.querySelector('.session-menu');menu.querySelector('summary').click();check(menu.open,'会话菜单未打开');menu.querySelector('div').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));check(menu.open,'点击菜单内部不应关闭');document.querySelector('.timeline').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));check(!menu.open,'点击空白处应关闭菜单');
+ if(lockTest){check(document.querySelector('.session-locked')?.textContent.includes('已在另一个应用中打开'),'打开会话未提前显示锁');check(requests.length===0,'检测占用不应发送消息');draft('保留占用期间草稿');await until(()=>button('发送')?.disabled,'外部占用仍可发送');button('重试').click();await until(()=>ready()&&!document.querySelector('.session-locked')&&!button('发送')?.disabled,'重试未恢复');check(document.querySelector('#message').value==='保留占用期间草稿','重试丢失草稿');failOpen=true;document.querySelector('[aria-label="刷新当前会话"]').click();await until(()=>ready()&&document.body.textContent.includes('占用状态未确认'),'检测失败未提示');check(button('发送').disabled,'检测失败仍可发送');failOpen=false;button('重试').click();await until(()=>ready()&&!button('发送').disabled,'检测失败后无法重试');}
  draft('先执行这个任务');await until(()=>button('发送')&&!button('发送').disabled,'Send unavailable');button('发送').click();
  await until(()=>requests.length===1&&document.querySelector('.outgoing-message')?.textContent.includes('发送中')&&document.querySelector('#message').value==='','Message must appear before response');
  check(requests[0].payload.expectedTurnId===undefined,'Idle send must start a new turn');

@@ -15,6 +15,7 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
   const [outgoing,setOutgoing]=useState<Outgoing[]>(saved.current?.outgoing??[]),outgoingRef=useRef(outgoing);
   const [snapshot,setSnapshot]=useState<Json|null>(null),[error,setError]=useState(''),[readError,setReadError]=useState(''),[reading,setReading]=useState(false),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[draft,setDraft]=useState(saved.current?.text??''),[settings,setSettings]=useState<TurnSettings>(saved.current?.settings??{}),[attachments,setAttachments]=useState<Attachment[]>(saved.current?.attachments??[]),[gitTick,setGitTick]=useState(0),[aborting,setAborting]=useState(false),[uncertain,setUncertain]=useState(saved.current?.uncertain??false);
   const [historyLoading,setHistoryLoading]=useState(false),[historyError,setHistoryError]=useState('');
+  const [opening,setOpening]=useState(true),[openError,setOpenError]=useState('');
   const earlier=useRef<()=>void>(()=>{}),prepend=useRef<{top:number;height:number}|null>(null);
   const intent=useRef<Submission['current']>(saved.current?.intent??null),submitting=useRef(false),mounted=useRef(true),refresh=useRef<()=>void>(()=>{}),recheck=useRef<()=>void>(()=>{}),pause=useRef<()=>void>(()=>{}),scroll=useRef<HTMLDivElement>(null),follow=useRef(saved.current?.follow??true),restored=useRef(false),panes=usePanes();
   const saveDraft=(text=draft,options=settings,files=attachments,unknown=uncertain)=>{drafts.set(id,{text,settings:options,attachments:files,outgoing:outgoingRef.current,uncertain:unknown,intent:intent.current,top:scroll.current?.scrollTop??saved.current?.top,follow:follow.current});};
@@ -42,11 +43,15 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
       stream.addEventListener('change',event=>{if(!alive())return;lastEvent=Date.now();try{const next=applyChange(baseline!,JSON.parse((event as MessageEvent).data));if(!next){schedule();return;}setConnected(true);setReadError('');if(next!==baseline)accept(next);}catch{schedule();}});
       stream.onerror=()=>{if(!alive())return;setConnected(false);void api('/auth/session').then(state=>{if(!alive())return;setCsrfToken(state.csrfToken);if(!state.authenticated)window.dispatchEvent(new Event('auth-lost'));}).catch(()=>{});};
     };
-    const load=async()=>{
-      if(disposed||paused||!entryReady||inflight)return;inflight=true;disconnect();statusController?.abort();historyController?.abort();historyController=undefined;setHistoryLoading(false);setHistoryError('');prepend.current=null;controller=new AbortController();const request=controller;setReading(true);
-      try{const next=await api('/sessions/'+id,undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));if(disposed||request.signal.aborted||paused)return;accept(next);setReadError('');connect();}
+    let pendingOpen=false;
+    const load=async(checkOpen=false)=>{
+      if(disposed||paused||!entryReady)return;if(inflight){if(checkOpen)pendingOpen=true;return;}inflight=true;disconnect();statusController?.abort();historyController?.abort();historyController=undefined;setHistoryLoading(false);setHistoryError('');prepend.current=null;controller=new AbortController();const request=controller;setReading(true);
+      try{
+        if(checkOpen){setOpening(true);setOpenError('');try{await api('/sessions/'+id+'/open',{},AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));}catch{if(!disposed&&!request.signal.aborted)setOpenError('会话占用状态未确认，请重试。历史仍可查看。');}finally{if(!disposed)setOpening(false);}}
+        if(disposed||request.signal.aborted||paused)return;
+        const next=await api('/sessions/'+id,undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));if(disposed||request.signal.aborted||paused)return;accept(next);setReadError('');connect();}
       catch(e:any){if(!disposed&&!request.signal.aborted&&!paused)setReadError(e.message);}
-      finally{inflight=false;if(!disposed)setReading(false);}
+      finally{inflight=false;if(!disposed){setReading(false);if(checkOpen)setOpening(false);if(pendingOpen){pendingOpen=false;void load(true);}}}
     };
     earlier.current=()=>{void (async()=>{
       const cursor=baseline?.history?.nextCursor;if(!cursor||historyController||inflight||disposed||paused)return;
@@ -67,14 +72,14 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
       catch(e:any){if(!disposed&&!paused&&!request.signal.aborted)setReadError(e.message);}
       finally{if(statusController===request)statusController=undefined;}
     };
-    refresh.current=()=>{paused=false;setReadError('');void load();};
+    refresh.current=()=>{paused=false;setReadError('');void load(true);};
     recheck.current=()=>{paused=false;if(!source&&!inflight)connect();void checkStatus();};
     pause.current=()=>{paused=true;disconnect();controller?.abort();statusController?.abort();historyController?.abort();if(timer)clearTimeout(timer);timer=undefined;};
     const wake=()=>{if(document.visibilityState==='visible'&&!paused)recheck.current();};
     const watchdog=setInterval(()=>{if(!disposed&&!paused&&document.visibilityState==='visible'&&Date.now()-lastEvent>45_000){connect();void checkStatus();}},5000);
     const poll=setInterval(()=>{if(document.visibilityState==='visible'&&baseline?.syncCursor)void checkStatus();},30_000);
     window.addEventListener('online',wake);window.addEventListener('focus',wake);window.addEventListener('pageshow',wake);document.addEventListener('visibilitychange',wake);
-    let entering:Promise<void>|undefined;const enter=()=>entering??(entering=cancelReleaseOnReturn(id,()=>!disposed).then(()=>{if(!disposed){entryReady=true;void load();}}).catch(e=>{if(!disposed)setError(e.message);}).finally(()=>{entering=undefined;}));
+    let entering:Promise<void>|undefined;const enter=()=>entering??(entering=cancelReleaseOnReturn(id,()=>!disposed).then(()=>{if(!disposed){entryReady=true;void load(true);}}).catch(e=>{if(!disposed)setError(e.message);}).finally(()=>{entering=undefined;}));
     const normalRefresh=refresh.current;refresh.current=()=>{if(!entryReady){void enter();return;}normalRefresh();};
     void enter();
     return()=>{disposed=true;mounted.current=false;controller?.abort();statusController?.abort();historyController?.abort();disconnect();if(timer)clearTimeout(timer);clearInterval(watchdog);clearInterval(poll);window.removeEventListener('online',wake);window.removeEventListener('focus',wake);window.removeEventListener('pageshow',wake);document.removeEventListener('visibilitychange',wake);};
@@ -87,7 +92,7 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
       if(mounted.current){if(path==='/release'&&result.handoffReady){onReleased(result);return result;}if(path==='/release')setError(result.warning??'订阅已取消，仍在等待释放占用。');recheck.current();}return result;
     }catch(e:any){if(mounted.current){setError(e.message);recheck.current();}}
     finally{submitting.current=false;if(mounted.current){setBusy(false);setAborting(false);}}};
-  const phase=snapshot?.phase??'UNKNOWN',active=!!snapshot?.activeTurnId||['RUNNING','WAITING_APPROVAL','WAITING_INPUT'].includes(phase),canSteer=phase==='RUNNING'&&!!snapshot?.activeTurnId&&!snapshot?.pending?.length,canSend=!readError&&(!reading||canSteer)&&!uncertain&&!outgoing.some(m=>m.status==='sending')&&!snapshot?.release?.inProgress&&(['IDLE','RELEASED'].includes(phase)||canSteer),filesReady=attachments.every(a=>a.status==='ready'),items=(snapshot?.thread?.turns??[]).flatMap((turn:Json)=>turn.items??[]);
+  const phase=snapshot?.phase??'UNKNOWN',active=!!snapshot?.activeTurnId||['RUNNING','WAITING_APPROVAL','WAITING_INPUT'].includes(phase),canSteer=phase==='RUNNING'&&!!snapshot?.activeTurnId&&!snapshot?.pending?.length,canSend=!opening&&!openError&&!readError&&(!reading||canSteer)&&!uncertain&&!outgoing.some(m=>m.status==='sending')&&!snapshot?.release?.inProgress&&(['IDLE','RELEASED'].includes(phase)||canSteer),filesReady=attachments.every(a=>a.status==='ready'),items=(snapshot?.thread?.turns??[]).flatMap((turn:Json)=>turn.items??[]);
   const sendMessage=async()=>{
     if(submitting.current||!canSend||!filesReady||(!draft.trim()&&!attachments.length))return;
     const message:Outgoing={id:crypto.randomUUID(),text:draft,settings:{...settings},attachments:[...attachments],...(canSteer?{expectedTurnId:snapshot!.activeTurnId}:{}),status:'sending'};
@@ -113,8 +118,8 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
     <form className="composer" onSubmit={e=>{e.preventDefault();void sendMessage();}}>
       {error||readError?<div role="alert" className="notice error">{[error,readError].filter(Boolean).join('\n')}</div>:null}
       {!connected?<div role="status" className="notice">正在恢复连接，消息不会自动重发。</div>:null}{snapshot?.retry?<div role="status" className="notice">Codex 正在重试：{snapshot.retry.message}</div>:null}
-      {snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?<div role="status" className="notice">当前仅浏览历史，无法确认其他客户端是否占用。若已在其他客户端打开，请先在那里释放；发送时会检查占用。</div>:null}
-      {phase==='EXTERNAL'?<div role="status" className="notice">会话已在其他客户端打开。请在那里释放后重试。<button type="button" onClick={()=>refresh.current()}>重试</button></div>:null}
+      {snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?<div role="status" className="notice">会话已从运行时卸载，可刷新核对最新占用状态。</div>:null}
+      {opening?<p role="status" className="muted">正在核对会话占用…</p>:openError?<div role="alert" className="notice error">{openError}<button type="button" onClick={()=>refresh.current()}>重试</button></div>:phase==='EXTERNAL'?<div role="status" className="notice session-locked"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2"/><path d="M5 7V4a3 3 0 0 1 6 0v3"/></svg><span><strong>已在另一个应用中打开</strong><br/>请先在那里关闭会话，才能在这里继续。</span><button type="button" onClick={()=>refresh.current()}>重试</button></div>:null}
       {snapshot?.release?.requested?<div role="status" className="notice">{snapshot.release.error??'等待释放占用'}</div>:null}
       <Attachments items={attachments} onChange={next=>{setAttachments(next);saveDraft(draft,settings,next);}} disabled={busy}/>
       <label className="sr-only" htmlFor="message">继续这个会话</label><textarea id="message" placeholder="继续这个会话…" maxLength={12000} rows={3} value={draft} onChange={e=>{setDraft(e.target.value);saveDraft(e.target.value);}} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();e.currentTarget.form?.requestSubmit();}}}/>

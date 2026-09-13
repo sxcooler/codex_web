@@ -19,6 +19,29 @@ test('missing CLI reports the executable and configuration remedy', async t => {
   await assert.rejects(runtime.list(), (error: any) => error.statusCode === 503 && /CODEX_BIN/.test(error.message) && /missing/.test(error.message));
 });
 
+test('opening detects another writer before sending and history reads cannot clear the conflict',async t=>{
+  const runtime=start(t,60_000,'resume-conflict');
+  const [a,b]=await Promise.all([runtime.open('external-thread'),runtime.open('external-thread')]);
+  assert.equal(a.phase,'EXTERNAL');assert.strictEqual(a,b);
+  assert.equal((await runtime.snapshot('external-thread')).phase,'EXTERNAL');
+  await assert.rejects(runtime.send('external-thread',{text:'no',clientRequestId:'blocked-send'}),{code:'RUNTIME_THREAD_BUSY'});
+  assert.equal((await runtime.open('external-thread')).phase,'IDLE');
+  const snapshot=await runtime.snapshot('external-thread');assert.equal(snapshot.phase,'IDLE');assert.equal(snapshot.thread.turns.length,0);
+  const before=(await (runtime as any).call('fixture/stats',{}));
+  await runtime.open('external-thread');
+  assert.deepEqual(await (runtime as any).call('fixture/stats',{}),before,'already open must not resume again');
+});
+
+test('leaving during open releases the acquired thread instead of retaining a hidden writer',async t=>{
+  const runtime=start(t);const nativeCall=(runtime as any).mutation.bind(runtime);
+  const gate=Promise.withResolvers<void>(),entered=Promise.withResolvers<void>();
+  t.mock.method(runtime as any,'mutation',async(method:string,params:any)=>{if(method==='thread/resume'){entered.resolve();await gate.promise;}return nativeCall(method,params);});
+  const opening=runtime.open('opening-thread');await entered.promise;
+  assert.equal((await runtime.requestRelease('opening-thread')).status,'pending');gate.resolve();await opening;
+  for(let i=0;i<100&&!(runtime as any).states.get('opening-thread').released;i++)await new Promise(r=>setTimeout(r,10));
+  assert.equal((runtime as any).states.get('opening-thread').released,true);
+});
+
 test('all concurrent first calls wait until initialize and initialized complete', async (t) => {
   const runtime = start(t, 60_000, 'delayed-init');
   const [listed, diagnostics] = await Promise.all([runtime.list(), runtime.diagnostics()]);

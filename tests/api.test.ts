@@ -26,6 +26,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     output: async (_id:string,turnId:string,itemId:string) => ({output:turnId+':'+itemId}),
     replay: (_threadId:string,cursor?:string) => { replayCursor=cursor; return {reset:true,events:[]}; }, close: async () => {}, diagnostics: async () => ({available:true}),
     rename: async (_id:string,name:string) => ({name}),
+    open: async () => ({phase:'IDLE'}),
   });
   try {
     const root = join(dir,'work'); await mkdir(root);
@@ -45,6 +46,14 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     const session=await app.inject({method:'POST',url:'/api/sessions',headers,payload:{projectId,clientRequestId:'test-request-1',prompt:'hello'}});
     assert.equal(session.statusCode,200,session.body);
     assert.equal(created.cwd,join(root,'test'));
+    assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/open',headers,payload:{}})).json().phase,'IDLE');
+    assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/open',headers,payload:{cwd:root}})).statusCode,400);
+    const fetchRoute='/api/sessions/thread-1/git/fetch';
+    assert.equal((await app.inject({method:'POST',url:fetchRoute,headers:{...headers,cookie:headers.cookie.split(';')[0]},payload:{}})).statusCode,401);
+    assert.equal((await app.inject({method:'POST',url:fetchRoute,headers:{...headers,'x-csrf-token':''},payload:{}})).statusCode,403);
+    assert.equal((await app.inject({method:'POST',url:fetchRoute,headers,payload:{cwd:root}})).statusCode,400);
+    const fetchResult=await app.inject({method:'POST',url:fetchRoute,headers,payload:{}});
+    assert.equal(fetchResult.statusCode,200,fetchResult.body);assert.equal(fetchResult.json().skipped,'no-remotes');
     await copyFile(new URL('../public/assets/icon-mobile-v1-192.png',import.meta.url),join(root,'test','picture.png'));
     const image=await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png&v=1',headers});
     assert.equal(image.statusCode,200,image.body); assert.equal(image.headers['content-type'],'image/webp');

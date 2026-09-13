@@ -25,6 +25,17 @@ const fileUrl=(id:string,currentPath:string,url:string)=>{
 export function GitPanel({id,projectId,tick,visible}:{id:string;projectId:string;tick:number;visible:boolean}){
   const [state,setState]=useState<PanelState>(()=>loadPanelState(browserStorage(),projectId));
   const [lists,setLists]=useState<Record<string,Json[]>>({}),[contents,setContents]=useState<Record<string,Json>>({}),[failures,setFailures]=useState<Record<string,string>>({}),[error,setError]=useState(''),[busy,setBusy]=useState(false),[revision,setRevision]=useState(0);
+  const [fetching,setFetching]=useState(false),[fetchResult,setFetchResult]=useState<Json|null>(null),[historyRevision,setHistoryRevision]=useState(0);
+  const fetchGeneration=useRef(0),fetchInFlight=useRef(false);
+  useEffect(()=>{setFetching(false);setFetchResult(null);fetchInFlight.current=false;return()=>{fetchGeneration.current++;};},[id,projectId]);
+  const refresh=async()=>{
+    if(fetchInFlight.current)return;
+    fetchInFlight.current=true;setFetching(true);setFetchResult(null);setRevision(n=>n+1);
+    const generation=fetchGeneration.current;
+    try {const result=await api('/sessions/'+id+'/git/fetch',{},AbortSignal.timeout(70_000));if(generation===fetchGeneration.current)setFetchResult(result);}
+    catch {if(generation===fetchGeneration.current)setFetchResult({error:'远程获取未确认，请检查网络与本机 Git 凭据后重试。本地内容仍可查看。'});}
+    finally {if(generation===fetchGeneration.current){fetchInFlight.current=false;setFetching(false);setHistoryRevision(n=>n+1);}}
+  };
   const panelRef=useRef<HTMLElement>(null),listRef=useRef<HTMLDivElement>(null),previewRef=useRef<HTMLElement>(null),historyRef=useRef<HTMLDivElement>(null),restoreScroll=useRef<number|null>(null);
   const set=(change:Partial<PanelState>)=>setState(current=>({...current,...change}));
   const updateSection=(tab:'changes'|'files',change:Partial<PanelState[typeof tab]>)=>setState(current=>({...current,[tab]:{...current[tab],...change}}));
@@ -43,9 +54,10 @@ export function GitPanel({id,projectId,tick,visible}:{id:string;projectId:string
 
   const tab=(next:PanelTab)=>{if(next!==state.tab)set({tab:next});};
   return <aside id="right-sidebar" aria-label="项目面板" className="git-panel" hidden={!visible} ref={panelRef} onWheel={()=>{restoreScroll.current=null;}} onTouchStart={()=>{restoreScroll.current=null;}} onScroll={event=>{if(event.target!==event.currentTarget||restoreScroll.current!==null)return;const scroll=event.currentTarget.scrollTop;if(state.tab==='history')setState(current=>({...current,history:{...current.history,scroll}}));else updateSection(state.tab,{previewScroll:scroll});}}>
-    <div className="git-heading"><h2>项目</h2><button disabled={busy} onClick={()=>setRevision(n=>n+1)}>↻ 刷新</button></div>
+    <div className="git-heading"><h2>项目</h2><button disabled={busy||fetching} onClick={()=>void refresh()} title="刷新本地内容并获取远程分支更新">↻ 刷新</button></div>
+    {fetching?<p className="muted small" role="status">正在获取远程更新…本地内容可继续查看。</p>:fetchResult?<div className="fetch-result small" role={fetchResult.error||fetchResult.remotes?.some((remote:Json)=>remote.status!=='updated')?'alert':'status'}>{fetchResult.error?<p className="notice error">{fetchResult.error}</p>:fetchResult.skipped?<p className="muted">{fetchResult.skipped==='no-remotes'?'未配置远程仓库，仅刷新本地内容。':'当前目录不是 Git 仓库，仅刷新本地内容。'}</p>:fetchResult.remotes?.map((remote:Json)=><p key={remote.name} className={remote.status==='updated'?'muted':'notice error'}>{remote.name}：{remote.status==='updated'?'远程记录已更新。':remote.error}</p>)}</div>:null}
     <div className="tabs"><button aria-pressed={state.tab==='changes'} className={state.tab==='changes'?'active':''} onClick={()=>tab('changes')}>变更</button><button aria-pressed={state.tab==='files'} className={state.tab==='files'?'active':''} onClick={()=>tab('files')}>文件</button><button aria-pressed={state.tab==='history'} className={state.tab==='history'?'active':''} onClick={()=>tab('history')}>Git 日志</button></div>
-    <div ref={historyRef} hidden={state.tab!=='history'}><GitHistory id={id} tick={tick+revision} visible={visible&&state.tab==='history'} state={state.history} onChange={history=>set({history})}/></div>
+    <div ref={historyRef} hidden={state.tab!=='history'}><GitHistory id={id} tick={tick+revision+historyRevision} visible={visible&&state.tab==='history'} state={state.history} onChange={history=>set({history})}/></div>
     <div hidden={state.tab==='history'}>
       {state.tab==='changes'?<div className="actions"><button aria-pressed={!state.changes.staged} onClick={()=>updateSection('changes',{staged:false})}>工作区</button><button aria-pressed={state.changes.staged} onClick={()=>updateSection('changes',{staged:true})}>暂存区</button><button className="split-toggle" aria-pressed={state.changes.split} onClick={()=>updateSection('changes',{split:!state.changes.split})}>{state.changes.split?'统一视图':'并排视图'}</button></div>:<div className="path">{state.files.directory||'/'}{state.files.directory?<button onClick={()=>updateSection('files',{directory:state.files.directory.split('/').slice(0,-1).join(''),path:''})}>上一级</button>:null}</div>}
       {error?<p className="notice error" role="alert">{error}</p>:null}
