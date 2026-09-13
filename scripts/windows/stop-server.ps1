@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $startScript = Join-Path $PSScriptRoot 'start-server.ps1'
 $mainScript = Join-Path $projectRoot 'src\server\main.ts'
 $task = Get-ScheduledTask -TaskName 'Codex Remote Web' -ErrorAction SilentlyContinue

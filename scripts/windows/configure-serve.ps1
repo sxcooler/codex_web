@@ -14,7 +14,7 @@ $serve = $serveJson | ConvertFrom-Json
 if (@($serve.PSObject.Properties).Count -gt 0) { throw 'Serve already has configuration; inspect it before making changes. Nothing was overwritten.' }
 & $tailscalePath serve --bg --https=443 "http://127.0.0.1:$Port"
 if ($LASTEXITCODE -ne 0) { throw 'Serve was not configured. Follow the Tailscale HTTPS enablement instructions if shown.' }
-$dataDir = Join-Path ([System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))) '.local\web'
+$dataDir = Join-Path ([System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))) '.local\web'
 $configPath = Join-Path $dataDir 'config.json'
 $config = @{}
 if (Test-Path -LiteralPath $configPath) { $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable }

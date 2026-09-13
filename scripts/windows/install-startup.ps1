@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param([switch]$Start)
 $ErrorActionPreference = 'Stop'
-$projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $taskName = 'Codex Remote Web'
 $pwshPath = (Get-Command pwsh.exe -ErrorAction Stop).Source
 # Store updates remove versioned executables; the per-user app execution alias survives them.
@@ -10,8 +10,10 @@ $storeAlias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
 if ($pwshPath -like $storePattern -and (Test-Path -LiteralPath $storeAlias)) { $pwshPath = $storeAlias }
 $scriptPath = Join-Path $PSScriptRoot 'start-server.ps1'
 $arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$scriptPath`""
+$legacyScript = Join-Path $projectRoot 'scripts\start-server.ps1'
+$legacyArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$legacyScript`""
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existing -and (($existing.Actions.Arguments -ne $arguments) -or
+if ($existing -and (($existing.Actions.Arguments -notin @($arguments, $legacyArguments)) -or
     ($existing.Actions.Execute -ne $pwshPath -and -not ($pwshPath -eq $storeAlias -and $existing.Actions.Execute -like $storePattern)))) {
     throw 'A different task already uses this name. It was not overwritten.'
 }

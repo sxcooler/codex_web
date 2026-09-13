@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $dataDir = Join-Path $projectRoot '.local\web'
 $nodePath = Join-Path $projectRoot '.local\node24\node.exe'
 if (-not (Test-Path -LiteralPath $nodePath)) { $nodePath = (Get-Command node.exe -ErrorAction Stop).Source }

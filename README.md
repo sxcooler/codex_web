@@ -37,6 +37,8 @@ npm start
 
 默认工作根目录为当前用户的 `~/work`（Windows 为 `%USERPROFILE%\work`），仅发现一级项目目录。`.local/web/config.json` 配置 `origin`、`port`、`workRoot`、`codexBin`；对应 `WEB_ORIGIN`、`PORT`、`WORK_ROOT`、`CODEX_BIN` 环境变量优先，`WEB_DATA_DIR` 可更换数据目录。Windows 默认查找独立 CLI 官方安装位置，Linux 默认使用 PATH 中的 `codex`。
 
+部署脚本按平台放在 [`scripts/windows/` 和 `scripts/linux/`](scripts/README.md)。Linux 可用 `bash scripts/linux/start-server.sh` 前台启动，或 `bash scripts/linux/install-startup.sh --start` 安装用户级 systemd 自启；先完成上述构建与密码设置。停止、日志和 Tailscale 配置见部署指南。
+
 ## Windows 便携包
 
 解压到可写目录后双击 `Start.cmd`；包内自带 Node 和运行依赖。首次交互配置工作目录、CLI、端口和密码。缺少 Codex 时，可打开官方页面手动安装，或明确选择同意后运行官方安装脚本；也可指定已有 CLI。安装完成后重新检测并继续配置，账户登录仍须自行完成。保持启动窗口打开，按 Ctrl+C 停止。此包仅适用于 Windows x64，详见 [便携包指南](docs/guides/windows-portable.md)。

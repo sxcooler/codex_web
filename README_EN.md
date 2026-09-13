@@ -37,6 +37,8 @@ Skip setup if a password already exists. Set a 12–256-character password in yo
 
 The default work root is the current user's `~/work` (`%USERPROFILE%\work` on Windows); only immediate project directories are discovered. `.local/web/config.json` configures `origin`, `port`, `workRoot`, and `codexBin`. The corresponding `WEB_ORIGIN`, `PORT`, `WORK_ROOT`, and `CODEX_BIN` environment variables take precedence; `WEB_DATA_DIR` changes the data directory. Windows defaults to the official standalone CLI installation location; Linux defaults to `codex` on PATH.
 
+Deployment scripts are organized into [`scripts/windows/` and `scripts/linux/`](scripts/README.md). After building and setting a password, Linux users can run `bash scripts/linux/start-server.sh` in the foreground, or install a user systemd service with `bash scripts/linux/install-startup.sh --start`. See the deployment guide for stopping, logs, and Tailscale configuration.
+
 ## Windows portable package
 
 Extract into a writable directory and double-click `Start.cmd`; Node and runtime dependencies are included. First-run setup asks for the work root, CLI, port, and password. If Codex is missing, open the official page to install manually, explicitly consent to running the official installer, or specify an existing CLI. Setup detects the installed CLI again and continues; account sign-in remains a separate step. Keep the startup window open and press Ctrl+C to stop. The package is for Windows x64 only; see the [portable package guide](docs/guides/windows-portable.md).
