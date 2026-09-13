@@ -1,16 +1,16 @@
-# Codex Remote Web
+# Codex Web
 
 [English](README_EN.md)
 
-运行在自己开发机上的轻量远程 Codex 客户端。通过桌面或手机浏览器管理项目、继续原生 Codex Thread、查看实时执行和 Git 变更，并处理审批。Agent 执行和聊天历史由官方独立 Codex CLI 管理，Web 使用当前宿主用户的 Codex 登录。
+运行在自己开发机上的轻量 Codex 网页客户端，支持本地和远程访问。通过桌面或手机浏览器管理项目、继续原生 Codex Thread、查看实时执行和 Git 变更，并处理审批。Agent 执行和聊天历史由官方独立 Codex CLI 管理，Web 使用当前宿主用户的 Codex 登录。
 
 ## 主要功能
 
 - 选择已有项目、无项目、新建 Git 项目或 Clone，持续对话、插话、中止与释放接力。
 - 实时增量同步、历史分页、按需命令输出、安全 Markdown 与原文复制。
-- 可调整并记忆的三栏布局，文件预览、统一/并排 diff、只读 Git 日志和 JUnit 报告。
-- 原生模型/推理与审批方式选择，重命名、收藏、Web 隐藏和元数据清除。
-- 私有文件/图片附件、Web Push，以及只缓存静态外壳的 PWA。
+- 可调整并记忆的三栏布局，文件预览、统一 / 并排 diff、只读 Git 日志和 JUnit 报告。
+- 原生模型 / 推理与审批方式选择，重命名、收藏、Web 隐藏和元数据清除。
+- 私有文件 / 图片附件、Web Push，以及只缓存静态外壳的 PWA。
 
 ## 平台与前置条件
 
@@ -20,7 +20,7 @@
 | Linux | 已在 WSL2 Ubuntu 22.04 普通用户下验证源码运行、真实任务和沙箱边界；不声明全部发行版已验证 |
 | macOS | 本轮未适配、未验证 |
 
-源码运行需要 Node **>=24.20.0**、npm、官方独立 Codex CLI，以及用于项目/Git 功能的 Git。`.node-version` 声明版本基线，不会自动切换 Node。按 [Codex 官方说明](https://learn.chatgpt.com/docs/codex/cli) 安装并登录；Linux/WSL 应使用 Linux CLI 和该环境自己的登录。不要依赖 VS Code 扩展私有目录内的二进制。
+源码运行需要 Node **>=24.20.0**、npm、官方独立 Codex CLI，以及用于项目 /Git 功能的 Git。`.node-version` 声明版本基线，不会自动切换 Node。按 [Codex 官方说明](https://learn.chatgpt.com/docs/codex/cli) 安装并登录；Linux/WSL 应使用 Linux CLI 和该环境自己的登录。不要依赖 VS Code 扩展私有目录内的二进制。
 
 ## 源码启动
 
@@ -64,4 +64,4 @@ CLI 升级后重新生成协议、审阅差异并验证兼容性；生成内容�
 
 ## 公开发布
 
-公开示例中的用户名、路径和会话 ID 均已泛化。原 Git 历史仍有个人环境记录，公开发布应使用**不含 `.git` 的干净源码包新建仓库**。禁止上传 `.local/`、Codex 原生数据、凭据、附件、数据库、日志、截图和测试产物。范围与限制见 [发布指南](docs/guides/publishing.md)。
+公开示例中的用户名、路径和会话 ID 均已泛化。原 Git 历史仍有个人环境记录，公开发布应使用 **不含 `.git` 的干净源码包新建仓库**。禁止上传 `.local/`、Codex 原生数据、凭据、附件、数据库、日志、截图和测试产物。范围与限制见 [发布指南](docs/guides/publishing.md)。

@@ -1,8 +1,8 @@
-# Codex Remote Web
+# Codex Web
 
 [中文](README.md)
 
-A lightweight remote Codex client running on your development machine. Use a desktop or mobile browser to manage projects, continue native Codex Threads, inspect live execution and Git changes, and respond to approvals. The official standalone Codex CLI handles agent execution and conversation history; the Web service uses the host user's Codex login.
+A lightweight web client for Codex running on your development machine, accessible locally or remotely. Use a desktop or mobile browser to manage projects, continue native Codex Threads, inspect live execution and Git changes, and respond to approvals. The official standalone Codex CLI handles agent execution and conversation history; the Web service uses the host user's Codex login.
 
 ## Features
 
