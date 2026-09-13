@@ -4,10 +4,15 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskName = 'Codex Remote Web'
 $pwshPath = (Get-Command pwsh.exe -ErrorAction Stop).Source
+# Store updates remove versioned executables; the per-user app execution alias survives them.
+$storePattern = Join-Path $env:ProgramFiles 'WindowsApps\Microsoft.PowerShell_*\pwsh.exe'
+$storeAlias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
+if ($pwshPath -like $storePattern -and (Test-Path -LiteralPath $storeAlias)) { $pwshPath = $storeAlias }
 $scriptPath = Join-Path $PSScriptRoot 'start-server.ps1'
 $arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$scriptPath`""
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existing -and (($existing.Actions.Execute -ne $pwshPath) -or ($existing.Actions.Arguments -ne $arguments))) {
+if ($existing -and (($existing.Actions.Arguments -ne $arguments) -or
+    ($existing.Actions.Execute -ne $pwshPath -and -not ($pwshPath -eq $storeAlias -and $existing.Actions.Execute -like $storePattern)))) {
     throw 'A different task already uses this name. It was not overwritten.'
 }
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name

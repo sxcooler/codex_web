@@ -69,11 +69,13 @@ Linux 使用宿主已有 Tailscale 的官方 Serve 配置流程，将私网 HTTP
 pwsh.exe -NoProfile -File scripts/install-startup.ps1 -Start
 ```
 
-任务名 `Codex Remote Web`，当前用户 Interactive 登录、普通权限、隐藏 PowerShell、IgnoreNew，失败最多重试 3 次。使用绝对路径，不要求启动目录。脚本拒绝覆盖执行命令不同的同名任务。
+任务名 `Codex Remote Web`，当前用户 Interactive 登录、普通权限、隐藏 PowerShell、IgnoreNew，失败最多重试 3 次。使用绝对路径，不要求启动目录。Microsoft Store 版 PowerShell 7 优先使用当前用户的稳定应用执行别名，避免升级删除版本目录后自启失效；重跑安装脚本可迁移本项目旧任务的版本路径。脚本拒绝覆盖启动参数不同或属于其他程序的同名任务。
 
 在任务计划程序核对该任务的用户、触发器和“运行结果”；检查 `.local/web/server.log` 与浏览器登录。真正的注销/重新登录自启仍需实际操作验证。锁屏通常不影响后台任务，但游戏等 GUI 的可用性取决于交互桌面；本次没有验证锁屏/注销后的 GUI 行为。
 
 停止 Web 前先中断/等待运行中的 Turn 并释放会话，然后执行 `pwsh.exe -NoProfile -File scripts/stop-server.ps1`。Windows 任务计划程序单独停止 PowerShell 后可能留下 Node 子进程；此脚本检查任务归属，再结束仅匹配本项目入口路径的 Node，不批量结束其他 Codex 进程。自启任务会保留；要移除自启，在任务计划程序中删除此精确任务。升级先停止服务，更新依赖及构建，再运行 `Start-ScheduledTask -TaskName 'Codex Remote Web'`。
+
+任务管理器里的 Node.js 数量不能直接视为 Web 残留：VS Code、Codex 的 MCP / 浏览器工具和 Playwright 也会启动 Node。先按启动命令、父子关系和监听端口确认归属，不要批量结束 `node.exe`。Windows 隔离回归 `tests/windows-service.test.ts` 验证停止本项目入口后其测试子进程、孙进程退出，无关 Node 保持运行；不代表任意外部工具的进程生命周期都已验证。
 
 ## 会话接力与故障处理
 
