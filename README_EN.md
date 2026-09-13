@@ -39,6 +39,12 @@ The default work root is the current user's `~/work` (`%USERPROFILE%\work` on Wi
 
 Deployment scripts are organized into [`scripts/windows/` and `scripts/linux/`](scripts/README.md). After building and setting a password, Linux users can run `bash scripts/linux/start-server.sh` in the foreground, or install a user systemd service with `bash scripts/linux/install-startup.sh --start`. See the deployment guide for stopping, logs, and Tailscale configuration.
 
+## Local and cross-device access
+
+Local use does not require a virtual network. For cross-device access, connect the client and development machine to the same LAN or an authorized virtual network, and keep the machine and service online. **Direct public-internet exposure is not recommended. Prefer a virtual network with authentication, encryption, and access controls; Tailscale is one example.**
+
+The service listens only on loopback, so cross-device access also requires a restricted proxy or tunnel. Options include a LAN HTTPS proxy, Tailscale, ZeroTier, NetBird, WireGuard, or SSH forwarding. See the [deployment guide](docs/guides/deployment.md#网络访问方式) for comparisons, official documentation, and a Tailscale HTTPS example.
+
 ## Windows portable package
 
 Extract into a writable directory and double-click `Start.cmd`; Node and runtime dependencies are included. First-run setup asks for the work root, CLI, port, and password. If Codex is missing, open the official page to install manually, explicitly consent to running the official installer, or specify an existing CLI. Setup detects the installed CLI again and continues; account sign-in remains a separate step. Keep the startup window open and press Ctrl+C to stop. The package is for Windows x64 only; see the [portable package guide](docs/guides/windows-portable.md).

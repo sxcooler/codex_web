@@ -132,7 +132,7 @@ export class Projects {
 
   async gitStatus(id: string) {
     const project = await this.resolve(id);
-    const parts = (await git(project.path, ['status', '--porcelain=v1', '-z', '--untracked-files=normal'])).split('\0');
+    const parts = (await git(project.path, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])).split('\0');
     const entries: { path: string; index: string; worktree: string; originalPath?: string }[] = [];
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i];

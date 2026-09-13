@@ -46,7 +46,27 @@ Linux 中先核对 `command -v node`、`command -v codex` 和各自 `--version`�
 
 `.node-version` 只声明 LTS 基线，不切换 PATH。Windows 部署脚本要求 PowerShell 7（`pwsh.exe` 在用户 PATH 中），优先使用已有 `.local/node24/node.exe`，否则使用 PATH 的 `node.exe`；脚本不下载或替换系统 Node。该规则不适用于 Linux 源码命令，Linux 直接使用当前环境 Node。
 
-## Tailscale HTTPS
+## 网络访问方式
+
+Codex Web 可以仅在本机使用，也可以通过受控网络跨设备访问，运行本身不依赖某个 VPN 产品。**不建议直接将服务暴露到公网**，也不建议只靠网页密码保护公网入口。跨设备使用时，建议使用带身份认证、加密和访问控制的虚拟网络，**以 Tailscale 为例**；设备须连接到同一局域网或获准互通的虚拟网络，并确认开发机与服务在线。
+
+| 方法 | 适用场景与接入方式 | 需要配置 |
+| --- | --- | --- |
+| 本机浏览器 | 只在开发机使用，直接访问 `http://localhost:3000` | 无需虚拟网络或代理 |
+| 局域网 + HTTPS 反向代理 | 同一可信局域网内使用；代理只监听局域网地址，转发到 Web 回环端口 | 受信任的证书、域名解析和防火墙；[Caddy 监听地址](https://caddyserver.com/docs/caddyfile/directives/bind)、[反向代理](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy) |
+| Tailscale + Serve（推荐示例） | 手机、电脑加入同一虚拟网络，Serve 提供私网 HTTPS 入口 | 安装登录、设备访问规则和 Serve；[官方示例](https://tailscale.com/docs/use-cases/application-testing/share-local-dev-server-with-team) |
+| ZeroTier + HTTPS 反向代理 | 加入同一私有虚拟网络，授权设备后访问代理入口 | 网络成员授权、访问规则、HTTPS；[官方入门](https://docs.zerotier.com/quickstart/) |
+| NetBird + HTTPS 反向代理 | 通过虚拟网络和访问策略控制设备互通 | 客户端、访问策略、HTTPS；[官方入门](https://docs.netbird.io/get-started) |
+| WireGuard + HTTPS 反向代理 | 已有 VPN 或愿意自行维护隧道的环境 | 密钥、对端、路由、防火墙和 HTTPS；[官方快速开始](https://www.wireguard.com/quickstart/) |
+| SSH 本地端口转发 | 已有可达 SSH 服务，临时从另一台电脑访问 | SSH 身份认证及本地转发；[OpenSSH `-L`](https://man.openbsd.org/ssh#L)。手机端需另有隧道客户端 |
+
+上述为可选接入方式，除下方示例外，仓库不自动配置第三方网络、代理或证书，也不表示逐项实机验收通过。虚拟网络只解决受控互通，通常仍需 HTTPS 入口；不要把它等同于自动具备 HTTPS。
+
+Web 固定监听 `127.0.0.1`，**仅连接同一 Wi-Fi 或安装 VPN 并不能直接访问开发机的 3000 端口**。跨设备入口应由受限地址上的代理/隧道转发到回环端口，保留原始 Host，配置 Web 的精确 `origin`，并允许 SSE 长连接。不要为了访问而取消 Host/Origin 检查。
+
+临时 SSH 示例：在访问端执行 `ssh -N -L 127.0.0.1:3000:127.0.0.1:3000 user@dev-host`，再打开 `http://localhost:3000`。访问端端口必须空闲，Web origin 须仍为 `http://localhost:3000`；若已改成 HTTPS 域名，不能直接混用这个示例。Web Push 仍按项目要求使用 HTTPS。
+
+### Tailscale HTTPS 示例
 
 电脑及手机登录允许访问此机器的 tailnet。在 Windows 上执行仓库辅助脚本：
 
@@ -56,7 +76,7 @@ pwsh.exe -NoProfile -File scripts/windows/configure-serve.ps1
 
 脚本检查现有 Serve 配置；发现任何映射就退出，保留原配置。首次使用可能要求在 Tailscale 管理页启用 HTTPS/Serve。成功后配置私网 HTTPS → `http://127.0.0.1:3000`，将精确 HTTPS origin 写入本机配置，再重启 Web 服务。
 
-此项目使用 Serve，不使用 Funnel。HTTPS origin 配置后应通过该 HTTPS 地址登录；直接访问 localhost 会被 Host 检查拒绝。Cookie 在 HTTPS 下设置 Secure。参考 [Tailscale Serve 官方说明](https://tailscale.com/docs/reference/tailscale-cli/serve)。
+此示例使用仅面向虚拟网络的 Serve，不使用面向公网的 Funnel。HTTPS origin 配置后应通过该 HTTPS 地址登录；直接访问 localhost 会被 Host 检查拒绝。Cookie 在 HTTPS 下设置 Secure。参考 [Tailscale Serve 官方说明](https://tailscale.com/docs/reference/tailscale-cli/serve)。
 
 Linux 在宿主安装并登录 Tailscale、取得 Serve 操作权限后运行 `bash scripts/linux/configure-serve.sh`；可追加实际 Web 端口，例如 `bash scripts/linux/configure-serve.sh 3412`。同样拒绝覆盖已有映射，成功后保留其他 Web 配置并写入 origin 和端口。脚本不自动安装 Tailscale、不提权，也不启用 Funnel。WSL 验证覆盖命令及配置保护逻辑，未安装 Linux Tailscale，因此不代表 Linux 跨设备访问已验收。
 

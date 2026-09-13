@@ -85,7 +85,7 @@ test('file diff and an attachment-only task use the selected options',async({pag
   else if(path==='/api/models')data={data:[{id:'m',model:'m',displayName:'测试模型',supportedReasoningEfforts:[{reasoningEffort:'high'}],isDefault:true}]};
   else if(path==='/api/permission-modes')data={current:'ask',modes:[{id:'ask',available:true}]};
   else if(path==='/api/uploads')data={uploadId:'00000000-0000-4000-8000-000000000011',name:'note.txt',size:5,kind:'file'};
-  else if(path==='/api/sessions/files')data={thread:{name:'文件测试',turns:[]},project:{id:'p'},phase:'IDLE',pending:[]};
+  else if(path==='/api/sessions/files')data={thread:{name:'文件测试',turns:[],status:{type:'notLoaded'}},project:{id:'p'},phase:'IDLE',pending:[]};
   else if(path.endsWith('/git/files'))data={files:[{path:'note.txt',status:'M',added:1,deleted:1}]};
   else if(path.endsWith('/git/diff'))data={hunks:[{oldStart:1,oldLines:1,newStart:1,newLines:1,lines:[{kind:'delete',text:'before',oldLine:1},{kind:'add',text:'after',newLine:1}]}]};
   await route.fulfill({json:data});
@@ -97,6 +97,8 @@ test('file diff and an attachment-only task use the selected options',async({pag
  await page.getByRole('combobox',{name:'推理强度'}).selectOption('high');
  await page.getByRole('button',{name:'开始任务 →'}).click();
  await expect(page.getByRole('heading',{name:'文件测试'})).toBeVisible();
+ await expect(page.locator('.connection')).toContainText('历史浏览');
+ await expect(page.getByText(/无法确认其他客户端是否占用/)).toBeVisible();
  expect(sent.model).toBe('m');expect(sent.effort).toBe('high');expect(sent.attachmentIds).toHaveLength(1);expect(sent.prompt).toBeUndefined();
  await page.getByRole('button',{name:/note.txt/}).click();
  await expect(page.locator('.unified-cell code').filter({hasText:'before'})).toBeVisible();
@@ -105,6 +107,14 @@ test('file diff and an attachment-only task use the selected options',async({pag
  await expect(page.getByRole('link',{name:'下载 patch'})).toHaveAttribute('href',/path=note.txt/);
  await page.locator('#message').evaluate(element=>{const clipboardData=new DataTransfer();clipboardData.items.add(new File(['image'],'pasted.png',{type:'image/png'}));element.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}));});
  await expect(page.locator('.attachments li')).toHaveCount(1);
+ await page.setViewportSize({width:390,height:844});
+ await page.getByRole('button',{name:'展开右侧栏'}).click();
+ await expect(page.getByRole('complementary',{name:'项目面板'})).toBeVisible();
+ await expect(page.getByRole('complementary',{name:'项目面板'}).getByRole('button',{name:/note.txt/})).toBeVisible();
+ await expect(page.getByText('Invalid request',{exact:true})).toHaveCount(0);
+ await page.screenshot({path:'output/playwright/mobile-project-drawer.png'});
+ await page.getByRole('button',{name:'收起右侧栏'}).click();
+ await expect(page.getByText(/无法确认其他客户端是否占用/)).toBeVisible();
 });
 
 test('rapid return cancels release only after the delayed leave request completes',async({page})=>{

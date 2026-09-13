@@ -7,7 +7,7 @@
 | 启动 | `windows/start-server.ps1` | `linux/start-server.sh` |
 | 停止 | `windows/stop-server.ps1` | `linux/stop-server.sh` |
 | 登录后自启 | `windows/install-startup.ps1 -Start` | `linux/install-startup.sh --start` |
-| Tailscale HTTPS | `windows/configure-serve.ps1` | `linux/configure-serve.sh [PORT]` |
+| 私网 HTTPS（方案见部署指南） | `windows/configure-serve.ps1` | `linux/configure-serve.sh [PORT]` |
 
 Windows 使用用户计划任务；Linux 使用用户级 systemd，也支持前台运行。前置配置、日志、停用自启及升级步骤见 [部署指南](../docs/guides/deployment.md)。旧版 Windows 用户升级后重新运行 `windows/install-startup.ps1`，迁移已有任务路径。
 

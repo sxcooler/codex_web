@@ -1,6 +1,6 @@
 # 会话工作区设计
 
-日期：2026-09-11。范围：原始 [handoff §53](../archive/initial-design.md#53-第二阶段)，不是 §59 的实施顺序 Phase 2。设计已实施；实际验收与差异见 [第二阶段记录](../verification/2026-09-11-phase2.md)。后续 [同步](session-sync.md)、[工作区面板](workspace-panels.md)、[Markdown](markdown.md)、[执行过程](execution-process.md) 专项规则优先。
+日期：2026-09-11。范围：会话工作区第二阶段功能。设计已实施；实际验收与差异见 [第二阶段记录](../verification/2026-09-11-phase2.md)。后续 [同步](session-sync.md)、[工作区面板](workspace-panels.md)、[Markdown](markdown.md)、[执行过程](execution-process.md) 专项规则优先。
 
 ## 1. 产品方向与参考依据
 
@@ -22,7 +22,7 @@
 
 ## 2. 当前基线与设计范围
 
-当前已有：React/Vite、Fastify、Node SQLite Web 元数据、密码/CSRF、SSE、原生 Thread 历史分页、审批、中止、项目发现/创建/Clone、Git status/diff、Tailscale 入口、登录后启动任务。
+当前已有：React/Vite、Fastify、Node SQLite Web 元数据、密码/CSRF、SSE、原生 Thread 历史分页、审批、中止、项目发现/创建/Clone、Git status/diff、私网 HTTPS 入口、登录后启动任务。
 
 2A 已实现：发送后的受理/运行/重试/完成反馈、输入区占用与恢复入口、SSE 心跳超时恢复、原生 `willRetry` 提示、释放前自动核对完成状态、区分取消订阅和接力就绪，以及切换会话/打开新会话时自动释放原会话。保持现有聊天排版、配色、字体和图标，不将 Markdown 渲染升级或图标替换作为流程修复的前提。
 
@@ -232,7 +232,7 @@ SQLite `uploads(id PRIMARY KEY, original_name, mime, size, sha256, relative_path
 
 通知场景：turn 完成/失败、等待审批或用户输入。用 `(subscription_id,thread_id,event_key)` 去重；推送结果 404/410 清理失效订阅，429/5xx 有界重试且带过期时间。payload 默认仅“任务完成/需要确认”与 Thread ID，不含 prompt、路径、输出。点击只打开本站已校验的 `/sessions/:id`，未登录先登录。退出/改密码后撤销相应 Web 登录关联订阅。
 
-Tailscale-only 指入站访问；Web Push 需要服务器向浏览器厂商服务出站，手机点击仍须连接 Tailscale。无需开放公网入口，不以公共隧道替代私网。
+私网限制针对入站访问；Web Push 需要服务器向浏览器厂商服务出站，手机点击通知打开会话时仍须与开发机连接到同一局域网或虚拟网络。无需开放公网入口，不以公共隧道替代私网。
 
 ## 11. 模块与接口边界
 

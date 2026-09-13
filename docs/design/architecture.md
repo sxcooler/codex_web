@@ -4,7 +4,7 @@ Codex Web 是单用户远程客户端：React 页面经同源 Fastify API 与 SS
 
 ```mermaid
 flowchart LR
-  Browser[桌面或手机浏览器] -->|私网 HTTPS| Serve[Tailscale Serve]
+  Browser[桌面或手机浏览器] -->|私网 HTTPS| Serve[受限网络 HTTPS 入口]
   Serve -->|回环| Web[Fastify API 与静态页面]
   Web -->|stdio JSONL| Codex[官方 codex app-server]
   Web --> Meta[Web SQLite 与私有附件]
@@ -37,4 +37,4 @@ Backend 常驻，单个 app-server 按需启动并管理多个 Thread；每个 T
 
 项目来自 WORK_ROOT 一级项目目录；路径按宿主语义比较，Windows 折叠大小写、Linux 保留大小写。文件/Git 路径以真实目录边界校验，不因原生 Agent 权限较宽而放宽 Web 文件接口。Git 参数数组执行、禁用外部 diff/textconv，日志仅查询，不提供 checkout/reset/fetch。项目创建部分失败保留已成功目录和 Thread，避免重复执行。安全 Markdown 不执行 HTML、不自动请求远程图片；输出视为不可信内容。
 
-原始需求、方案取舍、历史 Windows 环境与暂缓项见 [初始设计归档](../archive/initial-design.md)。当前会话/面板专项设计优先于历史接口草案；Linux 与便携安装变更见 [本轮方案](linux-support-and-docs.md)，当前验收状态见 [验证记录](../verification/2026-09-13-linux.md)。
+包含私有环境信息的早期归档已移除。当前会话/面板专项设计优先于历史接口草案；Linux 与便携安装变更见 [本轮方案](linux-support-and-docs.md)，当前验收状态见 [验证记录](../verification/2026-09-13-linux.md)。

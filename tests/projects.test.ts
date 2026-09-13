@@ -79,13 +79,17 @@ test('safe files and structured diffs cover untracked, staged, rename and binary
     execFileSync('git',['mv','old name.txt','new name.txt'],{cwd:project.path});
     await writeFile(join(project.path,'new name.txt'),'one\nchanged\n');
     await writeFile(join(project.path,'untracked.txt'),'fresh\n');
+    await mkdir(join(project.path,'new assets/nested'),{recursive:true});
+    await writeFile(join(project.path,'new assets/nested/note.txt'),'nested\n');
     await writeFile(join(project.path,'binary.bin'),Buffer.from([0,1,2,3]));
     const files=await projects.gitFiles(project.id,false);
     assert.ok(files.files.some(f=>f.path==='untracked.txt'&&f.status==='untracked'&&f.added===1));
+    assert.ok(files.files.some(f=>f.path==='new assets/nested/note.txt'&&f.status==='untracked'&&f.added===1));
+    assert.match(await projects.gitPatch(project.id,'new assets/nested/note.txt'),/\+nested/);
     const diff=await projects.gitFileDiff(project.id,'untracked.txt',false);
     assert.equal(diff.hunks[0].lines[0].kind,'add'); assert.equal(diff.hunks[0].lines[0].newLine,1);
     assert.equal((await projects.readFile(project.id,'binary.bin')).binary,true);
-    assert.deepEqual((await projects.listFiles(project.id,'')).files.map(f=>f.path),['binary.bin','new name.txt','untracked.txt']);
+    assert.deepEqual((await projects.listFiles(project.id,'')).files.map(f=>f.path),['binary.bin','new assets','new name.txt','untracked.txt']);
     await assert.rejects(projects.readFile(project.id,'../outside'));
     await assert.rejects(projects.readFile(project.id,'C:\\Windows\\win.ini'));
     await assert.rejects(projects.readFile(project.id,'new name.txt:stream'));

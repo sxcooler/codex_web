@@ -39,6 +39,12 @@ npm start
 
 部署脚本按平台放在 [`scripts/windows/` 和 `scripts/linux/`](scripts/README.md)。Linux 可用 `bash scripts/linux/start-server.sh` 前台启动，或 `bash scripts/linux/install-startup.sh --start` 安装用户级 systemd 自启；先完成上述构建与密码设置。停止、日志和 Tailscale 配置见部署指南。
 
+## 本地与跨设备访问
+
+本机使用不需要虚拟网络。跨设备访问须保证设备与开发机连接到同一局域网或获准互通的虚拟网络，且开发机和服务在线。**不建议直接将服务暴露到公网；建议使用带身份认证、加密和访问控制的虚拟网络，以 Tailscale 为例。**
+
+服务仅监听回环地址，跨设备还需配置受限的代理或隧道入口。可选局域网 HTTPS 代理、Tailscale、ZeroTier、NetBird、WireGuard 或 SSH 转发；方案比较、官方文档和 Tailscale HTTPS 示例见 [部署指南](docs/guides/deployment.md#网络访问方式)。
+
 ## Windows 便携包
 
 解压到可写目录后双击 `Start.cmd`；包内自带 Node 和运行依赖。首次交互配置工作目录、CLI、端口和密码。缺少 Codex 时，可打开官方页面手动安装，或明确选择同意后运行官方安装脚本；也可指定已有 CLI。安装完成后重新检测并继续配置，账户登录仍须自行完成。保持启动窗口打开，按 Ctrl+C 停止。此包仅适用于 Windows x64，详见 [便携包指南](docs/guides/windows-portable.md)。

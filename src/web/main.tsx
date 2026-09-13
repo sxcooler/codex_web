@@ -77,7 +77,7 @@ function SessionMenu({thread,onChanged}:{thread:Json;onChanged:()=>Promise<void>
 function Login({onLogin}:{onLogin:()=>void}) {
   const [password,setPassword]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const submit=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setError('');try{await api('/auth/login',{password});setPassword('');onLogin();}catch(e:any){setError(e.message);}finally{setBusy(false);}};
-  return <main className="login"><Brand/><h1>连接你的开发机</h1><p className="muted">登录后继续项目与 Codex 会话。</p><form onSubmit={submit}><label>管理员密码<input type="password" autoComplete="current-password" required minLength={12} maxLength={256} value={password} onChange={e=>setPassword(e.target.value)}/></label><ErrorBox error={error}/><button className="primary" disabled={busy}>{busy?'正在登录…':'登录'}</button></form><p className="muted small">通过 Tailscale 私网访问 · 无默认密码</p></main>;
+  return <main className="login"><Brand/><h1>连接你的开发机</h1><p className="muted">登录后继续项目与 Codex 会话。</p><form onSubmit={submit}><label>管理员密码<input type="password" autoComplete="current-password" required minLength={12} maxLength={256} value={password} onChange={e=>setPassword(e.target.value)}/></label><ErrorBox error={error}/><button className="primary" disabled={busy}>{busy?'正在登录…':'登录'}</button></form><p className="muted small">跨设备访问须连接到同一局域网或虚拟网络 · 无默认密码</p></main>;
 }
 
 function Home({projects,onChanged,onLeaveThread}:{projects:Project[];onChanged:()=>Promise<void>;onLeaveThread:(id:string)=>Promise<void>}) {

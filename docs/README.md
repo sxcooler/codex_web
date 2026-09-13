@@ -25,8 +25,6 @@
 - [2026-09-13 Linux 验证](verification/2026-09-13-linux.md)：本轮实际环境、自动化测试、真实任务和验证边界。
 - [2026-09-11 第二阶段验收](verification/2026-09-11-phase2.md)：代码/模拟浏览器通过与真实接力、手机 Push 缺口。
 - [2026-09-09 MVP 验证](verification/2026-09-09-mvp.md)：协议、认证和完整 MVP 的原始版本与真实证据。
-- [初始设计归档](archive/initial-design.md)：合并原始 handoff 与初始规格，保留独有约束、环境、暂缓项和早期取舍。
-- [MVP 实施归档](archive/mvp-implementation.md)：协议、认证与完整 MVP 的阶段接口和完成状态。
 
 后续已实施专项设计优先于早期规划：窗口分页取代“暂不分页”；64KiB SSE 回放与原拟 8MiB 缓存预算分别记录；Markdown 已共享外壳。历史“Windows 开发机”是原场景，当前平台定位见首页。历史审批预设、接口草案与旧模块名仅用于追溯。
 
@@ -44,8 +42,6 @@
 | `design-qa.md` | [verification/2026-09-11-phase2.md](verification/2026-09-11-phase2.md)：正文与历史实施/验收附录 |
 | `docs/superpowers/specs/2026-09-13-linux-support-and-docs-design.md` | [design/linux-support-and-docs.md](design/linux-support-and-docs.md)：正文与历史实施/验收附录 |
 | `docs/superpowers/plans/2026-09-11-markdown-rendering.md` | [design/markdown.md](design/markdown.md)：正文与历史实施/验收附录 |
-| `docs/superpowers/specs/2026-09-08-codex-remote-web-design.md` | [archive/initial-design.md](archive/initial-design.md)：初始设计正文 |
-| `docs/codex_remote_web_handoff.md` | [archive/initial-design.md](archive/initial-design.md)：原 handoff 独有需求与差异 |
 | `docs/superpowers/specs/2026-09-11-phase2-design.md` | [design/session-workspace.md](design/session-workspace.md)：正文与历史实施/验收附录 |
 | `docs/superpowers/plans/2026-09-11-phase2.md` | [design/session-workspace.md](design/session-workspace.md)：正文与历史实施/验收附录 |
 | `docs/superpowers/specs/2026-09-11-session-sync-design.md` | [design/session-sync.md](design/session-sync.md)：正文与历史实施/验收附录 |
@@ -54,9 +50,6 @@
 | `docs/superpowers/plans/2026-09-11-session-performance.md` | [design/session-sync.md](design/session-sync.md)：正文与历史实施/验收附录 |
 | `docs/superpowers/specs/2026-09-11-workspace-panels-design.md` | [design/workspace-panels.md](design/workspace-panels.md)：正文与历史实施/验收附录 |
 | `docs/superpowers/plans/2026-09-11-workspace-panels.md` | [design/workspace-panels.md](design/workspace-panels.md)：正文与历史实施/验收附录 |
-| `docs/superpowers/plans/2026-09-09-phase0-protocol.md` | [archive/mvp-implementation.md](archive/mvp-implementation.md)：协议实施阶段 |
-| `docs/superpowers/plans/2026-09-09-phase1-auth.md` | [archive/mvp-implementation.md](archive/mvp-implementation.md)：认证阶段 |
-| `docs/superpowers/plans/2026-09-09-mvp.md` | [archive/mvp-implementation.md](archive/mvp-implementation.md)：完整 MVP 阶段 |
 | `docs/compatibility/2026-09-09-phase0.md` | [verification/2026-09-09-mvp.md](verification/2026-09-09-mvp.md)：Phase 0 协议与会话接力 |
 | `docs/compatibility/2026-09-09-phase1-auth.md` | [verification/2026-09-09-mvp.md](verification/2026-09-09-mvp.md)：认证阶段 |
 | `docs/compatibility/2026-09-09-mvp.md` | [verification/2026-09-09-mvp.md](verification/2026-09-09-mvp.md)：完整 MVP 阶段 |
