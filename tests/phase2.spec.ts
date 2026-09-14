@@ -1,4 +1,34 @@
 import { test, expect } from '@playwright/test';
+test('mobile Enter keeps multiline drafts and desktop Enter still submits',async({page})=>{
+ const sent:string[]=[];
+ await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
+ await page.route('**/api/**',async route=>{
+  const path=new URL(route.request().url()).pathname;let data:any={};
+  if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
+  else if(path==='/api/projects')data={projects:[]};
+  else if(path==='/api/sessions')data={data:[],nextCursor:null};
+  else if(path==='/api/models')data={data:[]};
+  else if(path==='/api/permission-modes')data={modes:[],current:'custom'};
+  else if(path==='/api/sessions/keyboard')data={thread:{id:'keyboard',name:'换行测试',turns:[]},phase:'IDLE',pending:[]};
+  else if(path.endsWith('/messages'))sent.push(route.request().postDataJSON().text);
+  await route.fulfill({json:data});
+ });
+ await page.setViewportSize({width:390,height:844});
+ await page.goto('/sessions/keyboard');
+ const input=page.locator('#message'),send=page.getByRole('button',{name:'发送',exact:true});
+ await input.fill('第一行');await expect(send).toBeEnabled();
+ await input.press('End');await input.press('Enter');await input.pressSequentially('第二行');
+ await expect(input).toHaveValue('第一行\n第二行');expect(sent).toEqual([]);
+ await send.click();await expect.poll(()=>sent).toEqual(['第一行\n第二行']);
+ await page.setViewportSize({width:1440,height:900});
+ await expect(page.locator('.composer-bottom')).toContainText('Shift+Enter');
+ await input.fill('桌面');await input.press('End');await input.press('Shift+Enter');
+ await expect(input).toHaveValue('桌面\n');
+ await input.dispatchEvent('keydown',{key:'Enter',isComposing:true});
+ await expect(input).toHaveValue('桌面\n');expect(sent).toHaveLength(1);
+ await input.pressSequentially('换行');await expect(send).toBeEnabled();await input.press('Enter');
+ await expect.poll(()=>sent).toEqual(['第一行\n第二行','桌面\n换行']);
+});
 test('pane drag persists ratios and navigating releases old session while preserving its draft',async({page})=>{
   const releases:string[]=[];
   await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
@@ -98,7 +128,7 @@ test('file diff and an attachment-only task use the selected options',async({pag
  await page.getByRole('button',{name:'开始任务 →'}).click();
  await expect(page.getByRole('heading',{name:'文件测试'})).toBeVisible();
  await expect(page.locator('.connection')).toContainText('历史浏览');
- await expect(page.getByText(/无法确认其他客户端是否占用/)).toBeVisible();
+ await expect(page.getByRole('status').filter({hasText:/会话已从运行时卸载/})).toBeVisible();
  expect(sent.model).toBe('m');expect(sent.effort).toBe('high');expect(sent.attachmentIds).toHaveLength(1);expect(sent.prompt).toBeUndefined();
  await page.getByRole('button',{name:/note.txt/}).click();
  await expect(page.locator('.unified-cell code').filter({hasText:'before'})).toBeVisible();
@@ -114,7 +144,7 @@ test('file diff and an attachment-only task use the selected options',async({pag
  await expect(page.getByText('Invalid request',{exact:true})).toHaveCount(0);
  await page.screenshot({path:'output/playwright/mobile-project-drawer.png'});
  await page.getByRole('button',{name:'收起右侧栏'}).click();
- await expect(page.getByText(/无法确认其他客户端是否占用/)).toBeVisible();
+ await expect(page.getByRole('status').filter({hasText:/会话已从运行时卸载/})).toBeVisible();
 });
 
 test('rapid return cancels release only after the delayed leave request completes',async({page})=>{
