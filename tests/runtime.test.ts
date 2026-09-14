@@ -206,6 +206,65 @@ test('large history uses bounded item pages instead of oversized full turns', as
   assert.equal(snapshot.thread.turns[0].itemsView, 'full');
 });
 
+test('legacy threads without item pagination retain windowed history and full command output', async t => {
+  const runtime=start(t,60_000,'legacy-items');
+  const snapshot=await runtime.snapshot('legacy',{window:true});
+  assert.deepEqual(snapshot.thread.turns.map((t:any)=>t.id),Array.from({length:20},(_,i)=>`legacy-${i+5}`));
+  assert.equal(snapshot.history.nextCursor,'legacy-5');
+  assert.equal(snapshot.thread.turns[0].items[0].outputDeferred,true);
+  const stats=await (runtime as any).call('fixture/stats',{});
+  assert.equal(stats.turnLists,21,'one metadata page and one body page per selected turn');
+  const earlier=await runtime.history('legacy',snapshot.history.nextCursor);
+  assert.deepEqual(earlier.turns.map((t:any)=>t.id),Array.from({length:5},(_,i)=>`legacy-${i}`));
+  assert.equal(earlier.nextCursor,null);
+  assert.deepEqual(await runtime.output('legacy','legacy-7','command-7'),{output:'x'.repeat(9000)});
+  await assert.rejects(runtime.output('legacy','legacy-7','missing'),{code:'RUNTIME_NOT_FOUND'});
+});
+
+test('automatic leave and idle shutdown preserve explicit permissions while manual handoff resets them', async t => {
+  const runtime=start(t,60_000,'tightened-resume');
+  const {threadId}=await runtime.create({cwd,clientRequestId:'create',permissionMode:'full-access',prompt:'early-complete'});
+  await runtime.requestRelease(threadId);
+  await runtime.cancelRelease(threadId);
+  await runtime.open(threadId);
+  let snapshot=await runtime.snapshot(threadId);
+  assert.equal(snapshot.permissions.sandbox.type,'dangerFullAccess');
+  assert.equal(snapshot.permissions.approvalPolicy,'never');
+  await runtime.send(threadId,{text:'early-complete',clientRequestId:'continue'});
+  assert.equal((await (runtime as any).call('fixture/stats',{})).lastTurn.sandboxPolicy.type,'dangerFullAccess');
+  await (runtime as any).closeIdleServer();
+  await runtime.send(threadId,{text:'early-complete',clientRequestId:'after-idle'});
+  assert.equal((await (runtime as any).call('fixture/stats',{})).lastTurn.sandboxPolicy.type,'dangerFullAccess');
+  await runtime.release(threadId);
+  await runtime.open(threadId);
+  snapshot=await runtime.snapshot(threadId);
+  assert.equal(snapshot.permissions.sandbox.type,'readOnly');
+});
+
+test('manual handoff also clears permissions when joining an automatic release', async t => {
+  const runtime=start(t,60_000,'tightened-resume');
+  const {threadId}=await runtime.create({cwd,clientRequestId:'create',permissionMode:'full-access'});
+  await Promise.all([runtime.requestRelease(threadId),runtime.release(threadId)]);
+  await runtime.cancelRelease(threadId);
+  await runtime.open(threadId);
+  assert.equal((await runtime.snapshot(threadId)).permissions.sandbox.type,'readOnly');
+});
+
+test('automatically restored permissions are checked against changed native requirements', async t => {
+  for (const reopen of [true,false]) {
+    const runtime=start(t);
+    const {threadId}=await runtime.create({cwd,clientRequestId:'create',permissionMode:'full-access'});
+    if (reopen) { await runtime.requestRelease(threadId); await runtime.cancelRelease(threadId); }
+    else await (runtime as any).closeIdleServer();
+    const call=(runtime as any).call.bind(runtime);
+    t.mock.method(runtime as any,'call',(method:string,params:any)=>method==='configRequirements/read'?Promise.resolve({requirements:{allowedSandboxModes:['read-only']}}):call(method,params));
+    await assert.rejects(reopen?runtime.open(threadId):runtime.send(threadId,{text:'must not run',clientRequestId:'blocked'}),{code:'RUNTIME_PERMISSION_UNAVAILABLE'});
+    const stats=await call('fixture/stats',{});
+    assert.equal(stats.lastResume,undefined);
+    assert.equal(stats.turnStarts,0);
+  }
+});
+
 test('release reserves the thread before its native history check', async (t) => {
   const runtime = start(t, 60_000, 'release-race');
   const { threadId } = await runtime.create({ cwd, clientRequestId: 'create' });

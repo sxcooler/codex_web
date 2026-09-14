@@ -41,6 +41,7 @@ type ThreadState = {
   nativeStatus?: any;
   pending: Map<string, PendingRequest>;
   permissions?: any;
+  selectedPermissionMode?: PermissionMode;
   recoverOnIdle?: boolean;
   released: boolean;
   reserved: boolean;
@@ -157,12 +158,13 @@ export class Runtime extends EventEmitter {
         if(!isObject(read?.thread))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread status is unavailable');
         state.cwd=read.thread.cwd;state.model=read.thread.model;
         if(read.thread.status?.type==='active')throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread is active in another client');
-        const resumed=await this.mutation<any>('thread/resume',{threadId,excludeTurns:true});
+        const policy=await this.resolvePermissions(state.selectedPermissionMode,state.cwd!);
+        const resumed=await this.mutation<any>('thread/resume',{threadId,excludeTurns:true,...(policy?threadPermissionOptions(policy):{})});
         if(!isObject(resumed?.thread))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread resume was not confirmed');
         if(resumed.thread.status?.type==='active')throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread is active in another client');
         state.loaded=true;state.released=false;state.handoffReady=false;state.externalWriter=false;
         state.nativeStatus=resumed.thread.status;state.model=resumed.model;
-        state.permissions=this.verifyPermissions(resumed,undefined,state.cwd!);
+        state.permissions=this.verifyPermissions(resumed,policy,state.cwd!);
         state.error=undefined;state.recoverOnIdle=false;
       } catch(error){
         const mapped=this.mapError(error);state.externalWriter=mapped.code==='RUNTIME_THREAD_CONFLICT';
@@ -246,9 +248,10 @@ export class Runtime extends EventEmitter {
     try {
       await this.getServer();
       const epoch = this.epoch;
-      const items = await this.readItems(threadId, turnId, itemId);
+      const turn = { id: turnId, items: [] as any[], itemsView: 'notLoaded' };
+      await this.readTurnBodies(threadId, [turn], itemId);
       if (epoch !== this.epoch) throw runtimeError(503, 'RUNTIME_SYNC_RESTARTED', 'Native runtime changed during output loading; retry');
-      const item = items.find(item => item.id === itemId);
+      const item = turn.items.find(item => item.id === itemId);
       if (item?.type !== 'commandExecution') throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Command output was not found');
       return { output: typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '' };
     } finally { this.reads--; this.scheduleIdle(); }
@@ -384,6 +387,7 @@ export class Runtime extends EventEmitter {
       state.emptyThreadEpoch = input.prompt ? undefined : this.epoch;
       try {
         state.permissions = this.verifyPermissions(result, policy, input.cwd);
+        state.selectedPermissionMode = input.permissionMode;
         state.cwd = input.cwd;
         state.model = result.model;
         this.change(threadId, 'thread', { thread: this.threadHeader(result.thread) });
@@ -434,7 +438,7 @@ export class Runtime extends EventEmitter {
           state.cwd = read.thread?.cwd ?? this.options.cwd;
           state.model = read.thread?.model;
         }
-        const policy = await this.resolvePermissions(input.permissionMode, state.cwd!, state.loaded && !state.released ? state.permissions : undefined);
+        const policy = await this.resolvePermissions(input.permissionMode ?? state.selectedPermissionMode, state.cwd!, state.loaded && !state.released ? state.permissions : undefined);
         if (!state.loaded || state.released) {
           const resumed = await this.mutation<any>('thread/resume', { threadId, excludeTurns: true, ...(policy ? threadPermissionOptions(policy) : {}) });
           state.permissions = this.verifyPermissions(resumed, policy, state.cwd!);
@@ -470,10 +474,13 @@ export class Runtime extends EventEmitter {
     return { threadId, turnId, status: state.activeTurnId ? 'interrupting' : 'idle' };
   }
 
-  release(threadId: string): Promise<any> {
+  release(threadId: string, automatic = false): Promise<any> {
     this.requireString(threadId, 'threadId');
     const state = this.state(threadId);
-    if (state.releasePromise) return state.releasePromise;
+    if (state.releasePromise) return automatic ? state.releasePromise : state.releasePromise.then(result => {
+      state.selectedPermissionMode = undefined;
+      return result;
+    });
     if (state.reserved) return Promise.reject(runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Thread operation is in progress'));
     state.reserved = true;
     state.releaseError = undefined;
@@ -493,6 +500,7 @@ export class Runtime extends EventEmitter {
           state.error = undefined;
           state.recoverOnIdle = false;
         }
+        if (!automatic) state.selectedPermissionMode = undefined;
         state.reserved = false;
         const runtimeStopped = state.handoffReady || await this.closeIdleServer();
         state.handoffReady = !!runtimeStopped;
@@ -519,7 +527,7 @@ export class Runtime extends EventEmitter {
     state.releaseError = undefined;
     this.change(threadId, 'release');
     if (!state.reserved) {
-      try { await this.release(threadId); } catch (error) {
+      try { await this.release(threadId, true); } catch (error) {
         if (this.mapError(error).code === 'RUNTIME_THREAD_BUSY') state.releaseError = undefined;
       }
     }
@@ -655,6 +663,7 @@ export class Runtime extends EventEmitter {
       sandboxPolicy: policy.sandbox,
     });
     state.permissions = structuredClone(policy);
+    if (input.permissionMode !== undefined) state.selectedPermissionMode = input.permissionMode;
     state.model = input.model ?? state.model;
     const turnId = result?.turn?.id;
     if (typeof turnId !== 'string') throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn start returned an invalid result');
@@ -1072,11 +1081,7 @@ export class Runtime extends EventEmitter {
     }
 
     const selected = window ? historyWindow([...turns.values()], window.before).turns : [...turns.values()];
-    for (const value of selected) {
-      if (value.itemsView === 'full') continue;
-      value.items = await this.readItems(threadId, value.id);
-      value.itemsView = 'full';
-    }
+    await this.readTurnBodies(threadId, selected);
     thread.turns = [...turns.values()];
     // A turn may finish while history is paginating; confirm the earlier active header.
     if (thread.status?.type === 'active' && !thread.turns.some((turn: any) => turn.status === 'inProgress')) {
@@ -1085,6 +1090,40 @@ export class Runtime extends EventEmitter {
       thread.status = latest.thread.status;
     }
     return thread;
+  }
+
+  private async readTurnBodies(threadId: string, turns: any[], itemId?: string): Promise<void> {
+    try {
+      for (const turn of turns) {
+        if (turn.itemsView === 'full') continue;
+        turn.items = await this.readItems(threadId, turn.id, itemId);
+        turn.itemsView = 'full';
+      }
+      return;
+    } catch (error) {
+      if (!isObject(error) || error.code !== 'RUNTIME_ITEMS_UNSUPPORTED') throw error;
+    }
+    // Older persisted threads expose full turns but do not implement item pagination.
+    const pending = new Map(turns.filter(turn => turn.itemsView !== 'full').map(turn => [turn.id, turn]));
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    while (pending.size) {
+      const page: any = await this.call('thread/turns/list', { threadId, cursor, limit: 1, sortDirection: 'desc', itemsView: 'full' });
+      if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native full turn history is unavailable');
+      for (const value of page.data) {
+        const turn = pending.get(value?.id);
+        if (!turn) continue;
+        if (value.itemsView !== 'full' || !Array.isArray(value.items)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native full turn history is incomplete');
+        turn.items = structuredClone(value.items);
+        turn.itemsView = 'full';
+        pending.delete(value.id);
+      }
+      if (!pending.size) return;
+      if (page.nextCursor === null) throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Requested turn history was not found');
+      if (typeof page.nextCursor !== 'string' || seen.has(page.nextCursor)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn pagination is invalid');
+      seen.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
   }
 
   private async readItems(threadId: string, turnId: string, itemId?: string): Promise<any[]> {
@@ -1189,7 +1228,7 @@ export class Runtime extends EventEmitter {
       setImmediate(async () => {
         try {
           for (const [id, state] of this.states) if (state.releaseRequested && !state.handoffReady && !state.releaseError && !state.releasePromise && !state.reserved && !state.activeTurnId && !state.pending.size) {
-            try { await this.release(id); } catch {}
+            try { await this.release(id, true); } catch {}
           }
         } finally { this.releaseQueued = false; }
       });
@@ -1241,6 +1280,7 @@ export class Runtime extends EventEmitter {
       return runtimeError(503, 'RUNTIME_UNAVAILABLE', `无法启动 Codex：${this.options.executable}。请检查文件、执行权限以及 CODEX_BIN 或 codexBin 配置。`);
     }
     const message = error instanceof Error ? error.message : '';
+    if (method === 'thread/items/list' && message === 'thread/items/list is not supported yet') return runtimeError(503, 'RUNTIME_ITEMS_UNSUPPORTED', 'Native item pagination is not supported');
     if (method === 'turn/steer' && /no active turn|expected.*turn|turn.*mismatch/i.test(message)) return runtimeError(409, 'RUNTIME_STEER_CONFLICT', '当前轮次已结束或变化，请刷新后重新发送');
     if (method === 'thread/turns/list' && message.trim().toLowerCase() === 'list_turns is not supported yet') return runtimeError(503, 'RUNTIME_HISTORY_UNSUPPORTED', 'Native turn history is not supported');
     if (method === 'thread/turns/list' && isObject(params) && typeof params.threadId === 'string'
