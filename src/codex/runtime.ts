@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { isDeepStrictEqual } from 'node:util';
 import { isAbsolute, resolve } from 'node:path';
@@ -739,6 +739,26 @@ export class Runtime extends EventEmitter {
     return { threadId, name: name.trim() };
   }
 
+  async accountIdentity(): Promise<{identity:string;resetProtocol:boolean}> {
+    const result=await this.call<any>('account/read',{refreshToken:false});
+    return {identity:createHash('sha256').update(JSON.stringify(result?.account??null)+'|'+this.epoch).digest('hex'),resetProtocol:result?.account?.type==='chatgpt'&&/^codex_remote_web\/0\.153\.4(?:\s|$)/.test(this.initializeInfo?.userAgent??'')};
+  }
+
+  readAccountUsage():Promise<any>{return this.call('account/rateLimits/read',{});}
+
+  async consumeAccountReset(input:{creditId:string;idempotencyKey:string},accountId:string):Promise<any>{
+    this.inFlight++;
+    try {
+      const server=await this.getServer();
+      if(!/^codex_remote_web\/0\.153\.4(?:\s|$)/.test(this.initializeInfo?.userAgent??''))throw runtimeError(409,'RUNTIME_ACCOUNT_UNSUPPORTED','当前 Codex 版本尚未验证重置接口。');
+      const usage=await server.request<any>('account/rateLimits/read',{});
+      if(typeof usage?.accountId!=='string'||!usage.accountId||createHash('sha256').update(usage.accountId).digest('hex')!==accountId||server!==this.server)throw runtimeError(409,'RUNTIME_ACCOUNT_CHANGED','账户已变化，请重新读取用量。');
+      try {return await server.request('account/rateLimitResetCredit/consume',input);}
+      catch {throw runtimeError(504,'RUNTIME_RESULT_UNKNOWN','重置结果待核实，请使用原操作标识重试。');}
+    } catch(error){throw this.mapError(error);}
+    finally {this.inFlight--;this.scheduleIdle();}
+  }
+
   async archive(threadId:string,archived=true):Promise<any>{
     this.requireString(threadId,'threadId');
     if(archived)await this.open(threadId);
@@ -863,6 +883,7 @@ export class Runtime extends EventEmitter {
     const method = message?.method;
     const params = message?.params;
     if (!isObject(params)) return;
+    if(method==='account/updated'||method==='account/rateLimits/updated')this.emit('accountChanged');
     if (method === 'serverRequest/resolved') {
       const pending = this.nativeRequests.get(nativeKey(params.requestId));
       if (pending) this.clearPending(pending, 'request');

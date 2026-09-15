@@ -11,6 +11,7 @@ A lightweight web client for Codex running on your development machine, accessib
 - Resizable, remembered three-pane layout; text, Markdown, and image previews, unified/split diffs, read-only Git history, and JUnit reports.
 - Native model, reasoning, and approval choices; rename, favorite, hide from Web, and clear Web metadata.
 - Private file/image attachments, Web Push, and a PWA that caches only the static shell.
+- Account limits, automatic reset times, and reset credits in the top bar; using a credit requires confirmation, and interrupted operations retain their identity for verification.
 
 ## Screenshots
 

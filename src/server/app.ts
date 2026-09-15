@@ -160,7 +160,7 @@ export async function buildServer(options: { dataDir: string; origin: string; ru
     if (error.validation || error.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || error.statusCode === 400) {
       return reply.code(400).send({ error: 'Invalid request' });
     }
-    if (['PROJECT_ERROR', 'RUNTIME_ERROR', 'UPLOAD_ERROR', 'PUSH_ERROR', 'REPORT_ERROR'].includes(error.code ?? '') || (error.code?.startsWith('RUNTIME_'))) {
+    if (['PROJECT_ERROR', 'RUNTIME_ERROR', 'UPLOAD_ERROR', 'PUSH_ERROR', 'REPORT_ERROR'].includes(error.code ?? '') || error.code?.startsWith('RUNTIME_') || error.code?.startsWith('ACCOUNT_')) {
       return reply.code(error.statusCode ?? 500).send({ error: error.message, code: error.code, partial: (error as any).partial });
     }
     return reply.code(500).send({ error: 'Internal server error' });
@@ -197,6 +197,7 @@ export async function buildServer(options: { dataDir: string; origin: string; ru
 
   app.post('/api/auth/logout', async (request, reply) => {
     auth.revokeSession(authenticatedTokens.get(request)!);
+    options.runtime?.emit('accountChanged');
     closeInvalidStreams();
     await pruneSubscriptions().catch(() => {});
     setCookie(reply, SESSION_COOKIE, '', origin.protocol === 'https:', true);

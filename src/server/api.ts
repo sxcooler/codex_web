@@ -4,6 +4,7 @@ import type { Runtime } from '../codex/runtime.ts';
 import type { Projects } from '../projects.ts';
 import { pathKey } from '../projects.ts';
 import { MetadataStore } from './metadata.ts';
+import { AccountUsage } from './account-usage.ts';
 import { parseTestReport } from './test-reports.ts';
 import type { UploadService } from './uploads.ts';
 
@@ -33,6 +34,9 @@ export function registerApi(app: FastifyInstance, options: {
     };
   });
   const metadata = new MetadataStore(join(options.dataDir, 'metadata.sqlite'));
+  const accountUsage=new AccountUsage(runtime,metadata.db);
+  app.get('/api/account/usage',{schema:{querystring:{type:'object',additionalProperties:false,properties:{refresh:{type:'string',enum:['true']}}}}},async request=>accountUsage.read((request.query as any).refresh==='true'));
+  app.post('/api/account/usage/reset',{schema:{...body({accountId:{type:'string',pattern:'^[a-f0-9]{64}$'},creditId:{type:'string',minLength:1,maxLength:512},idempotencyKey:{type:'string',format:'uuid'}}),querystring:empty}},async request=>accountUsage.reset(request.body as any));
   const readMeta = (threadId: string) => { try { return metadata.get(threadId); } catch { return null; } };
   const saveMeta = (threadId: string, projectPath: string | null, title: string | null) => {
     try { metadata.save(threadId, projectPath, title); return undefined; }
@@ -44,7 +48,7 @@ export function registerApi(app: FastifyInstance, options: {
   app.addHook('preClose', async () => { for (const connection of [...connections]) connection.close(); });
   app.addHook('onClose', async () => {
     clearInterval(expiry); for (const connection of [...connections]) connection.close();
-    await runtime.close(); metadata.close();
+    accountUsage.close(); await runtime.close(); metadata.close();
   });
 
   async function associated(threadId: string, window = false) {
