@@ -102,9 +102,9 @@ export function registerApi(app: FastifyInstance, options: {
       }
     });
   }
-  app.get('/api/sessions', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { ...text, maxLength: 2048 }, includeHidden:{type:'string',enum:['true','false']} } } } }, async request => {
-    const query=request.query as any; let result=await runtime.list(query.cursor); const wanted=result.data.length; const data:any[]=[];
-    while(true){for(const thread of result.data){const meta=readMeta(thread.id);if(query.includeHidden==='true'||!meta?.hidden)data.push({...thread,metadata:meta});}if(data.length>=wanted||!result.nextCursor)break;result=await runtime.list(result.nextCursor);}
+  app.get('/api/sessions', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { ...text, maxLength: 2048 }, includeHidden:{type:'string',enum:['true','false']},archived:{type:'string',enum:['true','false']} } } } }, async request => {
+    const query=request.query as any; let result=await runtime.list(query.cursor,query.archived==='true'); const wanted=result.data.length; const data:any[]=[];
+    while(true){for(const thread of result.data){const meta=readMeta(thread.id);if(query.archived==='true'||query.includeHidden==='true'||!meta?.hidden)data.push({...thread,metadata:meta});}if(data.length>=wanted||!result.nextCursor)break;result=await runtime.list(result.nextCursor,query.archived==='true');}
     return { ...result, data, nextCursor:result.nextCursor };
   });
   app.post('/api/sessions', { schema: body({ projectId: short, clientRequestId: requestId, prompt: {...text,minLength:0}, ...turnFields }, ['clientRequestId']) }, async request => createSession(request.body,request));
@@ -119,6 +119,7 @@ export function registerApi(app: FastifyInstance, options: {
   });
   app.post('/api/sessions/:threadId/messages', { schema: body({ text:{...text,minLength:0}, clientRequestId: requestId, expectedTurnId:short, ...turnFields }, ['text','clientRequestId']) }, async request => {const input=request.body as any;const nativeInput=await attachments(input,request,params(request).threadId);try{const result=await runtime.send(params(request).threadId,{text:input.text,clientRequestId:input.clientRequestId,expectedTurnId:input.expectedTurnId,model:input.model,effort:input.effort,permissionMode:input.permissionMode,...(nativeInput.length?{nativeInput}:{})});if(nativeInput.length)await options.uploads!.bindClaim(options.uploadOwner!(request),input.clientRequestId,params(request).threadId);return result;}catch(error){await rollbackRejected(input,request,error);throw error;}});
   app.post('/api/sessions/:threadId/abort', async request => runtime.abort(params(request).threadId));
+  for(const archived of [true,false])app.post('/api/sessions/:threadId/'+(archived?'archive':'unarchive'),{schema:body({},[])},async request=>runtime.archive(params(request).threadId,archived));
   app.post('/api/sessions/:threadId/open',{schema:body({},[])},async request=>runtime.open(params(request).threadId));
   app.post('/api/sessions/:threadId/release', async request => runtime.release(params(request).threadId));
   app.post('/api/sessions/:threadId/release-on-leave', async request => runtime.requestRelease(params(request).threadId));

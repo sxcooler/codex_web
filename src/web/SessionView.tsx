@@ -49,7 +49,7 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
       try{
         if(checkOpen){setOpening(true);setOpenError('');try{await api('/sessions/'+id+'/open',{},AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));}catch{if(!disposed&&!request.signal.aborted)setOpenError('会话占用状态未确认，请重试。历史仍可查看。');}finally{if(!disposed)setOpening(false);}}
         if(disposed||request.signal.aborted||paused)return;
-        const next=await api('/sessions/'+id,undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));if(disposed||request.signal.aborted||paused)return;accept(next);setReadError('');connect();}
+        let next:Json;try{next=await api('/sessions/'+id,undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));}catch(e:any){if(e.data?.code!=='RUNTIME_SYNC_RESTARTED'||disposed||request.signal.aborted||paused)throw e;next=await api('/sessions/'+id,undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));}if(disposed||request.signal.aborted||paused)return;accept(next);setReadError('');connect();}
       catch(e:any){if(!disposed&&!request.signal.aborted&&!paused)setReadError(e.message);}
       finally{inflight=false;if(!disposed){setReading(false);if(checkOpen)setOpening(false);if(pendingOpen){pendingOpen=false;void load(true);}}}
     };

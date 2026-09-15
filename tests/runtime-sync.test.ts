@@ -4,6 +4,19 @@ import { fileURLToPath } from 'node:url';
 import { Runtime } from '../src/codex/runtime.ts';
 const cwd = fileURLToPath(new URL('..', import.meta.url));
 const fixture = fileURLToPath(new URL('./fixtures/runtime-server.mjs', import.meta.url));
+
+test('snapshot waits for a stopping runtime before capturing its history epoch',async t=>{
+  const runtime=start(t,'pagination');const gate=Promise.withResolvers<void>();
+  (runtime as any).stopping=gate.promise.finally(()=>{(runtime as any).stopping=undefined;});
+  const loading=runtime.snapshot('existing');gate.resolve();
+  assert.equal((await loading).thread.id,'existing');
+  assert.equal((await runtime.history('existing','recent')).turns[0].id,'old');
+});
+test('history still rejects an actual runtime change during native pagination',async t=>{
+  const runtime=start(t);await runtime.diagnostics();
+  t.mock.method(runtime as any,'loadThread',async()=>{(runtime as any).epoch='changed';return {id:'existing',turns:[]};});
+  await assert.rejects(runtime.snapshot('existing'),(error:any)=>error.code==='RUNTIME_SYNC_RESTARTED');
+});
 function start(t: any, mode = 'normal') {
   const runtime = new Runtime({ executable: process.execPath, args: [fixture, mode], cwd, idleMs: 60000 });
   t.after(() => runtime.close());

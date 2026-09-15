@@ -1,0 +1,54 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>目录、归档与消息布局回归</title>
+<div id="root"></div><output id="result" style="position:fixed;bottom:0;right:0;z-index:100;background:#111;padding:8px">RUNNING</output>
+<script type="module">
+const check=(value,message)=>{if(!value)throw Error(message)},pause=()=>new Promise(r=>setTimeout(r,30));
+async function until(predicate,message){const end=Date.now()+7000;while(!predicate()){if(Date.now()>end)throw Error(message);await pause();}}
+const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent===text),response=(value,status=200)=>Response.json(value,{status});
+const archived=new Set(),reads=new Map(),operations=[];let holdList=false,finishList,failArchive=false,failReads=0;
+const long='long-name-'.repeat(20)+'.txt',nested='runs/moss-vl-nf4-20260915/fps1',file=nested+'/'+long,text='wide text '.repeat(100),sha='1'.repeat(40);
+const threads=[{id:'first',name:'目录测试'},{id:'second',name:'另一会话'}];
+const item=(type,id,value)=>type==='userMessage'?{type,id,content:[{type:'text',text:value}]}:{type,id,text:value};
+const turn={id:'turn',status:'completed',startedAt:1700000000,completedAt:1700000060,items:[item('userMessage','user','多行输入\n第二行'),item('agentMessage','middle','中间回复'),item('userMessage','steer','插话'),item('agentMessage','final','最终回复')]};
+history.replaceState(null,'','/sessions/first');localStorage.clear();
+window.confirm=()=>true;window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};
+window.fetch=async(input,options={})=>{
+ const url=new URL(input,location.origin),path=url.pathname,q=url.searchParams;
+ if(path==='/api/auth/session')return response({authenticated:true,csrfToken:'test'});
+ if(path==='/api/projects')return response({projects:[{id:'project',name:'Fixture',path:'/fixture'}]});
+ if(path==='/api/settings')return response({runtime:{}});
+ if(path==='/api/models')return response({data:[]});
+ if(path==='/api/permission-modes')return response({modes:[]});
+ if(path==='/api/sessions'){if(holdList)await new Promise(r=>{finishList=r;});return response({data:threads.filter(t=>archived.has(t.id)===(q.get('archived')==='true')),nextCursor:null});}
+ const match=/^\/api\/sessions\/(first|second)(.*)$/.exec(path);if(!match)throw Error('Unexpected '+path);const [,id,suffix]=match;
+ if(suffix==='/archive'||suffix==='/unarchive'){operations.push(suffix);if(failArchive)return response({error:'会话仍被占用'},409);if(suffix==='/archive')archived.add(id);else archived.delete(id);return response({threadId:id,archived:archived.has(id)});}
+ if(['/open','/cancel-release','/release-on-leave'].includes(suffix))return response({phase:'IDLE'});
+ if(suffix==='/status')return response({resync:false});
+ if(suffix===''){const count=(reads.get(id)??0)+1;reads.set(id,count);if(count===1||failReads-->0)return response({error:'Native runtime changed',code:'RUNTIME_SYNC_RESTARTED'},503);return response({thread:{...threads.find(t=>t.id===id),cwd:'/fixture',turns:[turn]},phase:'IDLE',pending:[],project:{id:'project'},epoch:'epoch',revision:0,syncCursor:'epoch:0'});}
+ if(suffix==='/files'){const directory=q.get('directory')??'',paths={'':['runs'],runs:['runs/moss-vl-nf4-20260915'],'runs/moss-vl-nf4-20260915':[nested],[nested]:[file]};if(!paths[directory])return response({error:'File not found'},404);return response({files:paths[directory].map(path=>({path,type:path===file?'file':'directory'}))});}
+ if(suffix==='/files/content')return response({text});
+ if(suffix==='/git/files')return response({files:[{path:file,status:'M'}]});
+ if(suffix==='/git/diff'||suffix==='/git/commit/diff')return response({hunks:[{oldStart:1,oldLines:1,newStart:1,newLines:1,lines:[{kind:'add',newLine:1,text}]}]});
+ if(suffix==='/git/log')return response({repository:true,commits:[{id:sha,parents:[],subject:text,author:'Fixture',date:'2026-09-15T00:00:00Z',refs:['refs/heads/'+long]}],branches:[],nextCursor:null});
+ if(suffix==='/git/commit')return response({commit:{id:sha,parents:[],subject:text,message:text,author:'Fixture',date:'2026-09-15T00:00:00Z'},files:[{path:file,status:'added'}]});
+ throw Error('Unexpected '+path);
+};
+const ready=()=>document.querySelector('[aria-label="刷新当前会话"]')?.getAttribute('aria-busy')==='false';
+const scrolls=node=>{check(node&&node.scrollWidth>node.clientWidth,'Long content is not scrollable');node.scrollLeft=80;check(node.scrollLeft>0,'Horizontal scrolling failed');};
+try{
+ await import('/src/web/main.tsx');await until(()=>ready()&&document.querySelector('h1')?.textContent==='目录测试','Initial read retry failed');check(reads.get('first')===2,'Cold restart must retry only the read');
+ const times=[...document.querySelectorAll('.message time')];check(times.length===2,'Missing times or invented per-item timestamps');check(times[0].dateTime==='2023-11-14T22:13:20.000Z'&&times[1].dateTime==='2023-11-14T22:14:20.000Z','Native seconds converted incorrectly');check(!document.querySelectorAll('.message')[2].querySelector('time'),'Steering must not use turn start time');
+ for(const message of document.querySelectorAll('.message.user')){check(message.querySelector('.avatar').getBoundingClientRect().left>message.querySelector('.message-body').getBoundingClientRect().left,'User message not aligned right');check(getComputedStyle(message.querySelector('.prose')).textAlign==='left','Multiline input became right-aligned text');}
+ holdList=true;document.querySelector('[aria-label="刷新最近会话"]').click();await until(()=>finishList,'List request not started');button('另一会话').click();button('目录测试').click();holdList=false;finishList();await until(()=>ready()&&document.querySelector('h1')?.textContent==='目录测试','Rapid switch lost current session');
+ failReads=2;document.querySelector('[aria-label="刷新当前会话"]').click();await until(()=>ready()&&document.querySelector('.composer [role=alert]'),'Repeated restart must stop and show error');const stopped=reads.get('first');await new Promise(r=>setTimeout(r,150));check(reads.get('first')===stopped,'Read retry loop');failReads=0;document.querySelector('[aria-label="刷新当前会话"]').click();await until(()=>ready()&&!document.querySelector('.composer [role=alert]'),'Manual recovery failed');
+ const right=document.querySelector('[aria-controls="right-sidebar"]');if(document.querySelector('#right-sidebar').hidden||getComputedStyle(document.querySelector('#right-sidebar')).display==='none')right.click();await pause();button('文件').click();await until(()=>button('▸ runs'),'Root missing');
+ for(const path of ['runs','runs/moss-vl-nf4-20260915',nested]){button('▸ '+path).click();await until(()=>document.querySelector('.git-panel .path')?.textContent.startsWith(path),'Folder not entered');await pause();}
+ await until(()=>button(file),'Deep file missing');scrolls(document.querySelector('.git-panel .file-list'));button(file).click();await until(()=>document.querySelector('.file-preview pre'),'Source missing');scrolls(document.querySelector('.file-preview pre'));
+ for(const parent of ['runs/moss-vl-nf4-20260915','runs','/']){button('上一级').click();await until(()=>document.querySelector('.git-panel .path')?.textContent.startsWith(parent),'Wrong parent');await pause();check(!document.querySelector('.git-panel [role=alert]'),'Parent returned file not found');}
+ button('变更').click();await until(()=>document.querySelector('.git-panel .file-list button span')?.textContent===file,'Changes missing');document.querySelector('.git-panel .file-list button').click();await until(()=>document.querySelector('.diff-view'),'Diff missing');scrolls(document.querySelector('.diff-view'));
+ button('Git 日志').click();await until(()=>document.querySelector('.git-commit'),'Log missing');scrolls(document.querySelector('.git-graph-list'));document.querySelector('.git-commit').click();await until(()=>document.querySelector('.commit-details .file-list button'),'Commit missing');scrolls(document.querySelector('.commit-details .file-list'));scrolls(document.querySelector('.commit-message'));scrolls(document.querySelector('.commit-details h3'));
+ if(innerWidth<=1000){right.click();document.querySelector('[aria-controls="left-sidebar"]').click();await pause();}
+ const menu=()=>document.querySelector('[aria-label="会话菜单 目录测试"]').closest('details');menu().open=true;failArchive=true;button('归档会话').click();await until(()=>menu()?.querySelector('[role=alert]'),'Archive failure not shown');check(location.pathname==='/sessions/first'&&button('目录测试'),'Failed archive removed session');failArchive=false;button('归档会话').click();await until(()=>location.pathname==='/'&&!button('目录测试'),'Archive did not close/remove session');
+ const scope=document.querySelector('[aria-label="会话列表范围"]');scope.value='archived';scope.dispatchEvent(new Event('change',{bubbles:true}));await until(()=>button('目录测试'),'Archived list missing');check(button('目录测试').disabled,'Archived thread opened for writing');menu().open=true;button('恢复归档').click();await until(()=>scope.value==='recent'&&button('目录测试')&&!button('目录测试').disabled,'Unarchive did not restore recent list');check(operations.join(',')==='/archive,/archive,/unarchive','Unexpected archive retries');
+ check(document.documentElement.scrollWidth<=innerWidth+1,'Layout overflows viewport');document.querySelector('#result').textContent='PASS: 目录 / 横向滚动 / 切换重试 / 归档恢复 / 右对齐 / 轮次时间';
+}catch(error){document.querySelector('#result').textContent='FAIL: '+error.message;console.error(error);}
+</script></html>

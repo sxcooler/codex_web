@@ -97,3 +97,6 @@
 .git-ref svg{flex-shrink:0}.fetch-result p{margin:6px 0}
 
 .session-locked{display:flex;align-items:center;gap:12px}.session-locked>svg{flex-shrink:0}.session-locked>span{flex:1}.session-locked>button{flex-shrink:0}
+
+.message.user{flex-direction:row-reverse;margin-left:auto;max-width:88%}.message.user .message-body{flex:0 1 auto;min-width:0}.message-heading{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:7px}.message-heading strong{font-size:13px}.message-heading time{font-size:11px;font-weight:400}.user .message-heading{flex-direction:row-reverse}.user .prose{text-align:left}.outgoing-status{text-align:right}
+.git-panel .file-list>button{width:max-content;min-width:100%}.git-panel .file-list span{white-space:pre;overflow-wrap:normal;flex-shrink:0}.git-panel .path,.git-panel .file-preview h3,.git-panel .commit-details h3,.git-panel .commit-message,.git-panel .commit-hash{white-space:pre;overflow-wrap:normal;overflow:auto;max-width:100%}.git-panel .path>button{margin-left:8px}.git-panel pre{overflow-wrap:normal}.git-commit-rows{min-width:max-content}.git-commit>span,.git-commit>small{max-width:none;overflow:visible;text-overflow:clip}

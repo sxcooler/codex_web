@@ -25,11 +25,11 @@ function App() {
   const [authenticated,setAuthenticated]=useState<boolean|null>(null),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [route,setRoute]=useState(location.pathname+location.search),[projects,setProjects]=useState<Project[]>([]),[sessions,setSessions]=useState<Json[]>([]),[cursor,setCursor]=useState<string|null>(null);
   const [sessionsLoading,setSessionsLoading]=useState(false),[sessionsError,setSessionsError]=useState(''),sessionsRequest=useRef(0),sessionsQuery=useRef<string|null>(null);
-  const [releaseStates,setReleaseStates]=useState<Record<string,Json>>({}),[includeHidden,setIncludeHidden]=useState(false),routeRef=useRef(route);
+  const [releaseStates,setReleaseStates]=useState<Record<string,Json>>({}),[archived,setArchived]=useState(false),[includeHidden,setIncludeHidden]=useState(false),routeRef=useRef(route);
   const bootstrap=useCallback(async()=>{try{const data=await api('/auth/session');setCsrfToken(data.csrfToken);setAuthenticated(data.authenticated);setError('');}catch(e:any){setError(e.message);}},[]);
   const releaseLeft=useCallback(async(id:string)=>{try{const result=await releaseOnLeave(id);setReleaseStates(old=>({...old,[id]:result}));}catch(e:any){setReleaseStates(old=>({...old,[id]:{error:e.message}}));}},[]);
   const loadSessions=useCallback(async(nextCursor?:string,passive=false)=>{
-    const query=new URLSearchParams();if(nextCursor)query.set('cursor',nextCursor);if(includeHidden)query.set('includeHidden','true');const path='/sessions'+(query.size?'?'+query:'');
+    const query=new URLSearchParams();if(nextCursor)query.set('cursor',nextCursor);if(includeHidden)query.set('includeHidden','true');if(archived)query.set('archived','true');const path='/sessions'+(query.size?'?'+query:'');
     if(passive&&sessionsQuery.current===path)return;sessionsQuery.current=path;
     const request=++sessionsRequest.current;setSessionsLoading(true);setSessionsError('');
     try {
@@ -40,7 +40,7 @@ function App() {
       setCursor(result.nextCursor);
     }catch(e:any){if(request===sessionsRequest.current)setSessionsError(e.message);}
     finally{if(request===sessionsRequest.current){sessionsQuery.current=null;setSessionsLoading(false);}}
-  },[includeHidden]);
+  },[includeHidden,archived]);
   useEffect(()=>{if(!authenticated||!Object.values(releaseStates).some(state=>state.status==='pending'))return;const timer=setInterval(()=>{if(document.visibilityState==='visible')void loadSessions(undefined,true);},5000);return()=>clearInterval(timer);},[authenticated,releaseStates,loadSessions]);
   const load=useCallback(async()=>{
     const results=await Promise.allSettled([api('/projects'),loadSessions()]);
@@ -59,8 +59,9 @@ function App() {
       <select aria-label="打开项目新任务" value="" onChange={e=>navigate('/?project='+encodeURIComponent(e.target.value))}><option value="" disabled>选择项目</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
       <button className="no-project" onClick={()=>navigate('/')}>无项目</button>
       <div className="side-section"><span className="muted">最近会话</span><button className="quiet" aria-label="刷新最近会话" disabled={sessionsLoading} onClick={()=>void loadSessions()}>{sessionsLoading?'刷新中…':'刷新'}</button></div>
-      <label className="show-hidden"><input type="checkbox" checked={includeHidden} onChange={e=>setIncludeHidden(e.target.checked)}/>显示已隐藏会话</label>
-      <nav className="recent" aria-label="最近会话" aria-busy={sessionsLoading}>{sessions.length?[...sessions].sort((a,b)=>Number(!!b.metadata?.favorite)-Number(!!a.metadata?.favorite)).map(s=><div className="recent-row" key={s.id}><button title={titleOf(s)} className={s.id===threadId?'selected':''} onClick={()=>navigate('/sessions/'+s.id)}>{s.metadata?.favorite?'★ ':''}{titleOf(s)}{s.metadata?.hidden?'（已隐藏）':''}</button><SessionMenu thread={s} onChanged={load}/>{releaseStates[s.id]?.error?<button className="release-warning" title={releaseStates[s.id].error} onClick={()=>void releaseLeft(s.id)}>释放未完成 · 重试</button>:releaseStates[s.id]?.status==='pending'?<span className="small muted">等待任务结束后释放</span>:null}</div>):<p className="muted">{sessionsLoading?'读取会话…':'暂无会话'}</p>}{cursor?<button disabled={sessionsLoading} onClick={()=>void loadSessions(cursor)}>加载更多</button>:null}</nav>
+      <select aria-label="会话列表范围" value={archived?'archived':'recent'} onChange={e=>setArchived(e.target.value==='archived')}><option value="recent">最近会话</option><option value="archived">已归档</option></select>
+      {!archived?<label className="show-hidden"><input type="checkbox" checked={includeHidden} onChange={e=>setIncludeHidden(e.target.checked)}/>显示已隐藏会话</label>:<p className="muted small">恢复归档后可继续会话。</p>}
+      <nav className="recent" aria-label="最近会话" aria-busy={sessionsLoading}>{sessions.length?[...sessions].sort((a,b)=>Number(!!b.metadata?.favorite)-Number(!!a.metadata?.favorite)).map(s=><div className="recent-row" key={s.id}><button disabled={archived} title={titleOf(s)} className={s.id===threadId?'selected':''} onClick={()=>navigate('/sessions/'+s.id)}>{s.metadata?.favorite?'★ ':''}{titleOf(s)}{s.metadata?.hidden?'（已隐藏）':''}</button><SessionMenu thread={s} archived={archived} onChanged={load} onArchive={async(id,value)=>{drafts.delete(id);setSessions(old=>old.filter(item=>item.id!==id));if(value&&/^\/sessions\/([a-zA-Z0-9-]+)$/.exec(location.pathname)?.[1]===id){releasedNavigation.add(id);navigate('/',true);}if(!value)setArchived(false);else await loadSessions();}}/>{releaseStates[s.id]?.error?<button className="release-warning" title={releaseStates[s.id].error} onClick={()=>void releaseLeft(s.id)}>释放未完成 · 重试</button>:releaseStates[s.id]?.status==='pending'?<span className="small muted">等待任务结束后释放</span>:null}</div>):<p className="muted">{sessionsLoading?'读取会话…':'暂无会话'}</p>}{cursor?<button disabled={sessionsLoading} onClick={()=>void loadSessions(cursor)}>加载更多</button>:null}</nav>
       <div className="side-footer"><button onClick={()=>navigate('/settings')}>⚙　设置</button><button onClick={async()=>{try{await api('/auth/logout',{});setAuthenticated(false);}catch(e:any){setError(e.message);}}}>↪　退出</button></div>
     </aside>
     <PaneSeparator side="left"/>
@@ -68,10 +69,10 @@ function App() {
   </PaneLayout>;
 }
 
-function SessionMenu({thread,onChanged}:{thread:Json;onChanged:()=>Promise<void>}){
+function SessionMenu({thread,archived,onChanged,onArchive}:{thread:Json;archived:boolean;onChanged:()=>Promise<void>;onArchive:(id:string,archived:boolean)=>Promise<void>}){
   const [error,setError]=useState(''),[busy,setBusy]=useState(false);
-  const change=async(path:string,body:Json)=>{setBusy(true);setError('');try{await api('/sessions/'+thread.id+path,body);await onChanged();}catch(e:any){setError(e.message);}finally{setBusy(false);}};
-  return <details className="session-menu"><summary aria-label={'会话菜单 '+titleOf(thread)}>⋯</summary><div><button disabled={busy} onClick={()=>{const name=window.prompt('会话名称',titleOf(thread));if(name?.trim())void change('/name',{name:name.trim()});}}>重命名</button><button disabled={busy} onClick={()=>void change('/metadata',{favorite:!thread.metadata?.favorite})}>{thread.metadata?.favorite?'取消收藏':'收藏'}</button><button disabled={busy} onClick={()=>void change('/metadata',{hidden:!thread.metadata?.hidden})}>{thread.metadata?.hidden?'恢复显示':'从 Web 隐藏'}</button><button disabled={busy} onClick={()=>{if(window.confirm('清除 Web 收藏、隐藏和标题偏好？原生聊天和项目文件会保留，会话可能再次出现在最近列表。'))void change('/metadata/clear',{});}}>清除 Web 元数据</button><ErrorBox error={error}/></div></details>;
+  const change=async(path:string,body:Json)=>{setBusy(true);setError('');try{await api('/sessions/'+thread.id+path,body);if(path==='/archive'||path==='/unarchive')await onArchive(thread.id,path==='/archive');else await onChanged();}catch(e:any){setError(e.message);}finally{setBusy(false);}};
+  return <details className="session-menu"><summary aria-label={'会话菜单 '+titleOf(thread)}>⋯</summary><div>{!archived?<><button disabled={busy} onClick={()=>{const name=window.prompt('会话名称',titleOf(thread));if(name?.trim())void change('/name',{name:name.trim()});}}>重命名</button><button disabled={busy} onClick={()=>void change('/metadata',{favorite:!thread.metadata?.favorite})}>{thread.metadata?.favorite?'取消收藏':'收藏'}</button><button disabled={busy} onClick={()=>void change('/metadata',{hidden:!thread.metadata?.hidden})}>{thread.metadata?.hidden?'恢复显示':'从 Web 隐藏'}</button><button disabled={busy} onClick={()=>{if(window.confirm('清除 Web 收藏、隐藏和标题偏好？原生聊天和项目文件会保留，会话可能再次出现在最近列表。'))void change('/metadata/clear',{});}}>清除 Web 元数据</button></>:null}<button disabled={busy} onClick={()=>{if(window.confirm(archived?'恢复此会话到最近会话？Web 隐藏偏好保持不变。':'归档此原生会话？历史和项目文件会保留，可从“已归档”恢复；本页草稿将清除。'))void change(archived?'/unarchive':'/archive',{});}}>{archived?'恢复归档':'归档会话'}</button><ErrorBox error={error}/></div></details>;
 }
 
 function Login({onLogin}:{onLogin:()=>void}) {

@@ -791,6 +791,20 @@ test('implicit native cwd is equivalent on create and resume without relaxing pe
     {...native,cwd:cwd+'/other'},
   ]) assert.throws(()=>(runtime as any).verifyPermissions(changed,expected,cwd),(e:any)=>e.code==='RUNTIME_PERMISSION_MISMATCH');
 });
+test('native archive moves and restores idle sessions and refuses active or external writers',async t=>{
+  const runtime=start(t),{threadId}=await runtime.create({cwd,clientRequestId:'archive-create',prompt:'done'});
+  await runtime.snapshot(threadId);
+  assert.equal((await runtime.archive(threadId)).archived,true);
+  assert.ok(!(await runtime.list()).data.some(item=>item.id===threadId));
+  assert.ok((await runtime.list(undefined,true)).data.some(item=>item.id===threadId));
+  assert.equal((await runtime.archive(threadId,false)).archived,false);
+  assert.ok((await runtime.list()).data.some(item=>item.id===threadId));
+  await runtime.send(threadId,{text:'hold',clientRequestId:'active-archive'});
+  await assert.rejects(runtime.archive(threadId),(error:any)=>error.code==='RUNTIME_THREAD_BUSY');
+  const external=start(t,60000,'resume-conflict');
+  await assert.rejects(external.archive('external'),(error:any)=>error.code==='RUNTIME_THREAD_BUSY');
+});
+
 test('session listing uses the native state index and preserves cursor/source filters',async t=>{
   const runtime=start(t);let args:any;
   t.mock.method(runtime as any,'call',async(method:string,input:any)=>{assert.equal(method,'thread/list');args=input;return {data:[{id:'listed'}],nextCursor:'next'};});

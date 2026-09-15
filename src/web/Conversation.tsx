@@ -12,8 +12,14 @@ export const TurnMessages=memo(function TurnMessages({turn,threadId,attachments,
     const process=Object.hasOwn(stepLabels,item.type),last=blocks.at(-1);
     if(process&&last?.process)last.items.push(item);else blocks.push({key:turn.id+':'+(item.id??index),items:[item],process});
   }
-  return <>{blocks.map((block,index)=>block.process?<ExecutionGroup key={block.key} items={block.items} threadId={threadId} turnId={turn.id} status={turn.status} phase={phase} last={index===blocks.length-1}/>:<Message key={block.key} item={block.items[0]} threadId={threadId} turnId={turn.id} attachments={attachments} streaming={turn.status==='inProgress'}/>)}</>;
+  const firstUser=turn.items?.find((item:Json)=>item.type==='userMessage'),lastAgent=turn.items?.filter((item:Json)=>item.type==='agentMessage').at(-1);
+  return <>{blocks.map((block,index)=>block.process?<ExecutionGroup key={block.key} items={block.items} threadId={threadId} turnId={turn.id} status={turn.status} phase={phase} last={index===blocks.length-1}/>:<Message key={block.key} item={block.items[0]} threadId={threadId} turnId={turn.id} attachments={attachments} streaming={turn.status==='inProgress'} timestamp={block.items[0]===firstUser?turn.startedAt:block.items[0]===lastAgent&&turn.status!=='inProgress'?turn.completedAt:undefined} timeLabel={block.items[0]===firstUser?'本轮开始':'本轮完成'}/>)}</>;
 });
+
+function MessageHeader({user=false,timestamp,timeLabel}:{user?:boolean;timestamp?:number;timeLabel?:string}){
+  const date=typeof timestamp==='number'&&timestamp>0?new Date(timestamp*1000):null;
+  return <div className="message-heading"><strong>{user?'用户':'Codex'}</strong>{date&&Number.isFinite(date.getTime())?<time className="muted" dateTime={date.toISOString()} title={timeLabel+' · '+date.toString()}>{date.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})}</time>:null}</div>;
+}
 
 function ExecutionGroup({items,threadId,turnId,status,phase,last}:{items:Json[];threadId:string;turnId:string;status:string;phase?:string;last:boolean}){
   const [open,setOpen]=useState(false),[visited,setVisited]=useState(false);
@@ -25,9 +31,9 @@ function ExecutionGroup({items,threadId,turnId,status,phase,last}:{items:Json[];
   </details>;
 }
 
-export const Message=memo(function Message({item,threadId,turnId,attachments=[],streaming=false,visible=true}:{item:Json;threadId:string;turnId?:string;attachments?:Json[];streaming?:boolean;visible?:boolean}) {
-  if(item.type==='userMessage')return <article className="message user"><div className="avatar">U</div><div className="message-body"><strong>用户</strong><div className="prose">{(item.content??[]).map((c:Json,i:number)=><div key={i}>{c.type==='localImage'&&attachments.some(a=>a.path===c.path)?<a href={attachments.find(a=>a.path===c.path)!.url} target="_blank" rel="noreferrer"><img className="history-image" src={attachments.find(a=>a.path===c.path)!.url} alt={attachments.find(a=>a.path===c.path)!.name}/></a>:c.type==='localImage'?<span>图片附件（原生历史）</span>:c.text??`[${c.type}]`}</div>)}</div></div></article>;
-  if(item.type==='agentMessage')return <article className="message"><div className="avatar codex">A</div><div className="message-body"><strong>Codex</strong><MarkdownView text={item.text??''} streaming={streaming}/></div></article>;
+export const Message=memo(function Message({item,threadId,turnId,attachments=[],streaming=false,visible=true,timestamp,timeLabel}:{item:Json;threadId:string;turnId?:string;attachments?:Json[];streaming?:boolean;visible?:boolean;timestamp?:number;timeLabel?:string}) {
+  if(item.type==='userMessage')return <article className="message user"><div className="avatar">U</div><div className="message-body"><MessageHeader user timestamp={timestamp} timeLabel={timeLabel}/><div className="prose">{(item.content??[]).map((c:Json,i:number)=><div key={i}>{c.type==='localImage'&&attachments.some(a=>a.path===c.path)?<a href={attachments.find(a=>a.path===c.path)!.url} target="_blank" rel="noreferrer"><img className="history-image" src={attachments.find(a=>a.path===c.path)!.url} alt={attachments.find(a=>a.path===c.path)!.name}/></a>:c.type==='localImage'?<span>图片附件（原生历史）</span>:c.text??`[${c.type}]`}</div>)}</div></div></article>;
+  if(item.type==='agentMessage')return <article className="message"><div className="avatar codex">A</div><div className="message-body"><MessageHeader timestamp={timestamp} timeLabel={timeLabel}/><MarkdownView text={item.text??''} streaming={streaming}/></div></article>;
   if(item.type==='commandExecution')return <Command item={item} threadId={threadId} turnId={turnId} visible={visible}/>;
   if(Object.hasOwn(stepLabels,item.type))return <Step item={item}/>;
   return <details className="tool"><summary><span>{item.type}</span><code>{item.command??item.changes?.map((change:Json)=>change.path).join(', ')??''}</code><span className="muted">{statusLabel(item)}</span></summary><pre>{pretty(item)}</pre></details>;

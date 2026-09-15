@@ -17,9 +17,10 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
   const runtime: any = new EventEmitter();
   let created: any;
   let replayCursor: string | undefined;
+  let archiveFilter=false,archiveInput:any;
   Object.assign(runtime, {
     create: async (input: any) => { created = input; return {threadId:'thread-1',status:'idle'}; },
-    list: async () => ({ data:[{id:'thread-1',cwd:created?.cwd}],nextCursor:null }),
+    list: async (_cursor:string,archived=false) => {archiveFilter=archived;return { data:[{id:'thread-1',cwd:created?.cwd}],nextCursor:null };},
     snapshot: async () => ({thread:{id:'thread-1',cwd:created?.cwd,turns:[]},phase:'IDLE',pending:[]}),
     status: async () => ({resync:false}),
     history: async (_id:string,before:string) => ({turns:[{id:before}],nextCursor:null}),
@@ -27,6 +28,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     replay: (_threadId:string,cursor?:string) => { replayCursor=cursor; return {reset:true,events:[]}; }, close: async () => {}, diagnostics: async () => ({available:true}),
     rename: async (_id:string,name:string) => ({name}),
     open: async () => ({phase:'IDLE'}),
+    archive: async (id:string,archived:boolean) => {archiveInput={id,archived};return {threadId:id,archived};},
   });
   try {
     const root = join(dir,'work'); await mkdir(root);
@@ -48,6 +50,16 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal(created.cwd,join(root,'test'));
     assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/open',headers,payload:{}})).json().phase,'IDLE');
     assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/open',headers,payload:{cwd:root}})).statusCode,400);
+    for(const kind of ['archive','unarchive']){
+      const url='/api/sessions/thread-1/'+kind;
+      assert.equal((await app.inject({method:'POST',url,headers:{...headers,cookie:headers.cookie.split(';')[0]},payload:{}})).statusCode,401);
+      assert.equal((await app.inject({method:'POST',url,headers:{...headers,'x-csrf-token':''},payload:{}})).statusCode,403);
+      assert.equal((await app.inject({method:'POST',url,headers,payload:{force:true}})).statusCode,400);
+      assert.equal((await app.inject({method:'POST',url,headers,payload:{}})).statusCode,200);
+      assert.deepEqual(archiveInput,{id:'thread-1',archived:kind==='archive'});
+    }
+    assert.equal((await app.inject({url:'/api/sessions?archived=true',headers})).statusCode,200);assert.equal(archiveFilter,true);
+    await app.inject({url:'/api/sessions',headers});assert.equal(archiveFilter,false);
     const fetchRoute='/api/sessions/thread-1/git/fetch';
     assert.equal((await app.inject({method:'POST',url:fetchRoute,headers:{...headers,cookie:headers.cookie.split(';')[0]},payload:{}})).statusCode,401);
     assert.equal((await app.inject({method:'POST',url:fetchRoute,headers:{...headers,'x-csrf-token':''},payload:{}})).statusCode,403);

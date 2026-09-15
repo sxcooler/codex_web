@@ -142,8 +142,8 @@ export class Runtime extends EventEmitter {
     if (!options.executable || !options.cwd || !Number.isSafeInteger(this.idleMs) || this.idleMs < 1) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'Invalid runtime options');
   }
 
-  async list(cursor?: string): Promise<{ data: any[]; nextCursor: string | null }> {
-    const result = await this.call<any>('thread/list', { cursor: cursor ?? null, sourceKinds: SOURCE_KINDS, useStateDbOnly: true });
+  async list(cursor?: string, archived = false): Promise<{ data: any[]; nextCursor: string | null }> {
+    const result = await this.call<any>('thread/list', { cursor: cursor ?? null, sourceKinds: SOURCE_KINDS, useStateDbOnly: true, ...(archived?{archived:true}:{}) });
     return { data: Array.isArray(result?.data) ? result.data.map((thread: any) => ({ ...thread, ...(this.states.has(thread.id) ? { release: this.releaseState(this.states.get(thread.id)!) } : {}) })) : [], nextCursor: typeof result?.nextCursor === 'string' ? result.nextCursor : null };
   }
 
@@ -191,9 +191,7 @@ export class Runtime extends EventEmitter {
     const changed = (event: Change) => { if (event.threadId === threadId) changes.push(event); };
     this.on('snapshotChange', changed);
     let thread: any;
-    const reading = this.readThread(threadId, options?.window ? {} : undefined), epoch = this.epoch;
-    try { thread = await reading; } finally { this.off('snapshotChange', changed); }
-    if (epoch !== this.epoch) throw runtimeError(503, 'RUNTIME_SYNC_RESTARTED', 'Native runtime changed during history loading; retry the snapshot');
+    try { thread = await this.readThread(threadId, options?.window ? {} : undefined); } finally { this.off('snapshotChange', changed); }
     const mergedThread = this.mergeThread(thread, state);
     for (const event of changes) this.mergeSnapshotPatch(mergedThread, event.patch);
     // A read started before a newer operation/notification must not unlock that work.
@@ -233,9 +231,7 @@ export class Runtime extends EventEmitter {
   async history(threadId: string, before: string): Promise<{ turns: any[]; nextCursor: string | null }> {
     this.requireString(threadId, 'threadId');
     this.requireString(before, 'before');
-    const reading = this.readThread(threadId, { before }), epoch = this.epoch;
-    const thread = await reading;
-    if (epoch !== this.epoch) throw runtimeError(503, 'RUNTIME_SYNC_RESTARTED', 'Native runtime changed during history loading; retry');
+    const thread = await this.readThread(threadId, { before });
     const page = historyWindow(thread.turns, before);
     return { turns: page.turns.map(browserTurn), nextCursor: page.nextCursor };
   }
@@ -743,6 +739,19 @@ export class Runtime extends EventEmitter {
     return { threadId, name: name.trim() };
   }
 
+  async archive(threadId:string,archived=true):Promise<any>{
+    this.requireString(threadId,'threadId');
+    if(archived)await this.open(threadId);
+    const state=this.state(threadId);
+    if(state.reserved||state.activeTurnId||state.pending.size||state.releasePromise||(archived&&this.phase(state)!=='IDLE'))throw runtimeError(409,'RUNTIME_THREAD_BUSY','会话仍被占用，请先结束任务或在其他应用中关闭。');
+    state.reserved=true;
+    try{
+      await this.mutation(archived?'thread/archive':'thread/unarchive',{threadId});
+      state.loaded=false;state.released=true;state.handoffReady=true;state.releaseRequested=false;state.releaseError=undefined;state.externalWriter=false;state.error=undefined;state.recoverOnIdle=false;state.nativeStatus={type:'notLoaded'};this.clearLiveState(state);
+      return {threadId,archived};
+    }finally{state.reserved=false;this.change(threadId,'archive');this.scheduleIdle();}
+  }
+
   private verifyPermissions(result: any, expected?: PermissionPolicy, cwd?: string): PermissionPolicy {
     if (!expected) {
       const approval = result?.approvalPolicy, sandbox = result?.sandbox;
@@ -1040,7 +1049,12 @@ export class Runtime extends EventEmitter {
 
   private async readThread(threadId: string, window?: HistoryWindow): Promise<any> {
     this.reads++;
-    try { return await this.loadThread(threadId, window); }
+    try {
+      await this.getServer();
+      const epoch=this.epoch,thread=await this.loadThread(threadId, window);
+      if(epoch!==this.epoch)throw runtimeError(503,'RUNTIME_SYNC_RESTARTED','会话运行时已切换，请重新读取历史。');
+      return thread;
+    }
     finally { this.reads--; this.scheduleIdle(); }
   }
 

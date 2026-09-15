@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline';
 
 const threads = new Map();
+const archivedThreads = new Set();
 const approvals = new Map();
 const mode = process.argv[2] ?? 'normal';
 let initialized = false;
@@ -178,7 +179,11 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (method === 'configRequirements/read') return send({ id, result: { requirements: mode === 'managed' ? { allowedSandboxModes: ['read-only'], allowedApprovalPolicies: ['on-request'] } : null } });
   if (method === 'thread/name/set') { threads.get(params.threadId).name = params.name; return send({id,result:{}}); }
   if (method === 'account/read') return send({ id, result: { account: { type: 'chatgpt', email: 'fixture@example.test', planType: 'plus' }, requiresOpenaiAuth: true } });
-  if (method === 'thread/list') return send({ id, result: { data: [...threads.values()].map((value) => ({ ...value, turns: [] })), nextCursor: null, backwardsCursor: null } });
+  if (method === 'thread/list') return send({ id, result: { data: [...threads.values()].filter(value=>archivedThreads.has(value.id)===!!params.archived).map((value) => ({ ...value, turns: [] })), nextCursor: null, backwardsCursor: null } });
+  if (method === 'thread/archive' || method === 'thread/unarchive') {
+    if(method==='thread/archive')archivedThreads.add(params.threadId);else archivedThreads.delete(params.threadId);
+    return send({id,result:method==='thread/archive'?{}:{thread:threads.get(params.threadId)}});
+  }
   if (method === 'thread/start') {
     lastThread = params;
     const value = thread(mode === 'unmaterialized-current' ? '00000000-0000-4000-8000-000000000010' : `thread-${nextThread++}`, params.cwd);
