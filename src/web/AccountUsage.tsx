@@ -1,17 +1,17 @@
-import {createContext,useCallback,useContext,useEffect,useRef,useState,type ReactNode} from 'react';
+import {createContext,useCallback,useContext,useEffect,useRef,useState,type CSSProperties,type ReactNode} from 'react';
 import {api} from './api.ts';
 import {absoluteTime,countdown,creditCount,credits,finite,headlineRemaining,isCodex,pendingKey,readPending,remaining,timestamp,usableCredit,usageGroups,windowLabel,type AccountUsage,type ResetCredit,type ResetOperation,type UsageGroup} from './accountUsage.ts';
 
-const Context=createContext<{open:(source:HTMLElement)=>void;label:string;stale:boolean}|null>(null);
+const Context=createContext<{open:(source:HTMLElement)=>void;label:string;remaining:number|null;stale:boolean}|null>(null);
 const text=(value:unknown,fallback:string)=>typeof value==='string'&&value.trim()?value:fallback;
 const expiry=(credit:ResetCredit)=>credit.expiresAt===null?'无到期限制':absoluteTime(credit.expiresAt);
 const results:Record<string,string>={reset:'重置成功',nothingToReset:'当前无需重置',noCredit:'该机会已不可用',alreadyRedeemed:'该机会已使用'};
 const rejectedCodes=new Set(['ACCOUNT_CREDIT_UNAVAILABLE','ACCOUNT_RESET_UNSUPPORTED','ACCOUNT_CHANGED','ACCOUNT_INVALID_INPUT','ACCOUNT_RESET_CONFLICT','ACCOUNT_RESET_BUSY']);
 function Group({name,group,now}:{name:string;group:UsageGroup;now:number}){
   const windows=[group.primary,group.secondary].filter(value=>value!=null);
-  return <section className="usage-group"><h3>{name}</h3>{windows.length?windows.map((window,index)=>{const value=remaining(window),label=windowLabel(window?.windowDurationMins);return <div className="usage-window" key={index}><div><strong>{label}</strong><span>{value===null?'暂不可用':`${Math.round(value)}% 剩余`}</span></div>{value!==null?<progress max={100} value={value} aria-label={`${name} ${label}剩余额度`}/>:null}<p className="small muted">自动重置：{absoluteTime(window?.resetsAt)}<br/>{countdown(window?.resetsAt,now)}</p></div>;}):<p className="muted">暂不可用</p>}</section>;
+  return <section className="usage-group"><h3>{name}</h3>{windows.length?windows.map((window,index)=>{const value=remaining(window),label=windowLabel(window?.windowDurationMins);return <div className="usage-window" key={index} data-status={value===null?'unknown':'current'} style={value!==null?{'--usage-hue':value*1.5} as CSSProperties:undefined}><div><strong>{label}</strong><span className="usage-remaining">{value===null?'暂不可用':`${Math.round(value)}% 剩余`}</span></div>{value!==null?<progress max={100} value={value} aria-label={`${name} ${label}剩余额度`}/>:null}<p className="small muted">自动重置：{absoluteTime(window?.resetsAt)}<br/>{countdown(window?.resetsAt,now)}</p></div>;}):<p className="muted">暂不可用</p>}</section>;
 }
-export function AccountUsageButton(){const state=useContext(Context);return state?<button type="button" className="account-usage-button" data-status={state.stale?'stale':state.label?'current':'unknown'} onClick={event=>state.open(event.currentTarget)} aria-label={'账户用量'+(state.stale?'，数据待更新':'')}><span>用量</span><span className="usage-headline">{state.label}</span>{state.stale?<span className="usage-stale" aria-hidden="true">待更新</span>:null}</button>:null;}
+export function AccountUsageButton(){const state=useContext(Context);return state?<button type="button" className="account-usage-button" data-status={state.stale?'stale':state.remaining!==null?'current':'unknown'} style={state.remaining!==null?{'--usage-hue':state.remaining*1.5} as CSSProperties:undefined} onClick={event=>state.open(event.currentTarget)} aria-label={'账户用量'+(state.stale?'，数据待更新':state.label)}><span className="usage-badge"><span>用量</span><span className="usage-headline">{state.label}</span>{state.stale?<span className="usage-stale" aria-hidden="true">待更新</span>:null}</span></button>:null;}
 export function AccountUsageProvider({children}:{children:ReactNode}){
   const [data,setData]=useState<AccountUsage|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[open,setOpen]=useState(false),[now,setNow]=useState(Date.now());
   const [selected,setSelected]=useState<{accountId:string;credit:ResetCredit}|null>(null),[pending,setPending]=useState<ResetOperation|null>(null),[busy,setBusy]=useState(false),[storageError,setStorageError]=useState('');
@@ -91,7 +91,7 @@ export function AccountUsageProvider({children}:{children:ReactNode}){
   };
   const groups=usageGroups(data),main=groups.find(isCodex),others=groups.filter(group=>!isCodex(group)),count=creditCount(data?.rateLimitResetCredits?.availableCount),items=credits(data),value=headlineRemaining(data),stale=!!data&&(!!error||!!data.stale||!!data.error||!finite(data.updatedAt)||now-data.updatedAt>60000);
   const incomplete=count!==null&&BigInt(count)>BigInt(items.filter(item=>usableCredit(item,now)).length);
-  return <Context.Provider value={{open:source=>{opener.current=source;setOpen(true);setNow(Date.now());void read();},label:value===null||stale?'':` · ${Math.round(value)}%`,stale:stale||!!error}}>{children}
+  return <Context.Provider value={{open:source=>{opener.current=source;setOpen(true);setNow(Date.now());void read();},label:value===null||stale?'':` · ${Math.round(value)}%`,remaining:value,stale:stale||!!error}}>{children}
     <dialog ref={panel} className="account-usage-dialog" aria-labelledby="account-usage-title" onCancel={event=>{event.preventDefault();setOpen(false);}} onClick={event=>{if(event.target===event.currentTarget)setOpen(false);}}><div className="usage-content">
       <div className="usage-heading"><h2 id="account-usage-title">账户用量</h2><button type="button" className="quiet" aria-label="关闭账户用量" onClick={()=>setOpen(false)}>关闭</button></div>
       <p className="muted">当前 Codex 账户，所有客户端共享</p>
