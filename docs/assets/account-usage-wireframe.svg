@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="890" viewBox="0 0 1200 890" role="img" aria-labelledby="title desc">
+  <title id="title">Codex 用量与重置机会界面示意</title>
+  <desc id="desc">顶部是电脑顶栏入口，下方从左到右是手机会话页、用量面板、消耗一次机会前的二次确认。所有数据都是示例。</desc>
+  <defs>
+    <style>
+      text{font-family:'Microsoft YaHei','Noto Sans CJK SC',sans-serif;fill:#e6edf0;font-size:17px}
+      .heading{font-size:25px;font-weight:700}.label{font-size:19px;font-weight:700}.muted{fill:#a5b2bb;font-size:15px}.small{font-size:14px}.mint{fill:#83d8b6}.dark{fill:#122a22;font-weight:700}.border{stroke:#394650;stroke-width:1.5}.panel{fill:#171e23}.card{fill:#202a30}.button{fill:#83d8b6}.line{stroke:#394650;stroke-width:1.5}
+    </style>
+  </defs>
+  <rect width="1200" height="890" fill="#10161a"/>
+  <text x="25" y="42" class="heading">Codex 用量与重置机会</text>
+  <text x="25" y="70" class="muted">待确认设计 · 布局示意 · 所有数字和日期均为示例</text>
+  <rect x="25" y="93" width="1150" height="64" rx="12" class="panel border"/>
+  <rect x="44" y="112" width="25" height="25" rx="3" fill="none" class="border"/><path d="M52 113v23" class="line"/>
+  <text x="90" y="133" class="label">Codex Web</text>
+  <text x="347" y="132" class="muted">电脑：最上方横条，点击入口打开面板</text>
+  <rect x="927" y="105" width="173" height="40" rx="9" fill="#233c34" class="border"/>
+  <text x="949" y="131" class="mint">用量 · 71%</text>
+  <rect x="1128" y="112" width="25" height="25" rx="3" fill="none" class="border"/><path d="M1145 113v23" class="line"/>
+
+  <text x="25" y="198" class="label">① 手机：顶栏入口</text>
+  <text x="415" y="198" class="label">② 点击后：账户用量</text>
+  <text x="805" y="198" class="label">③ 使用前：二次确认</text>
+  <rect x="25" y="218" width="370" height="615" rx="18" class="panel border"/>
+  <path d="M25 285H395" class="line"/>
+  <rect x="41" y="242" width="21" height="22" rx="3" fill="none" class="border"/><path d="M48 243v20" class="line"/>
+  <text x="77" y="261" class="small">Codex Web</text>
+  <rect x="210" y="235" width="130" height="39" rx="8" fill="#233c34" class="border"/>
+  <text x="222" y="260" class="mint">用量 · 71%</text>
+  <rect x="355" y="242" width="21" height="22" rx="3" fill="none" class="border"/><path d="M369 243v20" class="line"/>
+  <text x="45" y="323" class="label">正在进行的会话</text>
+  <text x="45" y="351" class="muted">已连接 · 就绪</text>
+  <rect x="45" y="392" width="329" height="88" rx="10" class="card"/>
+  <text x="61" y="423">这里保留原来的对话内容。</text>
+  <text x="61" y="451" class="muted">查看用量不会离开会话。</text>
+  <text x="57" y="547" class="muted">窄屏空间不足时仅显示“用量”</text>
+  <text x="57" y="574" class="muted">仍可点击查看完整额度与机会</text>
+  <rect x="43" y="655" width="334" height="155" rx="12" class="card border"/>
+  <text x="59" y="688" class="muted">继续这个会话…</text>
+  <text x="59" y="781" class="small muted">回车换行 · 点击发送</text>
+  <rect x="294" y="754" width="66" height="39" rx="8" class="button"/><text x="309" y="780" class="dark small">发送</text>
+
+  <rect x="415" y="218" width="370" height="615" rx="18" class="panel border"/>
+  <text x="436" y="256" class="label">账户用量</text><text x="747" y="256" class="heading">×</text>
+  <text x="436" y="285" class="muted">当前 Codex 账户，所有客户端共享</text>
+  <text x="436" y="315" class="muted">更新于 07:40</text><text x="709" y="315" class="mint">刷新</text>
+  <rect x="434" y="333" width="332" height="181" rx="12" class="card border"/>
+  <text x="450" y="364" class="label">Codex</text>
+  <text x="450" y="395">每周额度</text><text x="640" y="395" class="mint">剩余 71%</text>
+  <rect x="450" y="411" width="298" height="9" rx="4" fill="#3d4952"/><rect x="450" y="411" width="212" height="9" rx="4" class="button"/>
+  <text x="450" y="450" class="muted">自动重置：09/20 12:52</text>
+  <text x="450" y="480" class="muted">约 5 天后 · 时区 UTC+08:00</text>
+  <text x="436" y="546">▸ 其他额度</text><text x="596" y="546" class="muted">点击展开各模型额度</text>
+  <path d="M435 565H765" class="line"/>
+  <text x="436" y="598" class="label">重置机会</text><text x="655" y="598" class="mint">可用 2 次</text>
+  <rect x="434" y="616" width="332" height="82" rx="10" class="card border"/>
+  <text x="450" y="646">Codex 额度重置</text><text x="450" y="676" class="muted">10/04 08:53 到期</text>
+  <rect x="691" y="637" width="59" height="40" rx="8" class="button"/><text x="703" y="663" class="dark small">使用</text>
+  <rect x="434" y="708" width="332" height="82" rx="10" class="card border"/>
+  <text x="450" y="738">Codex 额度重置</text><text x="450" y="768" class="muted">10/05 12:18 到期</text>
+  <rect x="691" y="729" width="59" height="40" rx="8" class="button"/><text x="703" y="755" class="dark small">使用</text>
+  <text x="436" y="817" class="muted small">使用前还会弹出确认，不会立即消耗</text>
+
+  <rect x="805" y="218" width="370" height="615" rx="18" class="panel border"/>
+  <text x="826" y="256" class="label" opacity=".25">账户用量</text>
+  <rect x="824" y="283" width="332" height="493" rx="12" fill="#11171b"/>
+  <rect x="825" y="344" width="330" height="361" rx="14" fill="#273139" class="border"/>
+  <text x="845" y="384" class="label">确认消耗 1 次重置机会？</text>
+  <text x="845" y="423">机会：Codex 额度重置</text>
+  <text x="845" y="454" class="muted">范围：Codex 使用额度</text>
+  <text x="845" y="484" class="muted">到期：10/04 08:53（UTC+08:00）</text>
+  <text x="845" y="514" class="muted">当前可用：2 次</text>
+  <path d="M845 535H1134" class="line"/>
+  <text x="845" y="562" class="small">成功消耗后，本页面不提供撤销。</text>
+  <text x="845" y="588" class="small muted">实际额度与次数以操作结果为准。</text>
+  <rect x="845" y="629" width="87" height="47" rx="9" fill="#35414b" stroke="#b6c6d0" stroke-width="2"/><text x="871" y="659">取消</text>
+  <rect x="945" y="629" width="190" height="47" rx="9" class="button"/><text x="965" y="659" class="dark">确认消耗 1 次</text>
+  <text x="831" y="805" class="muted small">提交中防重复点击；断线后先核实结果</text>
+  <text x="25" y="869" class="muted">流程：查看 → 选择机会 → 二次确认 → 提交 → 刷新额度与次数。不会自动消耗重置机会。</text>
+</svg>

@@ -13,6 +13,7 @@
 
 ## 当前设计
 
+- [Codex 用量与重置机会（待确认）](design/account-usage.md)：顶栏入口、手机面板、二次确认与异常处理示意。
 - [架构](design/architecture.md)：模块、原生 Thread 与访问边界。
 - [会话工作区](design/session-workspace.md)：第二阶段流程、模型/权限、附件、报告与通知。
 - [会话同步与性能](design/session-sync.md)：水位、回放、gzip、历史分页、按需输出与列表性能。
