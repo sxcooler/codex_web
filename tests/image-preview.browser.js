@@ -16,7 +16,7 @@ async (page) => {
   await page.getByRole('button',{name:'文件',exact:true}).click();
   await page.getByRole('button',{name:'photo.png',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.image-preview img')?.naturalWidth>0);
-  await page.addStyleTag({content:'body{display:block;margin:0}#root{max-width:390px}#root>.markdown-message,#result{display:none}.git-panel{height:auto!important;max-height:none!important;width:100%;overflow:visible}.file-list{height:100px!important}.file-preview{margin:0}'});
+  await page.addStyleTag({content:'body{display:block;margin:0}#root{max-width:390px}#root>.markdown-message,#result{display:none}#right-sidebar{height:calc(100dvh - 16px);width:100%}'});
   await page.locator('#right-sidebar').evaluate(el=>el.scrollTop=0);
   const bounds=await page.locator('.image-preview img').boundingBox();
   if(bounds.width>390)throw Error('Image exceeds mobile viewport');
