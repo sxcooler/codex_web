@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { setTimeout as delay } from 'node:timers/promises';
+import { managedServer, runServer, startBackground, stopServer } from './server-control.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export function parsePort(value: string): number {
@@ -122,39 +122,49 @@ export async function loadPortableConfig(dataDir: string, terminal?: Terminal) {
   return config;
 }
 
+export async function launchPreference(config: { background?: boolean }, terminal?: Terminal, force = false): Promise<boolean> {
+  if (typeof config.background === 'boolean' && !force) return config.background;
+  if (!terminal) return false; // An unattended upgrade must not silently change foreground behavior.
+  for (;;) {
+    const choice = (await terminal.question('以后启动后是否自动转入后台？[Y/n]（登录自启另行设置）: ')).trim().toLowerCase();
+    if (choice === '' || choice === 'y' || choice === 'yes') return true;
+    if (choice === 'n' || choice === 'no') return false;
+    process.stdout.write('请输入 Y 或 N。\n');
+  }
+}
+
 async function main() {
-  if (process.argv.slice(2).some(arg => arg !== '--no-browser')) throw new Error('仅支持 --no-browser 参数。');
+  const args = process.argv.slice(2);
+  if (args.some(arg => !['--no-browser', '--foreground', '--background', '--configure-startup', '--stop', '--status'].includes(arg)) || (args.includes('--foreground') && args.includes('--background')) || (args.includes('--stop') && args.includes('--status'))) throw new Error('支持 --no-browser / --foreground / --background / --configure-startup / --stop / --status。');
+  if (args.includes('--stop')) return stopServer();
+  if (args.includes('--status')) { const state = await managedServer(); process.stdout.write(state ? `运行中：${state.origin}\n` : '没有由此入口管理的运行实例。\n'); return; }
+  if (args.includes('--configure-startup') && !process.stdin.isTTY) throw new Error('请在交互终端修改启动偏好。');
   const dataDir = join(root, '.local', 'web');
   const config = await loadPortableConfig(dataDir);
   const port = parsePort(String(config.port ?? 3000)), origin = new URL(config.origin);
   if (!['http:', 'https:'].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw new Error('origin 必须是 HTTP/HTTPS 站点根地址。');
   if (!(await stat(config.workRoot).catch(() => null))?.isDirectory()) throw new Error('工作目录不存在，请检查 .local/web/config.json。');
   if (!(await stat(config.codexBin).catch(() => null))?.isFile()) throw new Error('Codex 路径不存在，请检查 .local/web/config.json。');
-  if (!await portAvailable(port)) throw new Error(`端口 ${port} 已占用，可能已经启动；打开 ${origin.origin}，或修改配置的 port 和 origin。`);
+  const existing = await managedServer();
+  if (!existing && !await portAvailable(port)) throw new Error(`端口 ${port} 已占用，可能已经启动；打开 ${origin.origin}，或修改配置的 port 和 origin。`);
   if (!await exists(join(dataDir, 'auth.json'))) {
     process.stdout.write('请设置本机 Web 管理员密码（输入时不显示）。\n');
     const result = childProcess.spawnSync(process.execPath, [join(root, 'scripts', 'setup-auth.ts')], { stdio: 'inherit', windowsHide: true });
     if (result.error || result.status !== 0) throw new Error(`密码初始化未完成，请重新运行 ${launcher}。`);
   }
-  // Portable mode uses its own configuration, never inherited developer overrides.
-  for (const key of ['WEB_ORIGIN', 'PORT', 'WORK_ROOT', 'CODEX_BIN']) delete process.env[key];
-  process.env.WEB_DATA_DIR = dataDir;
-  await import('../src/server/main.ts');
-  const { request } = await import('node:http');
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const ready = await new Promise<boolean>(resolve => {
-      const req = request({ hostname: '127.0.0.1', port, path: '/api/auth/session', headers: { Host: origin.host }, timeout: 500 }, response => { response.resume(); resolve(response.statusCode === 200); });
-      req.on('error', () => resolve(false)); req.on('timeout', () => req.destroy()); req.end();
-    });
-    if (ready) {
-      process.stdout.write(`服务已启动：${origin.origin}\n保持窗口打开；Ctrl+C 停止。用户数据位于 .local/web，分享时请使用原始发布压缩包。\n`);
-      if (!process.argv.includes('--no-browser')) openBrowser(origin.origin);
-      return;
-    }
-    if (process.exitCode) return;
-    await delay(200);
+  if ((typeof config.background !== 'boolean' || args.includes('--configure-startup')) && process.stdin.isTTY && !args.includes('--foreground') && !args.includes('--background')) {
+    const terminal: Terminal = { async question(prompt) { const reader = createInterface({input:process.stdin,output:process.stdout}); try { return await reader.question(prompt); } finally { reader.close(); } } };
+    config.background = await launchPreference(config, terminal, args.includes('--configure-startup'));
+    await writeFile(join(dataDir,'config.json'),JSON.stringify(config,null,2),{mode:0o600});
   }
-  throw new Error('启动未完成，请查看上面的错误信息。');
+  const background = args.includes('--background') || (!args.includes('--foreground') && await launchPreference(config));
+  if (!existing) {
+    if (background) await startBackground(true);
+    else await runServer(true);
+  }
+  const url = existing?.origin ?? origin.origin;
+  process.stdout.write(existing ? `服务已在运行：${url}\n` : `服务已启动：${url}\n${background?'启动窗口可以关闭；使用 Stop 入口停止。':'保持窗口打开；Ctrl+C 停止。'}\n`);
+  if (!args.includes('--no-browser')) openBrowser(url);
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(error => { process.stderr.write(`${error instanceof Error ? error.message : '启动失败'}\n`); process.exitCode = 1; });

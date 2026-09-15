@@ -1,30 +1,28 @@
 [CmdletBinding()]
-param([switch]$Start)
+param([switch]$Start, [switch]$Remove)
 $ErrorActionPreference = 'Stop'
-$projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-$taskName = 'Codex Remote Web'
-$systemShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$pwshPath = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
-if (-not $pwshPath) { $pwshPath = $systemShell }
-# Store updates remove versioned executables; the per-user app execution alias survives them.
-$storePattern = Join-Path $env:ProgramFiles 'WindowsApps\Microsoft.PowerShell_*\pwsh.exe'
-$storeAlias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
-if ($pwshPath -like $storePattern -and (Test-Path -LiteralPath $storeAlias)) { $pwshPath = $storeAlias }
-$scriptPath = Join-Path $PSScriptRoot 'start-server.ps1'
-$arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
-$legacyScript = Join-Path $projectRoot 'scripts\start-server.ps1'
-$legacyArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$legacyScript`""
-$previousArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$scriptPath`""
-$existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existing -and (($existing.Actions.Arguments -notin @($arguments, $previousArguments, $legacyArguments, $arguments.Replace($scriptPath, $legacyScript))) -or
-    ($existing.Actions.Execute -notin @($pwshPath, $systemShell) -and -not ($pwshPath -eq $storeAlias -and $existing.Actions.Execute -like $storePattern)))) {
-    throw 'A different task already uses this name. It was not overwritten.'
+$projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$script = Join-Path $PSScriptRoot 'start-server.ps1'
+$command = "`"$shell`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`" -Background"
+$sha = [Security.Cryptography.SHA256]::Create()
+try { $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($projectRoot.ToLowerInvariant()))).Replace('-', '').Substring(0,12) } finally { $sha.Dispose() }
+$name = "CodexWeb-$hash"
+$key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$existing = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).$name
+if ($existing -and $existing -ne $command) { throw 'A different startup command uses this name; nothing was changed.' }
+$task = Get-ScheduledTask -TaskName 'Codex Remote Web' -ErrorAction SilentlyContinue
+if ($task) {
+    $legacyScript = Join-Path $projectRoot 'scripts\start-server.ps1'
+    if (@($task.Actions).Count -ne 1 -or ($task.Actions.Arguments -notlike "*-File `"$script`"" -and $task.Actions.Arguments -notlike "*-File `"$legacyScript`"")) { throw 'Legacy task belongs to another command; nothing was changed.' }
+    Unregister-ScheduledTask -TaskName 'Codex Remote Web' -Confirm:$false
 }
-$userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$action = New-ScheduledTaskAction -Execute $pwshPath -Argument $arguments -WorkingDirectory $projectRoot
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
-$principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-if ($Start) { Start-ScheduledTask -TaskName $taskName }
-Write-Output "Installed '$taskName' for the current user's interactive logon."
+if ($Remove) {
+    if ($existing) { Remove-ItemProperty -LiteralPath $key -Name $name }
+    Write-Output 'Removed this workspace logon startup. Running servers were not stopped.'
+} else {
+    if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key | Out-Null }
+    New-ItemProperty -LiteralPath $key -Name $name -Value $command -PropertyType String -Force | Out-Null
+    Write-Output 'Installed logon startup for the current user. No scheduled task or service is required.'
+    if ($Start) { & $script -Background }
+}

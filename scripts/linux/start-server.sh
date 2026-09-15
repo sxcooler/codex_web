@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
-[[ $# == 0 ]] || fail 'Usage: bash scripts/linux/start-server.sh'
+[[ $# == 0 || ( $# == 1 && $1 == --background ) ]] || fail 'Usage: bash scripts/linux/start-server.sh [--background]'
 check_node
 check_ready
+if [[ ${1:-} == --background ]]; then
+  args=(--background)
+  [[ ! -x "$repo/runtime/node" ]] || args+=(--portable)
+  exec "$node" "$repo/scripts/server-control.ts" "${args[@]}"
+fi
 command -v flock >/dev/null || fail 'Install util-linux (flock) first.'
 exec 9>"$data/server.lock"
 flock -n 9 || fail 'This workspace already has a running Web server.'

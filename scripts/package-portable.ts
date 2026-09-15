@@ -12,7 +12,7 @@ const executable = windows ? 'node.exe' : 'node';
 // Official v24.20.0 SHASUMS256.txt; Linux binary hash is derived from the verified archive.
 const linuxArchiveHash = '2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2';
 const nodeHash = windows ? '5c976096e04e5c2c1f091938926234cc9fbebfe9787ddd149351b3b0ecc707b5' : '89af8424dd53e560b1933f87ba650d8bf57c83ca5a04600eefb31f416aabbae7';
-export const runtimeFiles = ['src/server', 'src/codex', 'src/projects.ts', 'scripts/setup-auth.ts', 'scripts/portable.ts', 'dist'];
+export const runtimeFiles = ['src/server', 'src/codex', 'src/projects.ts', 'scripts/setup-auth.ts', 'scripts/portable.ts', 'scripts/server-control.ts', 'scripts/windows', 'scripts/linux', 'dist'];
 export function sourceAllowed(path: string): boolean {
   return !path.toLowerCase().split('/').some(part => ['.git', '.local', '.worktrees', '.superpowers', '.codebase-memory', 'node_modules', 'dist', 'releases', 'output', 'test-results', 'playwright-report'].includes(part))
     && !/(^|\/)\.env(?!\.example$)|\.(?:sqlite(?:-wal|-shm)?|db|log|pem|key|pfx)$/i.test(path)
@@ -91,10 +91,12 @@ async function main() {
     await rm(join(portable, 'node_modules', '.bin'), { recursive: true, force: true });
     await mkdir(join(portable, 'runtime'));
     await writeFile(join(portable, 'runtime', executable), binary); await writeFile(join(portable, 'runtime', 'NODE-LICENSE.txt'), license);
-    if (windows) await writeFile(join(portable, 'Start.cmd'), '@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\n"%~dp0runtime\\node.exe" "%~dp0scripts\\portable.ts" %*\r\nif errorlevel 1 pause\r\n');
+    if (windows) {
+      for (const [name, arg] of [['Start',''],['Stop','--stop'],['Status','--status']]) await writeFile(join(portable, name + '.cmd'), `@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\n"%~dp0runtime\\node.exe" "%~dp0scripts\\portable.ts" ${arg} %*\r\nset "codexExit=%errorlevel%"\r\n${name==='Start'?'if not "%codexExit%"=="0" pause':'pause'}\r\nexit /b %codexExit%\r\n`);
+    }
     else {
       await chmod(join(portable, 'runtime', executable), 0o755);
-      await writeFile(join(portable, 'Start.sh'), '#!/usr/bin/env bash\nset -euo pipefail\ncd -- "$(dirname -- "${BASH_SOURCE[0]}")"\nexec ./runtime/node ./scripts/portable.ts "$@"\n', { mode: 0o755 });
+      for (const [name,arg] of [['Start',''],['Stop','--stop'],['Status','--status']]) await writeFile(join(portable, name + '.sh'), `#!/usr/bin/env bash\nset -euo pipefail\ncd -- "$(dirname -- "\${BASH_SOURCE[0]}\")"\nexec ./runtime/node ./scripts/portable.ts ${arg} "$@"\n`, { mode: 0o755 });
     }
     for (const path of tracked) if ((['README.md', 'README_EN.md'].includes(path) || path.startsWith('docs/')) && sourceAllowed(path)) await copy(join(repo, path), join(portable, path));
     await writeFile(join(portable, 'THIRD-PARTY-NOTICES.txt'), 'Node.js: runtime/NODE-LICENSE.txt\nDependency licenses and notices are retained in node_modules.\nCodex CLI is not included; use your own installation and account.\n');

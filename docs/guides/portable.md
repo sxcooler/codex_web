@@ -7,7 +7,12 @@
 1. 将整个包解压到可写目录，例如 Windows 的 `D:\Apps\CodexWeb` 或 Linux 的 `~/apps/codex-web`。Linux 使用 `tar -xzf 包名.tar.gz` 保留执行权限；不要直接在压缩包内运行。
 2. 项目需要 Git 时另行安装 Git；Codex CLI 可预先安装，也可在启动菜单选择安装方式。
 3. Windows 双击 `Start.cmd`，Linux 在解压目录运行 `bash Start.sh`。首次填写工作目录、本地端口，并设置 12–256 位 Web 管理员密码（输入不显示）。启动流程检查已有独立 CLI，缺失时按下节处理；账户登录按官方流程单独完成。
-4. 尝试用默认浏览器打开登录页，同时显示访问地址。保持启动终端打开，按 `Ctrl+C` 停止服务。启动命令添加 `--no-browser` 可关闭自动打开浏览器。
+4. 首次交互运行询问“以后启动后是否自动转入后台”，默认选择是，并保存到配置的 `background` 字段。旧配置在下一次交互启动补问；非交互启动且没有偏好时保持前台，不自动写入选择。
+5. 服务就绪后显示地址并尝试打开默认浏览器。后台启动窗口可以关闭；用 `Stop.cmd` / `bash Stop.sh` 停止，`Status.cmd` / `bash Status.sh` 查看状态。前台运行保持终端打开，按 `Ctrl+C` 停止。
+
+`--foreground`、`--background` 只覆盖本次启动；`--configure-startup` 在交互终端修改默认偏好；`--no-browser` 禁止自动打开浏览器。重复启动会复用本包已管理的实例，其他程序占用端口则失败，不终止该程序。后台模式不安装自启。Windows 可另行运行包内 `scripts/windows/install-startup.cmd` / `uninstall-startup.cmd` 安装或移除登录自启；Linux 可使用包内用户级 systemd 入口。包移动后须重新安装自启。
+
+启动、停止和状态共用本地管理连接验证实例身份，不根据裸 PID 杀进程；启动失败保留错误提示。Windows 日志位于 `.local/web/server.log`，运行时按约 1 MiB 轮转；Linux 后台输出到 `server.log` / `server-error.log`，启动时轮转，长时间运行需关注磁盘空间。其他入口手动运行的旧实例须在原终端停止后，才能改用这些入口。
 
 默认仅监听本机 `127.0.0.1`。端口被占用时提示退出，不停止其他程序。修改端口时同步修改 `origin`；远程 HTTPS 与完整配置见 [部署指南](deployment.md)。
 

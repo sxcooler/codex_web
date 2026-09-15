@@ -27,7 +27,7 @@ A lightweight web client for Codex running on your development machine, accessib
 
 | Host platform | Scope |
 | --- | --- |
-| Windows | Existing verification covers source execution, the Windows x64 portable package, and scheduled-task deployment; see the latest record for this round's regression status |
+| Windows | Source execution, Windows x64 portable packages, and current-user logon startup; compatible with built-in PowerShell 5.1 |
 | Linux | An x64 glibc portable package is available; source execution, live tasks, and sandbox boundaries have been verified as a non-root user on WSL2 Ubuntu 22.04; no claim covers all distributions |
 | macOS | Not adapted or verified in this round |
 
@@ -72,7 +72,9 @@ Download the appropriate package from [GitHub Releases](https://github.com/sxcoo
 | `codex-web-VERSION-linux-x64.tar.gz` | Run `tar -xzf PACKAGE.tar.gz`, enter the extracted directory, then run `bash Start.sh` |
 | `codex-web-VERSION-source.zip` | Platform-independent clean source; follow the source setup above |
 
-Portable packages include Node and platform-specific production dependencies; Node/npm installation is unnecessary. Git and Codex CLI are separate prerequisites. First-run setup asks for the work root, CLI, port, and password. If Codex is missing, install manually using the official page or explicitly consent to running the official installer for your platform. Account sign-in remains separate. Keep the terminal open and press Ctrl+C to stop; use `--no-browser` on headless Linux hosts.
+Portable packages include Node and platform-specific production dependencies; Node/npm installation is unnecessary. Git and Codex CLI are separate prerequisites. First-run setup asks for the work root, CLI, port, and password. If Codex is missing, install manually using the official page or explicitly consent to running the official installer for your platform. Account sign-in remains separate. The first interactive run also asks whether future launches should run in the background. Once ready, the launcher can close; use `Stop.cmd` / `bash Stop.sh` to stop and `Status.cmd` / `bash Status.sh` to inspect the instance. Override with `--foreground` / `--background`, change the saved preference with `--configure-startup`, or suppress the browser with `--no-browser`. Background mode does not enable logon startup.
+
+For Windows source deployments, use `scripts/windows/start-server.cmd`. Optional `scripts/windows/install-startup.cmd` uses the current user’s logon startup entry, without Task Scheduler, administrator privileges, or PowerShell 7. Remove it with `uninstall-startup.cmd`. Linux logon startup continues to use user-level systemd.
 
 The Linux package targets x64 glibc systems, with WSL2 Ubuntu 22.04 as the verification environment. ARM64, Alpine/musl, and macOS packages are not provided. Do not copy `node_modules` between platforms. Build natively with `npm ci` followed by `npm run package:portable`; artifacts are written to `releases/`. See the [portable package guide](docs/guides/portable.md) for configuration, upgrades, build prerequisites, and verification.
 

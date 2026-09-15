@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 [[ $# == 0 ]] || fail 'Usage: bash scripts/linux/stop-server.sh'
+check_node
+if [[ -f "$data/server-control.json" ]]; then "$node" "$repo/scripts/server-control.ts" --stop; fi
 if command -v systemctl >/dev/null && systemctl --user is-active --quiet "$unit" 2>/dev/null; then
   [[ $(systemctl --user show "$unit" -p FragmentPath --value) == "$unit_file" ]] && grep -Fxq -- "$marker" "$unit_file" || fail 'The systemd unit belongs to another workspace.'
   systemctl --user stop "$unit"

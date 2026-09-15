@@ -40,7 +40,7 @@ Linux 中先核对 `command -v node`、`command -v codex` 和各自 `--version`�
 | `.local/web/auth.json` | 管理员密码散列，禁止公开 |
 | `.local/web/*.sqlite*` | 登录会话与 Web 元数据，禁止公开 |
 | `.local/web/config.json` | 本机入口配置 |
-| `.local/web/server.log`、`.1` | Windows 启动日志，单文件约 1 MiB 轮转；Linux 前台输出到终端，自启服务使用 journal |
+| `.local/web/server.log`、`.1` | Windows 启动日志，单文件约 1 MiB 轮转；Linux 前台输出到终端，自启服务使用 journal；手动后台日志为 server.log / server-error.log，启动时轮转 |
 | `.local/web/service.env` | 可选 Linux systemd 环境文件，不公开 |
 | 默认用户 CODEX_HOME | Codex 原生历史与登录，由官方 CLI 管理 |
 
@@ -82,23 +82,22 @@ Linux 在宿主安装并登录 Tailscale、取得 Serve 操作权限后运行 `b
 
 核验：`tailscale serve status` 显示目标回环地址，在另一台 tailnet 设备访问 HTTPS 页面并登录。确认非 tailnet 设备不可访问；不要开放路由器端口或添加公网代理。手机浏览器支持时可“添加到主屏幕”；PWA 只缓存静态外壳，离线时不能提交任务，API 和会话正文不进入 PWA 缓存。
 
-## Windows 登录后启动
+## Windows 后台运行与登录后启动
 
-只需要本次后台运行时，双击 `scripts/windows/start-server.cmd` 即可；源码部署仍需先完成构建、密码和 Node 配置。它调用同名 PS1 的 `-Background` 模式，隐藏运行服务进程，并打印 `.local/web/server.log` 的位置。启动窗口可关闭，服务由 `stop-server.cmd` 停止。CMD 自动选择已有 PowerShell 7 或系统内置 5.1，进程级执行策略不修改全局配置。
+先完成构建、密码和 Node 配置，再双击 `scripts/windows/start-server.cmd`。使用当前用户隐藏运行服务，检查本实例就绪后关闭启动窗口；失败保留错误和日志路径。不要求 PowerShell 7，兼容系统内置 5.1。直接调用 `start-server.ps1` 不加 `-Background` 可前台运行。
 
-确认本地密码、构建产物和 origin 配置后：
+- 状态：`scripts/windows/status-server.cmd`。
+- 停止：`scripts/windows/stop-server.cmd`，先等待/中止运行任务并释放会话。通过随机令牌保护的本地管理连接停止本实例，走正常服务关闭和原生子进程清理；不批量结束 Node，也不终止其他入口启动的旧进程。
+- 登录自启：`scripts/windows/install-startup.cmd`，加 `-Start` 同时立即启动。
+- 移除自启：`scripts/windows/uninstall-startup.cmd` 或安装脚本加 `-Remove`。不会停止正在运行的服务。
 
-```powershell
-scripts\windows\install-startup.cmd -Start
-```
+登录自启使用 HKCU Run 的本项目专属键，由用户登录触发同一个隐藏启动入口；不再使用计划任务或 Windows 服务，不需要管理员权限。迁移时仅删除入口路径属于本项目的旧任务，同名不同命令拒绝修改。安装路径变化后重新安装；旧目录仍存在时先在旧目录卸载自启。执行策略仅作用于进程。
 
-任务名 `Codex Remote Web`，当前用户 Interactive 登录、普通权限、隐藏 PowerShell、IgnoreNew，失败最多重试 3 次。使用绝对路径，不要求启动目录。Microsoft Store 版 PowerShell 7 优先使用当前用户的稳定应用执行别名，避免升级删除版本目录后自启失效；重跑安装脚本可迁移本项目旧任务的版本路径，以及旧的 `scripts/start-server.ps1` 路径。脚本拒绝覆盖启动参数不同或属于其他程序的同名任务。
+后台运行与登录自启是两项独立设置；便携版首次询问默认前台/后台，选择后台不会安装自启。此方案保留当前用户和桌面会话，但不保证注销后继续运行，也不保证锁屏后的桌面工具可用。真实注销/重新登录仍需实际验证。
 
-在任务计划程序核对该任务的用户、触发器和“运行结果”；检查 `.local/web/server.log` 与浏览器登录。真正的注销/重新登录自启仍需实际操作验证。锁屏通常不影响后台任务，但游戏等 GUI 的可用性取决于交互桌面；本次没有验证锁屏/注销后的 GUI 行为。
+Windows 日志 `.local/web/server.log` 按约 1 MiB 轮转。进程和管理信息也在 `.local/web`，不能分享已使用过的便携目录。非这些入口启动的旧服务须先在原终端停止，不能根据“端口被占用”自动接管或结束它。
 
-停止 Web 前先中断/等待运行中的 Turn 并释放会话，然后执行 `scripts\windows\stop-server.cmd`。Windows 任务计划程序单独停止 PowerShell 后可能留下 Node 子进程；此脚本检查任务归属，再结束仅匹配本项目入口路径的 Node，不批量结束其他 Codex 进程。自启任务会保留；要移除自启，在任务计划程序中删除此精确任务。升级先停止服务，更新依赖及构建，再运行 `Start-ScheduledTask -TaskName 'Codex Remote Web'`。
-
-任务管理器里的 Node.js 数量不能直接视为 Web 残留：VS Code、Codex 的 MCP / 浏览器工具和 Playwright 也会启动 Node。先按启动命令、父子关系和监听端口确认归属，不要批量结束 `node.exe`。Windows 隔离回归 `tests/windows-service.test.ts` 验证停止本项目入口后其测试子进程、孙进程退出，无关 Node 保持运行；不代表任意外部工具的进程生命周期都已验证。
+背景与实施验收见 [后台运行方案](../design/background-running.md)。
 
 ## Linux 启停与登录后启动
 
@@ -106,6 +105,9 @@ scripts\windows\install-startup.cmd -Start
 
 ```sh
 bash scripts/linux/start-server.sh
+# 单次后台启动（不安装自启）
+bash scripts/linux/start-server.sh --background
+bash scripts/linux/status-server.sh
 # 另一终端停止，也可在前台按 Ctrl+C
 bash scripts/linux/stop-server.sh
 ```

@@ -13,6 +13,8 @@
 
 ## 当前设计
 
+- [当前用户后台运行](design/background-running.md)：源码/便携启停、首次偏好、用户启动项及迁移。
+
 - [Codex 用量与重置机会](design/account-usage.md)：顶栏入口、手机面板、二次确认与幂等恢复。
 - [架构](design/architecture.md)：模块、原生 Thread 与访问边界。
 - [会话工作区](design/session-workspace.md)：第二阶段流程、模型/权限、附件、报告与通知。

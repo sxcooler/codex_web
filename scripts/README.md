@@ -5,13 +5,15 @@
 | 功能 | Windows（可双击 CMD） | Linux（Bash） |
 | --- | --- | --- |
 | 后台启动（Windows）/ 前台启动（Linux） | `windows/start-server.cmd` | `linux/start-server.sh` |
+| 状态 | `windows/status-server.cmd` | `linux/status-server.sh` |
+| 移除登录自启 | `windows/uninstall-startup.cmd` | `systemctl --user disable --now 单元名` |
 | 停止 | `windows/stop-server.cmd` | `linux/stop-server.sh` |
 | 登录后自启 | `windows/install-startup.cmd -Start` | `linux/install-startup.sh --start` |
 | 私网 HTTPS（方案见部署指南） | `windows/configure-serve.cmd` | `linux/configure-serve.sh [PORT]` |
 
-CMD 只负责选择已有 PowerShell 7 或系统内置 5.1、转交参数及显示执行结果，业务逻辑仍在同名 PS1；不要求额外安装 PowerShell。启动 CMD 默认传入 `-Background`，隐藏服务进程，关闭启动窗口不停止服务；日志位于 `.local/web/server.log`。需要前台运行可直接调用 `start-server.ps1`（不加 `-Background`）。自启双击仅安装，下次登录启动；命令行加 `-Start` 可同时立即启动。入口和计划任务的执行策略只作用于当前进程，不修改系统全局策略。
+CMD 只负责选择已有 PowerShell 7 或系统内置 5.1、转交参数及显示执行结果，业务逻辑仍在同名 PS1；不要求额外安装 PowerShell。启动 CMD 默认传入 `-Background`，验证本实例就绪后退出，关闭启动窗口不停止服务；失败保留窗口。日志位于 `.local/web/server.log`。需要前台运行可直接调用 `start-server.ps1`（不加 `-Background`）。自启双击仅安装，下次登录启动；命令行加 `-Start` 可同时立即启动，`-Remove` 可移除。入口的执行策略只作用于当前进程，不修改系统全局策略。
 
-Windows 使用用户计划任务；Linux 使用用户级 systemd，也支持前台运行。前置配置、日志、停用自启及升级步骤见 [部署指南](../docs/guides/deployment.md)。旧版 Windows 用户升级后重新运行 `windows/install-startup.ps1`，迁移已有任务路径。
+Windows 使用 HKCU Run 当前用户启动项，不安装服务、不需要 PowerShell 7；Linux 使用用户级 systemd，也支持前台运行和 `start-server.sh --background`。前置配置、日志、停用自启及升级步骤见 [部署指南](../docs/guides/deployment.md)。旧版 Windows 用户升级后重新运行 `windows/install-startup.ps1`，迁移本项目旧计划任务到用户启动项。
 
 根目录的 TypeScript 文件保留为 npm 命令入口，包括密码设置、协议生成、探测和打包工具；不改变现有 npm 命令。`npm run package:portable` 在 Windows x64 / Linux x64 glibc 上分别生成对应平台的便携包，共用 `scripts/portable.ts` 配置流程。详见 [便携包指南](../docs/guides/portable.md)。
 

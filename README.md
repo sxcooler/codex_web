@@ -29,7 +29,7 @@
 
 | 宿主平台 | 范围 |
 | --- | --- |
-| Windows | 已有源码运行、Windows x64 便携包和计划任务部署记录；本轮回归状态见最新验证记录 |
+| Windows | 支持源码运行、Windows x64 便携包和当前用户登录自启；兼容系统 PowerShell 5.1 |
 | Linux | 提供 x64 glibc 便携包；源码运行、真实任务和沙箱边界已在 WSL2 Ubuntu 22.04 普通用户下验证；不声明全部发行版已验证 |
 | macOS | 本轮未适配、未验证 |
 
@@ -74,7 +74,9 @@ Git 日志用图标和简短名称区分本地分支、远程跟踪分支及标�
 | `codex-web-版本-linux-x64.tar.gz` | `tar -xzf 包名.tar.gz`，进入解压目录运行 `bash Start.sh` |
 | `codex-web-版本-source.zip` | 通用干净源码，按上方源码启动步骤运行 |
 
-便携包自带 Node 和当前平台的生产依赖，无需安装 Node/npm；Git 与 Codex CLI 需单独准备。首次配置工作目录、CLI、端口和密码。缺少 Codex 时，可打开官方页面手动安装，或明确同意后运行对应平台的官方安装脚本。账户登录仍须自行完成。保持终端打开，按 Ctrl+C 停止；`--no-browser` 可用于无桌面的 Linux 环境。
+便携包自带 Node 和当前平台的生产依赖，无需安装 Node/npm；Git 与 Codex CLI 需单独准备。首次配置工作目录、CLI、端口和密码。缺少 Codex 时，可打开官方页面手动安装，或明确同意后运行对应平台的官方安装脚本。账户登录仍须自行完成。首次交互运行还会询问是否以后默认后台运行；选择后台后，启动成功即可关闭终端，用 `Stop.cmd` / `bash Stop.sh` 停止，`Status.cmd` / `bash Status.sh` 查看状态。`--foreground` / `--background` 临时覆盖，`--configure-startup` 修改偏好，`--no-browser` 禁止自动打开浏览器。后台运行不自动启用登录自启。
+
+Windows 源码版用 `scripts/windows/start-server.cmd` 后台启动；登录自启可选 `scripts/windows/install-startup.cmd`，使用当前用户启动项，无需计划任务、管理员权限或 PowerShell 7；`uninstall-startup.cmd` 移除自启。Linux 登录自启沿用用户级 systemd。
 
 Linux 包面向 x64 glibc 环境，验证环境为 WSL2 Ubuntu 22.04；暂不提供 ARM64、Alpine/musl 或 macOS 包。不要跨平台复制 `node_modules`。构建时在对应平台运行 `npm ci` 和 `npm run package:portable`，产物位于 `releases/`。配置、升级、构建依赖与校验方法见 [便携包指南](docs/guides/portable.md)。
 

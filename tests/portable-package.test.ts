@@ -68,4 +68,22 @@ test('extracted release runs with bundled Node and isolated data', { skip: !root
     assert.ok(login.headers.get('set-cookie'));
     assert.equal(output.includes(password), false);
   } finally { child.kill(); await closed; }
+  const backgroundArgs = [...args, '--background'];
+  try {
+    const started = windows
+      ? spawnSync(process.env.ComSpec!, ['/d','/s','/c', 'Start.cmd --no-browser --background'], {cwd:directory,env,encoding:'utf8',windowsHide:true,input:'\n',timeout:20000})
+      : spawnSync(start, backgroundArgs, {cwd:directory,env,encoding:'utf8',windowsHide:true,timeout:20000});
+    assert.equal(started.status,0,started.stdout+started.stderr);
+    assert.equal((await fetch(url+'/api/auth/session')).status,200,'server survives launcher exit');
+    const state = JSON.parse(await readFile(join(data,'server-control.json'),'utf8'));
+    const repeat = spawnSync(start,backgroundArgs,{cwd:directory,env,encoding:'utf8',windowsHide:true,timeout:10000});
+    assert.equal(repeat.status,0,repeat.stdout+repeat.stderr);
+    assert.equal(JSON.parse(await readFile(join(data,'server-control.json'),'utf8')).token,state.token);
+    const status=spawnSync(start,[...args,'--status'],{cwd:directory,env,encoding:'utf8',windowsHide:true,timeout:10000});
+    assert.equal(status.status,0,status.stderr);assert.match(status.stdout,new RegExp(String(port)));
+  } finally {
+    const stop=spawnSync(start,[...args,'--stop'],{cwd:directory,env,encoding:'utf8',windowsHide:true,timeout:20000});
+    assert.equal(stop.status,0,stop.stderr);
+  }
+  await assert.rejects(fetch(url+'/api/auth/session'));
 });

@@ -8,57 +8,26 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-test('startup task uses a stable PowerShell Store alias and upgrades only the matching task', { skip: process.platform !== 'win32', timeout: 15_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), 'codex-startup-'));
-  try {
-    await mkdir(join(root, 'scripts/windows'), { recursive: true });
-    const installer = join(root, 'scripts/windows/install-startup.ps1');
-    await copyFile(new URL('../scripts/windows/install-startup.ps1', import.meta.url), installer);
-    const harness = join(root, 'check.ps1');
-    await writeFile(harness, `
-$ErrorActionPreference = 'Stop'
-Import-Module Microsoft.PowerShell.Management,Microsoft.PowerShell.Utility
-$PSModuleAutoLoadingPreference = 'None'
-$old = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'WindowsApps/Microsoft.PowerShell_7.0.0.0_x64__8wekyb3d8bbwe/pwsh.exe'))
-$alias = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Microsoft/WindowsApps/pwsh.exe'))
-function Get-Command { [pscustomobject]@{Source=$old} }
-function Test-Path { $true }
-function New-ScheduledTaskAction { param($Execute,$Argument,$WorkingDirectory) [pscustomobject]@{Execute=$Execute;Arguments=$Argument} }
-function New-ScheduledTaskTrigger { @{} }
-function New-ScheduledTaskPrincipal { @{} }
-function New-ScheduledTaskSettingsSet { @{} }
-$taskState = @{ Existing=$null; Registered=$null }
-function Get-ScheduledTask { $taskState.Existing }
-function Register-ScheduledTask {
-  param($TaskName,$Action,$Trigger,$Principal,$Settings,[switch]$Force)
-  $taskState.Registered = $Action
-}
-& (Join-Path $PSScriptRoot 'scripts/windows/install-startup.ps1')
-if ($taskState.Registered.Execute -ne $alias) { throw "Expected stable alias $alias; got $($taskState.Registered.Execute)" }
-$taskState.Existing = [pscustomobject]@{Actions=[pscustomobject]@{Execute=$old; Arguments=$taskState.Registered.Arguments}}
-& (Join-Path $PSScriptRoot 'scripts/windows/install-startup.ps1')
-if ($taskState.Registered.Execute -ne $alias) { throw 'Existing Store task was not migrated' }
-$newArguments = $taskState.Registered.Arguments
-$taskState.Existing.Actions.Arguments = $newArguments.Replace('scripts\\windows\\start-server.ps1', 'scripts\\start-server.ps1')
-& (Join-Path $PSScriptRoot 'scripts/windows/install-startup.ps1')
-if ($taskState.Registered.Arguments -ne $newArguments) { throw 'Legacy script directory was not migrated' }
-$taskState.Existing.Actions.Arguments = '-File unrelated.ps1'
-$rejected = $false
-try { & (Join-Path $PSScriptRoot 'scripts/windows/install-startup.ps1') } catch { $rejected = $true }
-if (-not $rejected) { throw 'Unrelated scheduled task was overwritten' }
-`);
-    const result = spawnSync('pwsh.exe', ['-NoProfile', '-File', harness], { encoding: 'utf8', timeout: 12_000, windowsHide: true });
-    assert.equal(result.status, 0, result.stdout + result.stderr || String(result.error));
-  } finally { await rm(root, { recursive: true, force: true }); }
+test('Windows 5.1 user startup is hidden and migrates or removes only this workspace', {skip:process.platform!=='win32'},async()=>{
+ const root=await mkdtemp(join(tmpdir(),'codex logon '));
+ try {
+  await mkdir(join(root,'scripts/windows'),{recursive:true});
+  await copyFile(new URL('../scripts/windows/install-startup.ps1',import.meta.url),join(root,'scripts/windows/install-startup.ps1'));
+  await writeFile(join(root,'check.ps1'),"\n$ErrorActionPreference='Stop'\n$state=@{Value=$null;Task=$null;Deleted=$false}\nfunction Get-ItemProperty { [pscustomobject]@{ $name=$state.Value } }\nfunction New-Item { }\nfunction New-ItemProperty { param($LiteralPath,$Name,$Value,$PropertyType,[switch]$Force) $state.Value=$Value }\nfunction Remove-ItemProperty { $state.Value=$null }\nfunction Get-ScheduledTask { $state.Task }\nfunction Unregister-ScheduledTask { param($TaskName,[switch]$Confirm) $state.Deleted=$true; $state.Task=$null }\n$installer=Join-Path $PSScriptRoot 'scripts/windows/install-startup.ps1'\n& $installer\n$expected=$state.Value\nif($expected -notlike '*System32\\WindowsPowerShell\\v1.0\\powershell.exe*' -or $expected -notlike '*-WindowStyle Hidden*-Background') {throw 'Expected hidden built-in shell startup'}\n$script=Join-Path $PSScriptRoot 'scripts/windows/start-server.ps1'\n$state.Task=[pscustomobject]@{Actions=@([pscustomobject]@{Arguments=\"-File `\"$script`\"\"})}\n& $installer\nif(-not $state.Deleted){throw 'Legacy task not migrated'}\n& $installer -Remove\nif($state.Value){throw 'Startup not removed'}\n$state.Value='unrelated command'\n$rejected=$false\ntry{ & $installer }catch{$rejected=$true}\nif(-not $rejected -or $state.Value -ne 'unrelated command'){throw 'Unrelated startup overwritten'}\n$state.Value=$null\n$state.Task=[pscustomobject]@{Actions=@([pscustomobject]@{Arguments='-File unrelated.ps1'})}\n$rejected=$false\ntry{ & $installer }catch{$rejected=$true}\nif(-not $rejected -or $state.Value){throw 'Unrelated task changed'}\n");
+  const result=spawnSync(join(process.env.SystemRoot!,'System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-ExecutionPolicy','Bypass','-File',join(root,'check.ps1')],{encoding:'utf8',windowsHide:true,timeout:15000});
+  assert.equal(result.status,0,result.stdout+result.stderr||String(result.error));
+ }finally{await rm(root,{recursive:true,force:true});}
 });
 
-test('Windows stop script removes its complete process tree and preserves unrelated Node processes', { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
+test('Windows stop script never terminates unmanaged servers or unrelated Node processes', { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'codex-stop-'));
   const pids: number[] = [];
   try {
     await mkdir(join(root, 'scripts/windows'), { recursive: true });
     await mkdir(join(root, 'src/server'), { recursive: true });
     await copyFile(new URL('../scripts/windows/stop-server.ps1', import.meta.url), join(root, 'scripts/windows/stop-server.ps1'));
+    await copyFile(new URL('../scripts/windows/common.ps1', import.meta.url), join(root, 'scripts/windows/common.ps1'));
+    await copyFile(new URL('../scripts/server-control.ts', import.meta.url), join(root, 'scripts/server-control.ts'));
     await writeFile(join(root, 'src/server/main.ts'), `
       import { spawn } from 'node:child_process';
       spawn(process.execPath, [${JSON.stringify(join(root, 'worker.mjs'))}, 'child'], { stdio: 'ignore', windowsHide: true });
@@ -90,9 +59,9 @@ test('Windows stop script removes its complete process tree and preserves unrela
     const stopped = spawnSync('pwsh.exe', ['-NoProfile', '-File', harness], { encoding: 'utf8', timeout: 15_000, windowsHide: true });
     assert.equal(stopped.status, 0, stopped.stderr || String(stopped.error));
     for (let attempt = 0; attempt < 40 && [pids[0], pids[2], pids[3]].some(alive); attempt++) await delay(25);
-    assert.equal(alive(pids[0]), false, 'Web entry exited');
-    assert.equal(alive(pids[2]), false, 'owned child exited');
-    assert.equal(alive(pids[3]), false, 'owned grandchild exited');
+    assert.equal(alive(pids[0]), true, 'unmanaged Web entry preserved');
+    assert.equal(alive(pids[2]), true, 'unmanaged child preserved');
+    assert.equal(alive(pids[3]), true, 'unmanaged grandchild preserved');
     assert.equal(alive(pids[1]), true, 'unrelated Node remains alive');
     const repeated = spawnSync('pwsh.exe', ['-NoProfile', '-File', harness], { encoding: 'utf8', timeout: 10_000, windowsHide: true });
     assert.equal(repeated.status, 0, repeated.stderr);

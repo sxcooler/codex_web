@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 
 import { buildServer } from './app.ts';
 import { Runtime } from '../codex/runtime.ts';
@@ -10,7 +11,7 @@ import { Projects } from '../projects.ts';
 
 const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
 
-async function main(): Promise<void> {
+export async function startServer() {
   const dataDir = process.env.WEB_DATA_DIR ?? join(projectRoot, '.local', 'web');
   let config: any = {};
   try { config = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')); }
@@ -33,13 +34,14 @@ async function main(): Promise<void> {
       if (closing) return; closing = true;
       await app.close();
     });
+    return app;
   } catch (error) {
     await app.close();
     throw error;
   }
 }
 
-main().catch(() => {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) startServer().catch(() => {
   process.stderr.write('Failed to start Codex Web. Run the authentication setup first and check WEB_ORIGIN/PORT.\n');
   process.exitCode = 1;
 });

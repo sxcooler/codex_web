@@ -13,7 +13,7 @@ unit_file="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
 marker="# Codex Web workspace: $repo"
 umask 077
 check_node() {
-  node=$(command -v node) || fail 'Install Linux Node >=24.20.0 first.'
+  if [[ -x "$repo/runtime/node" ]]; then node="$repo/runtime/node"; else node=$(command -v node) || fail 'Install Linux Node >=24.20.0 first.'; fi
   "$node" -e 'const [a,b]=process.versions.node.split(".").map(Number); if(process.platform!=="linux"||a<24||(a===24&&b<20))process.exit(1)' || fail 'Use Linux Node >=24.20.0.'
 }
 check_ready() {

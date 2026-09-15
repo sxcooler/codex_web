@@ -1,38 +1,8 @@
 [CmdletBinding()]
 param([switch]$Background)
-$ErrorActionPreference = 'Stop'
-$projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-$dataDir = Join-Path $projectRoot '.local\web'
-$nodePath = Join-Path $projectRoot '.local\node24\node.exe'
-if (-not (Test-Path -LiteralPath $nodePath)) { $nodePath = (Get-Command node.exe -ErrorAction Stop).Source }
-if (-not (Test-Path -LiteralPath (Join-Path $dataDir 'auth.json'))) { throw 'Run npm run auth:setup first.' }
-if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'dist\index.html'))) { throw 'Run npm run build first.' }
-if ($Background) {
-    $shellPath = (Get-Process -Id $PID).Path
-    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    $child = Start-Process -FilePath $shellPath -WorkingDirectory $projectRoot -ArgumentList $arguments -WindowStyle Hidden -PassThru
-    Write-Output "Background startup requested (PID $($child.Id))."
-    Write-Output "Log: $(Join-Path $dataDir 'server.log')"
-    Write-Output 'Use stop-server.cmd to stop this server.'
-    exit 0
-}
-$sha = [Security.Cryptography.SHA256]::Create()
-try { $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($projectRoot.ToLowerInvariant()))).Replace('-', '') } finally { $sha.Dispose() }
-$mutex = [Threading.Mutex]::new($false, "Local\CodexRemoteWeb-$hash")
-$owned = $false
-try {
-    try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
-    if (-not $owned) { exit 0 }
-    Set-Location -LiteralPath $projectRoot
-    $logPath = Join-Path $dataDir 'server.log'
-    & $nodePath (Join-Path $projectRoot 'src\server\main.ts') 2>&1 | ForEach-Object {
-        if ((Test-Path -LiteralPath $logPath) -and (Get-Item -LiteralPath $logPath).Length -ge 1048576) {
-            Move-Item -LiteralPath $logPath -Destination "$logPath.1" -Force
-        }
-        "$(Get-Date -Format o) $_" | Add-Content -LiteralPath $logPath
-    }
-    exit $LASTEXITCODE
-} finally {
-    if ($owned) { $mutex.ReleaseMutex() }
-    $mutex.Dispose()
-}
+. (Join-Path $PSScriptRoot 'common.ps1')
+if (-not (Test-Path -LiteralPath (Join-Path $projectRoot '.local/web/auth.json'))) { throw 'Run authentication setup first.' }
+if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'dist/index.html'))) { throw 'Run npm run build first.' }
+$mode = if ($Background) { '--background' } else { '--foreground' }
+& $nodePath (Join-Path $projectRoot 'scripts/server-control.ts') $mode @portableArgs
+exit $LASTEXITCODE
