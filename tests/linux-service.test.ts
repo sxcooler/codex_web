@@ -104,7 +104,7 @@ else if(process.env.FAIL_SERVE) process.exit(1);
     await assert.rejects(exec('bash',args,{env:{...env,FAIL_SERVE:'1'}}));
     assert.deepEqual(JSON.parse(await readFile(configPath,'utf8')),initial);
     await exec('bash',args,{env});
-    assert.deepEqual(JSON.parse(await readFile(configPath,'utf8')),{...initial,origin:'https://example.test.ts.net'});
+    assert.deepEqual(JSON.parse(await readFile(configPath,'utf8')),{...initial,origin:'https://example.test.ts.net',allowedOrigins:['http://localhost:3412']});
     const commands=(await readFile(calls,'utf8')).trim().split('\n').map(line=>JSON.parse(line));
     assert.equal(commands.filter(args=>args.includes('--bg')).length,2);
     assert.deepEqual(commands.at(-1),['serve','--bg','--https=443','http://127.0.0.1:3412']);

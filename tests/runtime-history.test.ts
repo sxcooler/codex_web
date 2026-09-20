@@ -2,6 +2,46 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Runtime } from '../src/codex/runtime.ts';
 
+test('browser history and SSE omit inline image bytes while native history stays intact',async t=>{
+  const {runtime}=setup(t),data='a'.repeat(1_000_000),url='data:image/png;base64,'+data;
+  const items=[
+    {id:'user',type:'userMessage',content:[{type:'text',text:'Keep my prompt'},{type:'image',url},{type:'localImage',path:'/uploads/image.png'}]},
+    {id:'tool',type:'mcpToolCall',status:'completed',result:{content:[{type:'text',text:'Keep tool text'},{type:'image',mimeType:'image/png',data}],_meta:{'codex/toolSurface':{screenshot:{url}}}}},
+  ];
+  const turns=[{id:'first',status:'completed',items},{id:'last',status:'completed',items:[]}];
+  t.mock.method(runtime as any,'readThread',async()=>({id:'thread',status:{type:'idle'},turns:structuredClone(turns)}));
+  const snapshot=await runtime.snapshot('thread',{window:true});
+  assert.ok(Buffer.byteLength(JSON.stringify(snapshot))<10_000,'Inline images inflated browser snapshot');
+  const history=await runtime.history('thread','last');
+  assert.ok(Buffer.byteLength(JSON.stringify(history))<10_000,'Inline images inflated history page');
+  const user=snapshot.thread.turns[0].items[0];
+  assert.equal(user.imagePreviews.length,1);
+  assert.match(user.imagePreviews[0].id,/^[a-f0-9]{64}$/);
+  assert.deepEqual(snapshot.thread.turns[0].items[1].imagePreviews,user.imagePreviews,'Duplicate tool screenshot must be deduplicated');
+  assert.equal(user.content[0].text,'Keep my prompt');
+  assert.equal(user.content[2].path,'/uploads/image.png');
+  assert.equal(snapshot.thread.turns[0].items[1].result.content[0].text,'Keep tool text');
+  assert.deepEqual((await runtime.snapshot('thread')).thread.turns[0].items,items);
+  const changes:any[]=[];runtime.on('change',change=>changes.push(change));
+  for(const item of items)(runtime as any).onNotification({method:'item/completed',params:{threadId:'thread',turnId:'active',item}});
+  assert.ok(changes.length>=2);
+  assert.ok(changes.every(change=>change.kind!=='resync'&&Buffer.byteLength(JSON.stringify(change))<10_000));
+  assert.equal(items[0].content![1].url,url);
+});
+
+test('native image lookup stays scoped to its thread, turn and item',async t=>{
+  const {runtime,calls}=setup(t),data=Buffer.from('test image').toString('base64');
+  const item={id:'picture',type:'userMessage',content:[{type:'image',url:'data:image/png;base64,'+data}]};
+  t.mock.method(runtime as any,'readThread',async()=>({id:'thread',status:{type:'idle'},turns:[{id:'first',status:'completed',items:[item]}]}));
+  const imageId=(await runtime.snapshot('thread',{window:true})).thread.turns[0].items[0].imagePreviews[0].id;
+  t.mock.method(runtime as any,'readTurnBodies',async(threadId:string,turns:any[],itemId:string)=>{
+    assert.equal(threadId,'thread');assert.equal(turns[0].id,'first');assert.equal(itemId,'picture');turns[0].items=[structuredClone(item)];
+  });
+  assert.deepEqual(await runtime.image('thread','first','picture',imageId),Buffer.from('test image'));
+  await assert.rejects(runtime.image('thread','first','picture','0'.repeat(64)),(error:any)=>error.statusCode===404);
+  assert.equal(calls.length,0);
+});
+
 function setup(t: any) {
   const runtime = new Runtime({ executable: process.execPath, cwd: process.cwd() });
   t.after(() => runtime.close());

@@ -4,6 +4,7 @@ import { readFile, mkdir, writeFile, access } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
+import { request } from 'node:http';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -38,7 +39,12 @@ test('extracted release runs with bundled Node and isolated data', { skip: !root
   const data = join(directory, '.local', 'web'), workRoot = join(directory, '.local', 'test work');
   await mkdir(workRoot, { recursive: true });
   // Startup verifies --version; the app-server remains lazy and makes no model request.
-  await writeFile(join(data, 'config.json'), JSON.stringify({ port, origin, workRoot, codexBin }));
+  const remoteOrigin = 'https://portable.example.test';
+  await writeFile(join(data, 'config.json'), JSON.stringify({ port, origin, workRoot, codexBin, allowedOrigins:[remoteOrigin] }));
+  const remoteRequest = (path:string, method='GET', headers:Record<string,string>={}, payload?:unknown) => new Promise<{status:number;headers:any;body:any}>((resolve,reject)=>{
+    const req=request({hostname:'127.0.0.1',port,path,method,headers:{Host:'portable.example.test',...headers}},res=>{let text='';res.on('data',chunk=>text+=chunk);res.on('end',()=>{try{resolve({status:res.statusCode!,headers:res.headers,body:JSON.parse(text)});}catch(error){reject(error);}});});
+    req.on('error',reject);req.end(payload===undefined?undefined:JSON.stringify(payload));
+  });
   try {
     const busy = spawnSync(start, args, { cwd: directory, env, encoding: 'utf8', windowsHide: true });
     assert.equal(busy.status, 1); assert.match(busy.stderr, new RegExp(String(port))); assert.equal(listener.listening, true);
@@ -66,6 +72,11 @@ test('extracted release runs with bundled Node and isolated data', { skip: !root
     const login = await fetch(`${url}/api/auth/login`, { method: 'POST', headers: { Host: `localhost:${port}`, Origin: origin, Cookie: cookie, 'x-csrf-token': csrfToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
     assert.equal(login.status, 200, await login.text());
     assert.ok(login.headers.get('set-cookie'));
+    const remoteSession=await remoteRequest('/api/auth/session');
+    assert.equal(remoteSession.status,200);assert.match(remoteSession.headers['set-cookie'][0],/; Secure/);
+    const remoteHeaders={Origin:remoteOrigin,Cookie:remoteSession.headers['set-cookie'][0].split(';')[0],'x-csrf-token':remoteSession.body.csrfToken,'Content-Type':'application/json'};
+    assert.equal((await remoteRequest('/api/auth/login','POST',{...remoteHeaders,Origin:origin},{password})).status,403);
+    const remoteLogin=await remoteRequest('/api/auth/login','POST',remoteHeaders,{password});assert.equal(remoteLogin.status,200);assert.match(remoteLogin.headers['set-cookie'][0],/; Secure/);
     assert.equal(output.includes(password), false);
   } finally { child.kill(); await closed; }
   const backgroundArgs = [...args, '--background'];
@@ -75,6 +86,7 @@ test('extracted release runs with bundled Node and isolated data', { skip: !root
       : spawnSync(start, backgroundArgs, {cwd:directory,env,encoding:'utf8',windowsHide:true,timeout:20000});
     assert.equal(started.status,0,started.stdout+started.stderr);
     assert.equal((await fetch(url+'/api/auth/session')).status,200,'server survives launcher exit');
+    assert.equal((await remoteRequest('/api/auth/session')).status,200,'background server retains additional origin');
     const state = JSON.parse(await readFile(join(data,'server-control.json'),'utf8'));
     const repeat = spawnSync(start,backgroundArgs,{cwd:directory,env,encoding:'utf8',windowsHide:true,timeout:10000});
     assert.equal(repeat.status,0,repeat.stdout+repeat.stderr);

@@ -6,6 +6,7 @@ import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { managedServer, runServer, startBackground, stopServer } from './server-control.ts';
+import { configuredOrigins, optionalDomain } from '../src/server/origins.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export function parsePort(value: string): number {
@@ -109,6 +110,16 @@ export async function loadPortableConfig(dataDir: string, terminal?: Terminal) {
     const workRoot = resolve((await terminal!.question(`工作目录 [${join(homedir(), 'work')}]: `)).trim() || join(homedir(), 'work'));
     const port = parsePort((await terminal!.question('本地端口 [3000]: ')).trim() || '3000');
     config = { origin: `http://localhost:${port}`, port, workRoot };
+    for (;;) {
+      try {
+        const domain = optionalDomain(await terminal!.question('额外绑定域名（可选，回车跳过；裸域名默认 HTTPS）: '));
+        if (domain) {
+          config.allowedOrigins = configuredOrigins(config.origin,[domain]).slice(1).map(url=>url.origin);
+          process.stdout.write(`将允许额外地址 ${domain}；仍需自行配置 DNS 和 HTTPS 代理，转发到本地端口 ${port}。\n`);
+        }
+        break;
+      } catch { process.stdout.write('请输入域名或完整 HTTP/HTTPS 站点地址，不含路径、通配符或账号密码。\n'); }
+    }
   }
   const codexBin = detected ?? await chooseCodex(terminal!);
   if (!saved) {
@@ -141,8 +152,7 @@ async function main() {
   if (args.includes('--configure-startup') && !process.stdin.isTTY) throw new Error('请在交互终端修改启动偏好。');
   const dataDir = join(root, '.local', 'web');
   const config = await loadPortableConfig(dataDir);
-  const port = parsePort(String(config.port ?? 3000)), origin = new URL(config.origin);
-  if (!['http:', 'https:'].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw new Error('origin 必须是 HTTP/HTTPS 站点根地址。');
+  const port = parsePort(String(config.port ?? 3000)), [origin] = configuredOrigins(config.origin,config.allowedOrigins);
   if (!(await stat(config.workRoot).catch(() => null))?.isDirectory()) throw new Error('工作目录不存在，请检查 .local/web/config.json。');
   if (!(await stat(config.codexBin).catch(() => null))?.isFile()) throw new Error('Codex 路径不存在，请检查 .local/web/config.json。');
   const existing = await managedServer();

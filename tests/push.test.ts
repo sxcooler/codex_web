@@ -8,6 +8,20 @@ import Fastify from 'fastify';
 
 const subscription = { endpoint: 'https://fcm.googleapis.com/fcm/send/device', keys: { p256dh: Buffer.concat([Buffer.from([4]),Buffer.alloc(64,1)]).toString('base64url'), auth: Buffer.alloc(16,2).toString('base64url') } };
 
+test('mixed origins expose Push only for the HTTPS request context',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'push-origins-'));const app=Fastify();
+  const service=await createPushService({dataDir:dir,origin:'https://example.test',sessionValid:()=>true,resolve:async()=>['142.250.1.1']});
+  try{
+    registerPushRoutes(app,service,{authenticated:()=>true,owner:()=> 'session-1',secure:request=>request.headers.host==='example.test'});
+    for(const host of ['localhost:3000','example.test']){
+      const expected=host==='example.test'?200:503;
+      assert.equal((await app.inject({url:'/api/push/public-key',headers:{host}})).statusCode,expected);
+      assert.equal((await app.inject({method:'POST',url:'/api/push/subscriptions',headers:{host},payload:subscription})).statusCode,expected);
+    }
+    assert.equal(service.subscriptionCount(),1);
+  }finally{await app.close();service.close();await rm(dir,{recursive:true,force:true});}
+});
+
 test('push refuses invalid persisted VAPID keys',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'push-'));
   try{await writeFile(join(dir,'vapid.json'),JSON.stringify({publicKey:'bad',privateKey:'bad'}));await assert.rejects(createPushService({dataDir:dir,origin:'https://example.test',sessionValid:()=>true}),/VAPID/);}

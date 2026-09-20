@@ -1,0 +1,14 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/icon.svg"><title>原生图片预览回归</title>
+<style>body{padding:16px}#root{max-width:800px;margin:auto}h1{font-size:22px}</style>
+<h1>原生图片预览回归</h1><div id="root"></div>
+<script type="module">
+import React from 'react';import{createRoot}from'react-dom/client';import{Message}from'/src/web/Conversation.tsx';import'/src/web/style.css';
+const h=React.createElement,props={threadId:'images',turnId:'turn'};
+const user=(id,image,text)=>h(Message,{...props,key:id,item:{id,type:'userMessage',content:[{type:'text',text},{type:'image',url:'[图片单独加载]'}],imagePreviews:[{id:image.repeat(64)}]}});
+createRoot(document.querySelector('#root')).render(h(React.Fragment,null,
+ user('user','a','历史截图自动显示缩略图，点击查看原图。'),
+ h(Message,{...props,item:{id:'tool',type:'mcpToolCall',status:'completed',tool:'截图',result:{content:[{type:'image',data:'[图片单独加载]'}]},imagePreviews:[{id:'b'.repeat(64)}]}}),
+ h('div',{style:{height:15000}},'以下图片在滚动靠近时加载'),
+ user('below','c','较早的历史图片'),user('failed','d','加载失败可以重试')
+));
+</script></html>

@@ -40,6 +40,6 @@ function Invoke-TestNetwork {
 `);
     const configured=run('network-check.ps1');assert.equal(configured.status,0,configured.stdout+configured.stderr);
     const saved=JSON.parse(await readFile(join(root,'.local/web/config.json'),'utf8'));
-    assert.equal(saved.workRoot,'C:\\项目\\测试');assert.equal(saved.codexBin,'C:\\工具\\codex.exe');assert.equal(saved.port,3355);
+    assert.equal(saved.workRoot,'C:\\项目\\测试');assert.equal(saved.codexBin,'C:\\工具\\codex.exe');assert.equal(saved.port,3355);assert.deepEqual(saved.allowedOrigins,['http://localhost:3355']);
   } finally {await rm(root,{recursive:true,force:true});}
 });

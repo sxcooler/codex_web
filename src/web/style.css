@@ -19,6 +19,7 @@
 .creation-fields{display:contents;border:0;margin:0;padding:0;min-width:0}
 
 .history-image{max-width:100%;max-height:320px;object-fit:contain}
+.native-images{display:flex;flex-wrap:wrap;gap:12px;max-width:100%}.native-image{margin:8px 0;max-width:100%}.native-image img{display:block;background:var(--panel);border-radius:6px}.native-image img[hidden]{display:none}
 
 /* Markdown stays inside the message body; tool output keeps its own styles. */
 .timeline-content{min-width:0;display:flow-root}
@@ -108,9 +109,9 @@
 .panel-sections,.git-history{display:grid;grid-template-rows:minmax(0,35fr) minmax(0,65fr);gap:8px;min-height:0;min-width:0;overflow:hidden}
 .panel-sections{flex:1}.git-history{height:100%}
 .panel-list-section{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
-.panel-list-section>.file-list{flex:1}.panel-list-section>.actions,.panel-list-section>.path{flex-shrink:0;margin:0 0 6px}
-.panel-list-section>.actions button{font-size:12px;padding:6px 8px}
-.panel-list-section>.notice{max-height:40%;overflow:auto;flex-shrink:0;margin-bottom:6px}
+.panel-list-body>.file-list{flex:1}.panel-list-body>.actions,.panel-list-body>.path{flex-shrink:0;margin:0 0 6px}
+.panel-list-body>.actions button{font-size:12px;padding:6px 8px}
+.panel-list-body>.notice{max-height:40%;overflow:auto;flex-shrink:0;margin-bottom:6px}
 .file-preview{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;border-top:1px solid #354047;padding-top:6px}
 .file-preview>h3{flex-shrink:0;margin:0 0 6px;white-space:pre;overflow:auto}
 .preview-content{flex:1;min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain}
@@ -119,10 +120,31 @@
 .git-history-footer{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-shrink:0;font-size:11px;padding-top:4px}
 .git-history-footer:empty{display:none}.git-history-footer p{font-size:10px;margin:0}.git-history-footer button{font-size:11px;padding:5px 7px;flex-shrink:0}
 .commit-metadata{min-width:0;max-height:120px;overflow:auto}.commit-metadata h3{font-size:12px;margin:0 0 2px}
-.commit-info>summary{font-size:11px;padding:0;white-space:nowrap}.commit-info p{margin:6px 0}
+
 .commit-details>.file-list{margin:0}.commit-details>.file-preview{border-top:0;padding-top:0}
 
 .pane-brand{margin-right:auto;margin-left:8px}.account-usage-button,.account-usage-button:hover:enabled{min-width:44px;min-height:44px;padding:6px 4px;display:flex;align-items:center;justify-content:center;white-space:nowrap;font-size:12px;border:0;background:transparent}.usage-badge{height:32px;padding:0 10px;display:inline-flex;align-items:center;border:1px solid #394650;border-radius:8px;background:#202a30;color:#a5b2bb;transition:background .12s,color .12s,border-color .12s}.account-usage-button[data-status=current] .usage-badge{background:hsl(var(--usage-hue) 24% 18%);border-color:hsl(var(--usage-hue) 32% 36%);color:hsl(var(--usage-hue) 56% 72%)}.account-usage-button[data-status=current]:hover .usage-badge{background:hsl(var(--usage-hue) 24% 23%)}.account-usage-button[data-status=stale] .usage-badge{background:#342e22;border-color:#685637;color:#e7bf7d}.account-usage-button[data-status=stale]:hover .usage-badge{background:#443b2a}.usage-stale{color:#e7bf7d;font-size:12px}.account-usage-button .usage-stale{margin-left:6px;font-size:10px}
 .usage-window{--usage-color:#a5b2bb}.usage-window[data-status=current]{--usage-color:hsl(var(--usage-hue) 56% 72%)}.usage-remaining{color:var(--usage-color)}.usage-window progress{appearance:none;border:0;border-radius:5px;overflow:hidden;background:#303a3f}.usage-window progress::-webkit-progress-bar{background:#303a3f}.usage-window progress::-webkit-progress-value{background:var(--usage-color)}.usage-window progress::-moz-progress-bar{background:var(--usage-color)}
 .account-usage-dialog{position:fixed;inset:0;margin:auto;padding:0;width:min(620px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 32px);overflow:auto;overscroll-behavior:contain;color:#e7ecef;background:#171e22;border:1px solid #45534d;border-radius:12px;box-shadow:0 18px 60px #0008;line-height:1.65}.account-usage-dialog::backdrop{background:#0009}.account-usage-dialog button{min-height:44px}.usage-content{padding:24px;overflow-wrap:anywhere}.usage-content h2{font-size:21px;margin:0}.usage-content h3{font-size:16px;margin:0 0 12px}.usage-content h4{font-size:14px;margin:0 0 8px}.usage-content p{margin:8px 0 12px}.usage-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.usage-heading button{flex-shrink:0}.usage-group{margin-top:20px;border-top:1px solid #354047;padding-top:20px}.usage-window{margin:16px 0}.usage-window>div{display:flex;justify-content:space-between;gap:16px;font-size:14px}.usage-window progress{display:block;width:100%;height:10px;margin:10px 0;accent-color:var(--usage-color)}.usage-others{margin-top:20px}.usage-others>summary{min-height:44px;padding:10px 0}.usage-credit{padding:16px;border:1px solid #354047;border-radius:8px;margin-top:12px}.usage-credit p{font-size:13px}.usage-confirm{width:min(480px,calc(100vw - 32px))}.usage-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:24px}.usage-content .notice{margin:12px 0}
 @media(max-width:680px){.account-usage-dialog{width:calc(100vw - 16px);max-height:calc(100dvh - 16px);border-radius:10px}.account-usage-dialog:not(.usage-confirm){height:calc(100dvh - 16px)}.usage-content{padding:18px}.usage-headline{display:none}.usage-badge{padding:0 8px}.usage-actions>button{flex:1}.pane-toolbar{padding:0 6px}.pane-toggle{min-width:44px;min-height:44px}}
+
+/* Collapsed navigation keeps a single header; freed space belongs to the preview. */
+.panel-list-body{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.panel-section-toggle{display:flex;align-items:center;gap:7px;flex-shrink:0;width:100%;min-width:0;min-height:32px;padding:5px 4px;margin:0 0 4px;text-align:left;font-size:12px;border:0;background:transparent}
+.panel-section-toggle>span:last-child{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.panel-section-toggle[aria-expanded=false]{margin-bottom:0}
+.panel-sections[data-collapsed=true]{grid-template-rows:auto minmax(0,1fr)}
+.git-history[data-selected=true]{grid-template-rows:minmax(0,35%) minmax(0,20%) minmax(0,1fr)}
+.git-history[data-selected=true][data-list-collapsed=true]{grid-template-rows:auto minmax(0,20%) minmax(0,1fr)}
+.git-history[data-selected=true][data-files-collapsed=true]{grid-template-rows:minmax(0,35%) auto minmax(0,1fr)}
+.git-history[data-selected=true][data-list-collapsed=true][data-files-collapsed=true]{grid-template-rows:auto auto minmax(0,1fr)}
+.git-history[data-selected=false][data-list-collapsed=true]{grid-template-rows:auto minmax(0,1fr)}
+.git-history>.commit-details{display:contents}
+.commit-files-section{border-top:1px solid #354047;padding-top:4px}
+.commit-metadata{display:flex;align-items:center;gap:6px;flex-shrink:0;max-height:none;overflow:hidden;margin-bottom:4px}
+.git-panel .commit-metadata h3{flex:1;min-width:0;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.commit-metadata>button{flex-shrink:0;padding:3px 6px;font-size:11px}
+.commit-info-popover{box-sizing:border-box;width:min(460px,calc(100vw - 32px));max-height:70dvh;overflow:auto;margin:auto;padding:18px;border:1px solid #354047;border-radius:8px;background:#1b2227;color:#e7ecef;box-shadow:0 12px 40px #0008}
+.git-panel .commit-info-popover h3,.git-panel .commit-info-popover .commit-message,.git-panel .commit-info-popover .commit-hash{white-space:pre-wrap;overflow-wrap:anywhere}
+.commit-info-popover h3{padding-right:30px}.commit-info-close{float:right;padding:3px 9px;font-size:18px}
+@media(max-width:700px){.panel-section-toggle{min-height:40px}.commit-metadata>button{min-height:32px}.commit-info-close{min-width:40px;min-height:40px}}

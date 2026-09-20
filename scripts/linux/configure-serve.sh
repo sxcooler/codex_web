@@ -17,7 +17,9 @@ await mkdir(dir,{recursive:true});
 const file=join(dir,'config.json'),temporary=file+'.serve-'+process.pid;
 const config=JSON.parse(await readFile(file,'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;}));
 if(!config||typeof config!=='object'||Array.isArray(config))throw Error('Invalid Web configuration');
-await writeFile(temporary,JSON.stringify({...config,origin:'https://'+dns,port},null,2)+'\n',{flag:'wx',mode:0o600});
+if(config.allowedOrigins!==undefined&&!Array.isArray(config.allowedOrigins))throw Error('allowedOrigins must be an array');
+const allowedOrigins=[...new Set([config.origin??`http://localhost:${port}`,...(config.allowedOrigins??[])])].filter(origin=>origin!=='https://'+dns);
+await writeFile(temporary,JSON.stringify({...config,origin:'https://'+dns,allowedOrigins,port},null,2)+'\n',{flag:'wx',mode:0o600});
 try{cli(['serve','--bg','--https=443',`http://127.0.0.1:${port}`],true);await rename(temporary,file);}
 finally{await unlink(temporary).catch(e=>{if(e.code!=='ENOENT')throw e;});}
 console.log(`Configured private HTTPS at https://${dns}. Restart the Web server to use this origin.`);

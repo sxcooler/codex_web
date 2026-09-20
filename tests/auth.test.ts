@@ -13,6 +13,36 @@ const ORIGIN = 'http://localhost:3000';
 const OLD_PASSWORD = 'correct-password-for-test';
 const NEW_PASSWORD = 'new-correct-password-for-test';
 
+test('multiple origins bind Host and CSRF Origin together with per-origin secure cookies', async () => {
+  await withAuth(async dataDir => {
+    const remote='https://device.example.ts.net';
+    const app=await buildServer({dataDir,origin:ORIGIN,allowedOrigins:[remote]});
+    try {
+      for(const origin of [ORIGIN,remote]){
+        const host=new URL(origin).host;
+        const current=await csrf(app,host);
+        assert.equal(current.response.statusCode,200);
+        assert.equal(setCookies(current.response)[0].includes('; Secure'),origin===remote);
+        const headers={host,origin,cookie:current.cookie,'x-csrf-token':current.token};
+        const denied=await app.inject({method:'POST',url:'/api/auth/login',headers:{...headers,origin:origin===remote?ORIGIN:remote},payload:{password:OLD_PASSWORD}});
+        assert.equal(denied.statusCode,403);
+        const wrongCsrf=await app.inject({method:'POST',url:'/api/auth/login',headers:{...headers,'x-csrf-token':'A'.repeat(43)},payload:{password:OLD_PASSWORD}});
+        assert.equal(wrongCsrf.statusCode,403);
+        const signed=await app.inject({method:'POST',url:'/api/auth/login',headers,payload:{password:OLD_PASSWORD}});
+        assert.equal(signed.statusCode,200);
+        assert.equal(setCookies(signed)[0].includes('; Secure'),origin===remote);
+        assert.equal(setCookies(signed)[0].includes('Domain='),false);
+        const cookie=setCookies(signed).map(cookiePair).join('; ');
+        const settings=await app.inject({url:'/api/settings',headers:{host,cookie}});
+        assert.equal(settings.statusCode,200);assert.equal(settings.json().origin,origin);
+      }
+      const unknown=await app.inject({url:'/api/auth/session',headers:{host:'evil.example','x-forwarded-host':new URL(remote).host,'x-forwarded-proto':'https'}});
+      assert.equal(unknown.statusCode,403);
+      const forged=await app.inject({url:'/api/auth/session',headers:{host:HOST,'x-forwarded-proto':'https','x-forwarded-host':new URL(remote).host}});assert.equal(setCookies(forged)[0].includes('; Secure'),false);
+    } finally {await app.close();}
+  });
+});
+
 async function withAuth(
   run: (dataDir: string) => Promise<void>,
   password = OLD_PASSWORD,

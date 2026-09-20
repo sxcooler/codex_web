@@ -10,6 +10,7 @@ import { join, dirname, relative } from 'node:path';
 import { initializeAuth } from '../src/server/auth.ts';
 import { buildServer } from '../src/server/app.ts';
 import { Projects } from '../src/projects.ts';
+import sharp from 'sharp';
 
 test('authenticated project/session routes keep cwd server-owned and SSE closes on logout', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'codex-api-'));
@@ -18,6 +19,8 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
   let created: any;
   let replayCursor: string | undefined;
   let archiveFilter=false,archiveInput:any;
+  const picture=await sharp({create:{width:1200,height:800,channels:3,background:'#89cdb1'}}).png().toBuffer();
+  let imageReads=0;
   Object.assign(runtime, {
     create: async (input: any) => { created = input; return {threadId:'thread-1',status:'idle'}; },
     list: async (_cursor:string,archived=false) => {archiveFilter=archived;return { data:[{id:'thread-1',cwd:created?.cwd}],nextCursor:null };},
@@ -25,6 +28,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     status: async () => ({resync:false}),
     history: async (_id:string,before:string) => ({turns:[{id:before}],nextCursor:null}),
     output: async (_id:string,turnId:string,itemId:string) => ({output:turnId+':'+itemId}),
+    image: async (threadId:string,turnId:string,itemId:string,imageId:string) => {imageReads++;assert.equal(threadId,'thread-1');assert.equal(turnId,'turn-1');assert.equal(itemId,'item-1');if(imageId==='0'.repeat(64))throw Object.assign(new Error('missing'),{code:'RUNTIME_NOT_FOUND',statusCode:404});return picture;},
     replay: (_threadId:string,cursor?:string) => { replayCursor=cursor; return {reset:true,events:[]}; }, close: async () => {}, diagnostics: async () => ({available:true}),
     rename: async (_id:string,name:string) => ({name}),
     open: async () => ({phase:'IDLE'}),
@@ -41,6 +45,24 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     const headers:any={host:'localhost:3000',origin:'http://localhost:3000','x-csrf-token':csrf.json().csrfToken,cookie:csrf.headers['set-cookie'].split(';')[0]};
     const login=await app.inject({method:'POST',url:'/api/auth/login',headers,payload:{password:'api-test-password-long'}});
     headers.cookie+='; '+login.headers['set-cookie'].split(';')[0];
+    const imageUrl='/api/sessions/thread-1/turns/turn-1/items/item-1/images/'+'a'.repeat(64);
+    assert.equal((await app.inject({url:imageUrl,headers:{host:'localhost:3000'}})).statusCode,401);
+    assert.equal(imageReads,0);
+    const thumbnail=await app.inject({url:imageUrl,headers});
+    assert.equal(thumbnail.statusCode,200,thumbnail.body);
+    assert.match(thumbnail.headers['content-type'],/^image\/webp/);
+    assert.ok(thumbnail.rawPayload.length<=65536);
+    const dimensions=await sharp(thumbnail.rawPayload).metadata();
+    assert.ok(dimensions.width!<=384&&dimensions.height!<=384);
+    await app.inject({url:imageUrl,headers});assert.equal(imageReads,1,'Thumbnail cache missed');
+    assert.equal((await app.inject({url:imageUrl,headers:{host:'localhost:3000'}})).statusCode,401,'Cache must not bypass login');
+    assert.equal((await app.inject({url:imageUrl,headers:{...headers,host:'evil.example'}})).statusCode,403);
+    const original=await app.inject({url:imageUrl+'?size=original',headers});
+    assert.equal(original.statusCode,200);assert.deepEqual(original.rawPayload,picture);
+    assert.match(original.headers['cache-control'],/no-store/);
+    assert.equal((await app.inject({url:imageUrl+'?path=secret',headers})).statusCode,400);
+    assert.equal((await app.inject({url:imageUrl+'?size=huge',headers})).statusCode,400);
+    assert.equal((await app.inject({url:imageUrl.replace('a'.repeat(64),'0'.repeat(64)),headers})).statusCode,404);
     const project=await app.inject({method:'POST',url:'/api/projects',headers,payload:{name:'Test',folderName:'test'}});
     assert.equal(project.statusCode,200,project.body);
     const projectId=project.json().project.id;

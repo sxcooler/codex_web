@@ -1,0 +1,19 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>预览滚动性能回归</title><meta name="viewport" content="width=device-width,initial-scale=1"><div id="root" style="height:90vh;max-width:650px;margin:auto"></div><output id="result">RUNNING</output><style>#right-sidebar{height:100%;max-height:none}</style>
+<script type="module">
+import '/src/web/style.css';import React from 'react';import{createRoot}from'react-dom/client';import{GitPanel}from'/src/web/GitPanel.tsx';import{DiffView}from'/src/web/GitHistory.tsx';
+const h=React.createElement,root=createRoot(document.querySelector('#root')),check=(v,m)=>{if(!v)throw Error(m)},pause=ms=>new Promise(r=>setTimeout(r,ms));
+const markdown=Array.from({length:40},(_,i)=>'## Section '+i+'\n\nText with **emphasis** and [child](child.md).\n\n| A | B |\n|---|---|\n| one | two |\n\n```typescript\nconst item = '+i+';\n```').join('\n\n');
+window.fetch=async input=>String(input).includes('/files/content?')?Response.json({text:markdown}):Response.json({files:[{path:'README.md',type:'file'}]});
+localStorage.setItem('codex.project-panel.performance',JSON.stringify({tab:'files',files:{path:'README.md'}}));
+let diffsRead=0;const lines=Array.from({length:1000},(_,i)=>({kind:'add',newLine:i+1,text:'const example = '+i+';'})),diff={hunks:[{oldStart:1,newStart:1,oldLines:0,newLines:1000,get lines(){diffsRead++;return lines;}}]};
+const renderDiff=label=>root.render(h('div',null,h('span',null,label),h(DiffView,{content:diff})));
+try{
+ renderDiff('before');await pause(100);const reads=diffsRead;renderDiff('after');await pause(100);check(diffsRead===reads,'无关父级更新重新遍历完整 diff');check(document.querySelectorAll('.diff-line').length===1000,'diff 丢失行');
+ root.render(h(DiffView,{content:{hunks:[{oldStart:1,newStart:1,oldLines:0,newLines:1,lines:[{kind:'add',newLine:1,text:'changed content'}]}]}}));await pause(100);check(document.querySelector('.diff-view').textContent.includes('changed content'),'真正变更的 diff 未更新');
+ root.render(h(GitPanel,{id:'perf',projectId:'performance',visible:true,tick:0}));for(let i=0;i<100&&!document.querySelector('.markdown-message h2');i++)await pause(50);await pause(1800);
+ const area=document.querySelector('.preview-content');check(area?.querySelectorAll('h2').length===40,'Markdown 未完整显示');const link=area.querySelector('a');let mutations=0;const observer=new MutationObserver(records=>{mutations+=records.reduce((sum,r)=>sum+r.addedNodes.length+r.removedNodes.length,0);});observer.observe(area,{childList:true,subtree:true});
+ for(let i=0;i<12;i++){area.scrollTop+=32;await new Promise(requestAnimationFrame);}await pause(150);observer.disconnect();check(mutations===0,'滚动重建 Markdown 子树');check(area.querySelector('a')===link,'滚动导致链接节点重建');check(JSON.parse(localStorage.getItem('codex.project-panel.performance')).files.contentScroll===area.scrollTop,'性能修复破坏滚动保存');
+ link.click();await pause(150);check(document.querySelector('.file-preview h3').textContent==='child.md','稳定链接回调破坏相对导航');
+ document.querySelector('#result').textContent='PASS: 无关更新不遍历 diff / 真正变更正常更新 / Markdown 滚动零重建 / 滚动保存 / 文件链接';
+}catch(e){document.querySelector('#result').textContent='FAIL: '+e.message;console.error(e);}
+</script></html>

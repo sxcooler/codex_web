@@ -13,6 +13,8 @@
 
 ## 当前设计
 
+- [多访问地址](design/multiple-origins.md)：localhost 与 HTTPS 白名单、Cookie/CSRF 边界和首次可选域名。
+
 - [当前用户后台运行](design/background-running.md)：源码/便携启停、首次偏好、用户启动项及迁移。
 
 - [Codex 用量与重置机会](design/account-usage.md)：顶栏入口、手机面板、二次确认与幂等恢复。
@@ -25,6 +27,7 @@
 
 ## 验证与归档
 
+- [2026-09-20 0.1.4 发布验证](verification/2026-09-20-release-014.md)：多地址、历史图片、文件预览性能及双平台发布检查。
 - [2026-09-13 Linux 验证](verification/2026-09-13-linux.md)：本轮实际环境、自动化测试、真实任务和验证边界。
 - [2026-09-11 第二阶段验收](verification/2026-09-11-phase2.md)：代码/模拟浏览器通过与真实接力、手机 Push 缺口。
 - [2026-09-09 MVP 验证](verification/2026-09-09-mvp.md)：协议、认证和完整 MVP 的原始版本与真实证据。

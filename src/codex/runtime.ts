@@ -57,7 +57,29 @@ type Idempotent = { signature: string; promise: Promise<any> };
 const HISTORY_SIZE = 20;
 type HistoryWindow = { before?: string };
 
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+function browserMedia(value: any, images: Map<string, string>): any {
+  const image = (data: string) => {
+    if (data.length <= Math.ceil(MAX_IMAGE_BYTES / 3) * 4 && /^[a-z0-9+/]*={0,2}$/i.test(data)) images.set(createHash('sha256').update(data).digest('hex'), data);
+    return '[图片单独加载]';
+  };
+  if (typeof value === 'string') {
+    if (!/^data:image\//i.test(value)) return value;
+    const comma = value.indexOf(',');
+    return /^data:image\/[a-z0-9.+-]+;base64$/i.test(value.slice(0, comma)) ? image(value.slice(comma + 1)) : '[图片格式不支持]';
+  }
+  if (Array.isArray(value)) return value.map(child => browserMedia(child, images));
+  if (!isObject(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key,
+    key === 'data' && typeof child === 'string' && (value.type === 'image' || /^image\//i.test(value.mimeType ?? ''))
+      ? image(child) : ['text', 'command', 'aggregatedOutput'].includes(key) ? child : browserMedia(child, images),
+  ]));
+}
+
 function browserItem(item: any, completed = false): any {
+  const images = new Map<string, string>();
+  item = browserMedia(item, images);
+  if (images.size) item.imagePreviews = [...images.keys()].map(id => ({ id }));
   if (item?.type !== 'commandExecution' || (!completed && !['completed', 'failed', 'declined', 'interrupted'].includes(item.status)) || typeof item.aggregatedOutput !== 'string') return item;
   const outputBytes = Buffer.byteLength(item.aggregatedOutput);
   return outputBytes > 8192 ? { ...item, aggregatedOutput: item.aggregatedOutput.slice(0, 2048), outputDeferred: true, outputChars: item.aggregatedOutput.length, outputBytes } : item;
@@ -237,6 +259,23 @@ export class Runtime extends EventEmitter {
   }
 
   async output(threadId: string, turnId: string, itemId: string): Promise<{ output: string }> {
+    const item = await this.readItem(threadId, turnId, itemId);
+    if (item?.type !== 'commandExecution') throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Command output was not found');
+    return { output: typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '' };
+  }
+
+  async image(threadId: string, turnId: string, itemId: string, imageId: string): Promise<Buffer> {
+    if (!/^[a-f0-9]{64}$/.test(imageId)) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'Invalid image ID');
+    const item = await this.readItem(threadId, turnId, itemId), images = new Map<string, string>();
+    browserMedia(item, images);
+    const data = images.get(imageId);
+    if (!data) throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Image was not found or exceeds 10 MiB');
+    const bytes = Buffer.from(data, 'base64');
+    if (bytes.length > MAX_IMAGE_BYTES) throw runtimeError(413, 'RUNTIME_INVALID_INPUT', 'Image exceeds 10 MiB');
+    return bytes;
+  }
+
+  private async readItem(threadId: string, turnId: string, itemId: string): Promise<any> {
     this.requireString(threadId, 'threadId');
     this.requireString(turnId, 'turnId');
     this.requireString(itemId, 'itemId');
@@ -246,10 +285,10 @@ export class Runtime extends EventEmitter {
       const epoch = this.epoch;
       const turn = { id: turnId, items: [] as any[], itemsView: 'notLoaded' };
       await this.readTurnBodies(threadId, [turn], itemId);
-      if (epoch !== this.epoch) throw runtimeError(503, 'RUNTIME_SYNC_RESTARTED', 'Native runtime changed during output loading; retry');
+      if (epoch !== this.epoch) throw runtimeError(503, 'RUNTIME_SYNC_RESTARTED', 'Native runtime changed during item loading; retry');
       const item = turn.items.find(item => item.id === itemId);
-      if (item?.type !== 'commandExecution') throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Command output was not found');
-      return { output: typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '' };
+      if (!item) throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Item was not found');
+      return item;
     } finally { this.reads--; this.scheduleIdle(); }
   }
 

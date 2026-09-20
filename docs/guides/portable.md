@@ -6,7 +6,7 @@
 
 1. 将整个包解压到可写目录，例如 Windows 的 `D:\Apps\CodexWeb` 或 Linux 的 `~/apps/codex-web`。Linux 使用 `tar -xzf 包名.tar.gz` 保留执行权限；不要直接在压缩包内运行。
 2. 项目需要 Git 时另行安装 Git；Codex CLI 可预先安装，也可在启动菜单选择安装方式。
-3. Windows 双击 `Start.cmd`，Linux 在解压目录运行 `bash Start.sh`。首次填写工作目录、本地端口，并设置 12–256 位 Web 管理员密码（输入不显示）。启动流程检查已有独立 CLI，缺失时按下节处理；账户登录按官方流程单独完成。
+3. Windows 双击 `Start.cmd`，Linux 在解压目录运行 `bash Start.sh`。首次填写工作目录、本地端口，随后可填写额外绑定域名（回车跳过，裸域名默认 HTTPS），再设置 12–256 位 Web 管理员密码（输入不显示）。默认保留 `http://localhost:端口`，域名加入访问白名单；此步骤不配置 DNS、证书或代理。启动流程检查已有独立 CLI，缺失时按下节处理；账户登录按官方流程单独完成。
 4. 首次交互运行询问“以后启动后是否自动转入后台”，默认选择是，并保存到配置的 `background` 字段。旧配置在下一次交互启动补问；非交互启动且没有偏好时保持前台，不自动写入选择。
 5. 服务就绪后显示地址并尝试打开默认浏览器。后台启动窗口可以关闭；用 `Stop.cmd` / `bash Stop.sh` 停止，`Status.cmd` / `bash Status.sh` 查看状态。前台运行保持终端打开，按 `Ctrl+C` 停止。
 
@@ -17,6 +17,17 @@
 默认仅监听本机 `127.0.0.1`。端口被占用时提示退出，不停止其他程序。修改端口时同步修改 `origin`；远程 HTTPS 与完整配置见 [部署指南](deployment.md)。
 
 配置保存在 `.local/web/config.json`。更换电脑后，请检查其中工作目录和 Codex 路径。便携包不包含 Codex、任何账户或登录信息。
+
+### 同时使用 localhost 和域名
+
+0.1.4 起支持额外访问地址。已有配置可保留其他字段，按下面例子修改后用 Stop / Start 重启：
+
+```json
+"origin": "http://localhost:3000",
+"allowedOrigins": ["https://device.example.ts.net"]
+```
+
+这是配置片段，不要替换整个配置文件。`origin` 是默认打开地址，`allowedOrigins` 是额外完整站点地址数组，可填写多个；不支持通配符、路径、查询或账户密码。两个不同主机地址各自登录，共用同一服务和工作目录。旧配置未设置数组时仍只允许原地址，不自动开放 localhost。代理转发目标仍为 `http://127.0.0.1:本地端口`，保留原始 Host；无需把本地端口改成 443。域名、HTTPS 和网络连通需单独配置。
 
 ## 缺少 Codex CLI
 

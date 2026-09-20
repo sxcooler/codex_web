@@ -74,7 +74,7 @@ Git 日志用图标和简短名称区分本地分支、远程跟踪分支及标�
 | `codex-web-版本-linux-x64.tar.gz` | `tar -xzf 包名.tar.gz`，进入解压目录运行 `bash Start.sh` |
 | `codex-web-版本-source.zip` | 通用干净源码，按上方源码启动步骤运行 |
 
-便携包自带 Node 和当前平台的生产依赖，无需安装 Node/npm；Git 与 Codex CLI 需单独准备。首次配置工作目录、CLI、端口和密码。缺少 Codex 时，可打开官方页面手动安装，或明确同意后运行对应平台的官方安装脚本。账户登录仍须自行完成。首次交互运行还会询问是否以后默认后台运行；选择后台后，启动成功即可关闭终端，用 `Stop.cmd` / `bash Stop.sh` 停止，`Status.cmd` / `bash Status.sh` 查看状态。`--foreground` / `--background` 临时覆盖，`--configure-startup` 修改偏好，`--no-browser` 禁止自动打开浏览器。后台运行不自动启用登录自启。
+便携包自带 Node 和当前平台的生产依赖，无需安装 Node/npm；Git 与 Codex CLI 需单独准备。首次配置工作目录、本地端口、可选域名、CLI 和密码。0.1.4 起可在 config.json 的 `allowedOrigins` 数组添加额外完整访问地址，让 localhost 与 HTTPS 域名同时可用、各自登录；域名和代理仍需自行配置。缺少 Codex 时，可打开官方页面手动安装，或明确同意后运行对应平台的官方安装脚本。账户登录仍须自行完成。首次交互运行还会询问是否以后默认后台运行；选择后台后，启动成功即可关闭终端，用 `Stop.cmd` / `bash Stop.sh` 停止，`Status.cmd` / `bash Status.sh` 查看状态。`--foreground` / `--background` 临时覆盖，`--configure-startup` 修改偏好，`--no-browser` 禁止自动打开浏览器。后台运行不自动启用登录自启。
 
 Windows 源码版用 `scripts/windows/start-server.cmd` 后台启动；登录自启可选 `scripts/windows/install-startup.cmd`，使用当前用户启动项，无需计划任务、管理员权限或 PowerShell 7；`uninstall-startup.cmd` 移除自启。Linux 登录自启沿用用户级 systemd。
 

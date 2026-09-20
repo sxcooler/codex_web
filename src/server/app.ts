@@ -10,6 +10,7 @@ import { registerStatic } from './static.ts';
 import { registerResponseHooks } from './response.ts';
 import { createUploadService, registerUploadRoutes } from './uploads.ts';
 import { createPushService, registerPushRoutes } from './push.ts';
+import { configuredOrigins } from './origins.ts';
 
 const CSRF_COOKIE = 'codex_csrf';
 const SESSION_COOKIE = 'codex_session';
@@ -17,21 +18,6 @@ const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const PUBLIC_ROUTES = new Set(['/api/auth/session', '/api/auth/login']);
 
 type AuthCookies = { csrf?: string; session?: string };
-
-function configuredOrigin(origin: string): URL {
-  const url = new URL(origin);
-  if (
-    (url.protocol !== 'http:' && url.protocol !== 'https:')
-    || url.username
-    || url.password
-    || url.pathname !== '/'
-    || url.search
-    || url.hash
-  ) {
-    throw new Error('WEB_ORIGIN must be an HTTP or HTTPS origin');
-  }
-  return url;
-}
 
 function parseCookies(header: string | undefined): AuthCookies {
   const cookies: AuthCookies = {};
@@ -86,8 +72,11 @@ function passwordSchema(properties: Record<string, unknown>) {
 
 const passwordField = { type: 'string', minLength: 12, maxLength: 256 };
 
-export async function buildServer(options: { dataDir: string; origin: string; runtime?: Runtime; projects?: Projects; distDir?: string }): Promise<FastifyInstance> {
-  const origin = configuredOrigin(options.origin);
+export async function buildServer(options: { dataDir: string; origin: string; allowedOrigins?: unknown; runtime?: Runtime; projects?: Projects; distDir?: string }): Promise<FastifyInstance> {
+  const origins = configuredOrigins(options.origin, options.allowedOrigins);
+  const originsByHost = new Map(origins.map(origin => [origin.host, origin]));
+  const requestOrigins = new WeakMap<FastifyRequest, URL>();
+  const requestOrigin = (request: FastifyRequest) => requestOrigins.get(request)!;
   const auth = await openAuth(options.dataDir);
   const app = Fastify({
     logger: false,
@@ -127,9 +116,11 @@ export async function buildServer(options: { dataDir: string; origin: string; ru
     return payload;
   });
   app.addHook('onRequest', async (request, reply) => {
-    if (request.headers.host !== origin.host) {
+    const origin = originsByHost.get(request.headers.host ?? '');
+    if (!origin) {
       return reply.code(403).send({ error: 'Forbidden' });
     }
+    requestOrigins.set(request, origin);
 
     let cookies: AuthCookies;
     try {
@@ -170,7 +161,7 @@ export async function buildServer(options: { dataDir: string; origin: string; ru
   app.get('/api/auth/session', async (request, reply) => {
     const cookies = requestCookies.get(request) ?? {};
     const csrfToken = cookies.csrf ?? randomBytes(32).toString('base64url');
-    if (!cookies.csrf) setCookie(reply, CSRF_COOKIE, csrfToken, origin.protocol === 'https:');
+    if (!cookies.csrf) setCookie(reply, CSRF_COOKIE, csrfToken, requestOrigin(request).protocol === 'https:');
     return { authenticated: auth.authenticate(cookies.session), csrfToken };
   });
 
@@ -190,7 +181,7 @@ export async function buildServer(options: { dataDir: string; origin: string; ru
       closeInvalidStreams();
       await pruneSubscriptions().catch(() => {});
       if (!session) return reply.code(401).send({ error: 'Invalid credentials' });
-      setCookie(reply, SESSION_COOKIE, session, origin.protocol === 'https:');
+      setCookie(reply, SESSION_COOKIE, session, requestOrigin(request).protocol === 'https:');
       return { authenticated: true };
     },
   );
@@ -200,7 +191,7 @@ export async function buildServer(options: { dataDir: string; origin: string; ru
     options.runtime?.emit('accountChanged');
     closeInvalidStreams();
     await pruneSubscriptions().catch(() => {});
-    setCookie(reply, SESSION_COOKIE, '', origin.protocol === 'https:', true);
+    setCookie(reply, SESSION_COOKIE, '', requestOrigin(request).protocol === 'https:', true);
     return { authenticated: false };
   });
 
@@ -218,12 +209,12 @@ export async function buildServer(options: { dataDir: string; origin: string; ru
       if (changed.status === 'invalid') return reply.code(401).send({ error: 'Invalid credentials' });
       closeInvalidStreams();
       await pruneSubscriptions().catch(() => {});
-      setCookie(reply, SESSION_COOKIE, '', origin.protocol === 'https:', true);
+      setCookie(reply, SESSION_COOKIE, '', requestOrigin(request).protocol === 'https:', true);
       return { authenticated: false };
     },
   );
 
-  app.get('/api/settings', async () => ({ origin: origin.origin, nodeVersion: process.version,
+  app.get('/api/settings', async request => ({ origin: requestOrigin(request).origin, nodeVersion: process.version,
     workRoot: options.projects?.root, runtime: options.runtime ? await options.runtime.diagnostics() : undefined }));
   try {
   if (options.runtime && options.projects) {
@@ -233,10 +224,10 @@ export async function buildServer(options: { dataDir: string; origin: string; ru
     // This application has one administrator; attachments survive login renewal and password changes.
     const uploadAccess={...access,owner:(_request:FastifyRequest)=>'administrator'};
     await registerUploadRoutes(app,uploads,uploadAccess);
-    const push=await createPushService({dataDir:options.dataDir,origin:origin.origin,sessionValid:id=>auth.authenticateSessionId(id)});
+    const push=await createPushService({dataDir:options.dataDir,origin:(origins.find(origin=>origin.protocol==='https:')??origins[0]).origin,sessionValid:id=>auth.authenticateSessionId(id)});
     app.addHook('onClose',async()=>push.close());
     pruneSubscriptions=()=>push.pruneInvalid();
-    registerPushRoutes(app,push,access);
+    registerPushRoutes(app,push,{...access,secure:request=>requestOrigin(request).protocol==='https:'});
     const jobs=new Set<Promise<unknown>>();let closing=false;
     const notify=(event:any)=>{if(closing)return;const job=push.notify(event).catch(()=>{});jobs.add(job);void job.finally(()=>jobs.delete(job));};
     options.runtime.on('notification',notify);

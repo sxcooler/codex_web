@@ -1,0 +1,50 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>右侧栏折叠回归</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>#root{max-width:650px;margin:auto}#right-sidebar{max-height:none;height:calc(100dvh - 60px)}</style>
+<div id="root"></div><output id="result">RUNNING</output>
+<script type="module">
+import '/src/web/style.css';import React from 'react';import{createRoot}from'react-dom/client';import{GitPanel}from'/src/web/GitPanel.tsx';
+const root=createRoot(document.querySelector('#root')),h=React.createElement,check=(v,m)=>{if(!v)throw Error(m)},tick=(ms=100)=>new Promise(r=>setTimeout(r,ms));
+const files=Array.from({length:40},(_,i)=>({path:'src/example-'+i+'.ts',type:'file',status:'M'})),body=Array.from({length:200},(_,i)=>'line '+i+' '+'.'.repeat(230)).join('\n'),parent='f'.repeat(40);
+let reads=0;
+globalThis.fetch=async input=>{reads++;const url=new URL(String(input),location.origin);
+ if(url.pathname.endsWith('/git/log'))return Response.json({repository:true,commits:Array.from({length:50},(_,i)=>({id:String(i).padStart(40,'0'),parents:[parent],subject:'Commit '+i,author:'QA',date:'2026-09-20T00:00:00Z',refs:[]})),branches:[],nextCursor:null});
+ if(url.pathname.endsWith('/git/commit'))return Response.json({commit:{id:url.searchParams.get('commit'),subject:'Selected commit',message:'Full commit message',parents:[parent,'e'.repeat(40)],author:'QA',date:'2026-09-20T00:00:00Z'},parent:url.searchParams.get('parent')||parent,files});
+ if(url.pathname.endsWith('/diff'))return Response.json({hunks:[{oldStart:1,oldLines:200,newStart:1,newLines:200,lines:body.split('\n').map((text,i)=>({kind:'add',text,newLine:i+1}))}]});
+ if(url.pathname.endsWith('/files/content'))return Response.json({text:body});
+ return Response.json({files});
+};
+let project='collapse',session='one',visible=true;
+const render=()=>root.render(h(GitPanel,{key:project,id:session,projectId:project,tick:0,visible}));
+const shown=node=>node.getClientRects().length>0,find=text=>[...document.querySelectorAll('button')].find(n=>shown(n)&&n.textContent===text);
+const toggle=prefix=>[...document.querySelectorAll('.panel-section-toggle')].find(n=>shown(n)&&n.textContent.includes(prefix));
+const click=async node=>{check(node,'缺少控件');node.click();await tick();};
+const preview=()=>[...document.querySelectorAll('.preview-content')].find(shown),fileList=()=>[...document.querySelectorAll('.file-list')].find(shown);
+const stored=()=>JSON.parse(localStorage.getItem('codex.project-panel.'+project));
+const assertLayout=()=>{const aside=document.querySelector('aside'),area=preview();check(aside.scrollHeight<=aside.clientHeight+2,'右栏出现整体纵向滚动');check(area.getBoundingClientRect().bottom<=aside.getBoundingClientRect().bottom,'预览底部超出右栏');check(area.scrollWidth>area.clientWidth,'超宽内容没有横向滚动');check(document.documentElement.scrollWidth<=innerWidth,'页面横向溢出');};
+try{
+ localStorage.clear();render();await tick(500);
+ for(const tab of ['变更','文件']){
+  await click(find(tab));await click(fileList().querySelector('button'));
+  const area=preview(),list=fileList(),control=toggle(tab==='变更'?'变更文件':'文件列表');
+  list.scrollTop=90;area.scrollTop=100;area.scrollLeft=50;await tick();const oldHeight=area.clientHeight,before=reads;
+  await click(control);check(control.getAttribute('aria-expanded')==='false','折叠状态错误');check(!shown(list),'列表未隐藏');check(area.clientHeight>oldHeight+60,'折叠未增加预览高度');check(area.scrollTop===100&&area.scrollLeft===50,'预览滚动丢失');check(reads===before,'折叠触发请求');assertLayout();
+  await click(control);check(list.scrollTop===90,'展开未恢复列表滚动');check(reads===before,'展开触发请求');
+  await click(control);visible=false;render();await tick();visible=true;render();await tick();check(toggle(tab==='变更'?'变更文件':'文件列表').getAttribute('aria-expanded')==='false','关闭重开丢失折叠');
+ }
+ await click(find('Git 日志'));await click(document.querySelector('.git-commit'));await click(fileList().querySelector('button'));
+ const log=document.querySelector('.git-graph-list'),list=fileList(),area=preview();log.scrollTop=100;list.scrollTop=60;area.scrollTop=120;area.scrollLeft=80;await tick();const before=reads,fullHeight=area.clientHeight;
+ await click(toggle('提交记录'));const halfHeight=area.clientHeight;check(halfHeight>fullHeight+60,'折叠记录未扩大预览');check(shown(list),'记录折叠影响提交文件');
+ await click(toggle('提交文件'));check(area.clientHeight>halfHeight+20,'折叠提交文件未扩大预览');check(area.scrollTop===120&&area.scrollLeft===80,'Git 预览滚动丢失');check(reads===before,'Git 折叠触发请求');assertLayout();
+ await click(toggle('提交记录'));check(log.scrollTop===100,'Git 记录滚动未恢复');check(toggle('提交文件').getAttribute('aria-expanded')==='false','Git 两层折叠相互影响');await click(toggle('提交文件'));check(list.scrollTop===60,'Git 文件滚动未恢复');
+ await click(find('查看提交信息'));check(document.querySelector('.commit-info-popover').matches(':popover-open'),'信息浮层未打开');check(document.querySelectorAll('.commit-details details').length===0,'仍有嵌套 accordion');
+ // The native popover closes on a real outside click / Escape in the Playwright check.
+ await click(document.querySelector('[aria-label="关闭提交信息"]'));check(!document.querySelector('.commit-info-popover').matches(':popover-open'),'关闭按钮无效');
+ await click(find('查看提交信息'));await click(find('文件'));check(!document.querySelector('.commit-info-popover').matches(':popover-open'),'切换标签仍显示提交信息');await click(find('Git 日志'));
+ await click(toggle('提交文件'));await click(document.querySelectorAll('.git-commit')[1]);check(toggle('提交文件').getAttribute('aria-expanded')==='true','切换提交未展开文件列表');check(!preview(),'切换提交残留旧文件');await click(fileList().querySelector('button'));
+ await click(toggle('提交记录'));await click(toggle('提交文件'));const saved=stored();root.render(null);await tick();render();await tick(400);check(toggle('提交记录').getAttribute('aria-expanded')==='false'&&toggle('提交文件').getAttribute('aria-expanded')==='false','重载丢失 Git 折叠');check(preview()?.textContent.includes('line 0'),'重载丢失文件选择');
+ session='two';root.render(null);await tick();render();await tick(300);check(toggle('提交记录').getAttribute('aria-expanded')==='false','同项目切会话丢失状态');
+ project='other';render();await tick();check(toggle('变更文件').getAttribute('aria-expanded')==='true','项目状态串线');
+ project='collapse';render();await tick(300);assertLayout();await click(toggle('提交文件'));
+ document.querySelector('#result').textContent='PASS: 三标签折叠 / Git 独立折叠 / 空间与双轴滚动 / 请求与状态保留 / 切提交 / 浮层 / 项目隔离';
+}catch(e){document.querySelector('#result').textContent='FAIL: '+e.message;console.error(e);}
+</script></html>

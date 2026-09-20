@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
 import { parsePort, portAvailable } from '../scripts/portable.ts';
 import { runtimeAllowed, runtimeFiles, sourceAllowed } from '../scripts/package-portable.ts';
+import { configuredOrigins, optionalDomain } from '../src/server/origins.ts';
+
+test('origin allowlist rejects malformed or ambiguous inputs and normalizes optional domains',()=>{
+  assert.equal(optionalDomain('  '),undefined);
+  assert.equal(optionalDomain(' Device.Example.test '),'https://device.example.test');
+  assert.equal(optionalDomain('https://example.test:443/'),'https://example.test');
+  for(const value of ['https://*.example.test','https://user:pass@example.test','https://example.test/path','https://example.test?x=1','https://example.test#x','ftp://example.test','https://exa mple.test','https:\\example.test'])assert.throws(()=>configuredOrigins(value));
+  for(const extra of ['https://example.test',null,{},[null],[1]])assert.throws(()=>configuredOrigins('http://localhost:3000',extra));
+  assert.throws(()=>configuredOrigins('http://example.test:3000',['https://example.test:3000']));
+  assert.equal(configuredOrigins('http://localhost:3000',['http://localhost:3000/']).length,1);
+});
 
 test('portable ports are validated and an occupied listener is left untouched', async () => {
   assert.equal(parsePort('3000'), 3000);

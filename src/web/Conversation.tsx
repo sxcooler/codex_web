@@ -1,4 +1,6 @@
 import {memo,useEffect,useId,useRef,useState} from 'react';
+import {chatFileUrl,linkedFile} from './fileLinks.ts';
+import {NativeImages} from './ImagePreview.tsx';
 import {MarkdownView} from './MarkdownView.tsx';
 import {api,type Json} from './api.ts';
 import {TestReport} from './GitPanel.tsx';
@@ -6,14 +8,14 @@ const pretty=(value:unknown)=>typeof value==='string'?value:JSON.stringify(value
 const stepLabels:Record<string,string>={reasoning:'思考',commandExecution:'命令',fileChange:'文件修改',mcpToolCall:'MCP 工具',dynamicToolCall:'工具调用',webSearch:'搜索',plan:'计划',collabAgentToolCall:'协作',functionCallOutput:'工具输出'};
 const statusLabel=(item:Json)=>item.exitCode!==undefined&&item.exitCode!==null?`exit ${item.exitCode}`:({inProgress:'运行中',completed:'已完成',failed:'失败',declined:'已拒绝',interrupted:'已中止'} as Record<string,string>)[item.status]??item.status??'';
 
-export const TurnMessages=memo(function TurnMessages({turn,threadId,attachments,phase}:{turn:Json;threadId:string;attachments?:Json[];phase?:string}){
+export const TurnMessages=memo(function TurnMessages({turn,threadId,attachments,phase,projectRoot,onOpenFile}:{turn:Json;threadId:string;attachments?:Json[];phase?:string;projectRoot?:string;onOpenFile?:(path:string)=>void}){
   const blocks:{key:string;items:Json[];process:boolean}[]=[];
   for(const [index,item] of (turn.items??[]).entries()){
     const process=Object.hasOwn(stepLabels,item.type),last=blocks.at(-1);
     if(process&&last?.process)last.items.push(item);else blocks.push({key:turn.id+':'+(item.id??index),items:[item],process});
   }
   const firstUser=turn.items?.find((item:Json)=>item.type==='userMessage'),lastAgent=turn.items?.filter((item:Json)=>item.type==='agentMessage').at(-1);
-  return <>{blocks.map((block,index)=>block.process?<ExecutionGroup key={block.key} items={block.items} threadId={threadId} turnId={turn.id} status={turn.status} phase={phase} last={index===blocks.length-1}/>:<Message key={block.key} item={block.items[0]} threadId={threadId} turnId={turn.id} attachments={attachments} streaming={turn.status==='inProgress'} timestamp={block.items[0]===firstUser?turn.startedAt:block.items[0]===lastAgent&&turn.status!=='inProgress'?turn.completedAt:undefined} timeLabel={block.items[0]===firstUser?'本轮开始':'本轮完成'}/>)}</>;
+  return <>{blocks.map((block,index)=>block.process?<ExecutionGroup key={block.key} items={block.items} threadId={threadId} turnId={turn.id} status={turn.status} phase={phase} last={index===blocks.length-1}/>:<Message key={block.key} item={block.items[0]} threadId={threadId} turnId={turn.id} attachments={attachments} projectRoot={projectRoot} onOpenFile={onOpenFile} streaming={turn.status==='inProgress'} timestamp={block.items[0]===firstUser?turn.startedAt:block.items[0]===lastAgent&&turn.status!=='inProgress'?turn.completedAt:undefined} timeLabel={block.items[0]===firstUser?'本轮开始':'本轮完成'}/>)}</>;
 });
 
 function MessageHeader({user=false,timestamp,timeLabel}:{user?:boolean;timestamp?:number;timeLabel?:string}){
@@ -31,15 +33,15 @@ function ExecutionGroup({items,threadId,turnId,status,phase,last}:{items:Json[];
   </details>;
 }
 
-export const Message=memo(function Message({item,threadId,turnId,attachments=[],streaming=false,visible=true,timestamp,timeLabel}:{item:Json;threadId:string;turnId?:string;attachments?:Json[];streaming?:boolean;visible?:boolean;timestamp?:number;timeLabel?:string}) {
-  if(item.type==='userMessage')return <article className="message user"><div className="avatar">U</div><div className="message-body"><MessageHeader user timestamp={timestamp} timeLabel={timeLabel}/><div className="prose">{(item.content??[]).map((c:Json,i:number)=><div key={i}>{c.type==='localImage'&&attachments.some(a=>a.path===c.path)?<a href={attachments.find(a=>a.path===c.path)!.url} target="_blank" rel="noreferrer"><img className="history-image" src={attachments.find(a=>a.path===c.path)!.url} alt={attachments.find(a=>a.path===c.path)!.name}/></a>:c.type==='localImage'?<span>图片附件（原生历史）</span>:c.text??`[${c.type}]`}</div>)}</div></div></article>;
-  if(item.type==='agentMessage')return <article className="message"><div className="avatar codex">A</div><div className="message-body"><MessageHeader timestamp={timestamp} timeLabel={timeLabel}/><MarkdownView text={item.text??''} streaming={streaming}/></div></article>;
+export const Message=memo(function Message({item,threadId,turnId,attachments=[],streaming=false,visible=true,timestamp,timeLabel,projectRoot,onOpenFile}:{item:Json;threadId:string;turnId?:string;attachments?:Json[];streaming?:boolean;visible?:boolean;timestamp?:number;timeLabel?:string;projectRoot?:string;onOpenFile?:(path:string)=>void}) {
+  if(item.type==='userMessage')return <article className="message user"><div className="avatar">U</div><div className="message-body"><MessageHeader user timestamp={timestamp} timeLabel={timeLabel}/><div className="prose">{(item.content??[]).map((c:Json,i:number)=><div key={i}>{c.type==='localImage'&&attachments.some(a=>a.path===c.path)?<a href={attachments.find(a=>a.path===c.path)!.url} target="_blank" rel="noreferrer"><img className="history-image" src={attachments.find(a=>a.path===c.path)!.url} alt={attachments.find(a=>a.path===c.path)!.name}/></a>:c.type==='image'&&item.imagePreviews?.length?null:c.type==='localImage'||c.type==='image'?<span>图片附件（原生历史）</span>:c.text??`[${c.type}]`}</div>)}</div><NativeImages threadId={threadId} turnId={turnId} item={item}/></div></article>;
+  if(item.type==='agentMessage')return <article className="message"><div className="avatar codex">A</div><div className="message-body"><MessageHeader timestamp={timestamp} timeLabel={timeLabel}/><MarkdownView text={item.text??''} streaming={streaming} linkScope={threadId+'|'+(projectRoot??'')} resolveUrl={projectRoot&&onOpenFile?url=>chatFileUrl(threadId,projectRoot,url):undefined} onLink={url=>{const path=linkedFile(threadId,'',url);if(!path||!onOpenFile)return false;onOpenFile(path);return true;}}/><NativeImages threadId={threadId} turnId={turnId} item={item}/></div></article>;
   if(item.type==='commandExecution')return <Command item={item} threadId={threadId} turnId={turnId} visible={visible}/>;
-  if(Object.hasOwn(stepLabels,item.type))return <Step item={item}/>;
+  if(Object.hasOwn(stepLabels,item.type))return <Step item={item} threadId={threadId} turnId={turnId}/>;
   return <details className="tool"><summary><span>{item.type}</span><code>{item.command??item.changes?.map((change:Json)=>change.path).join(', ')??''}</code><span className="muted">{statusLabel(item)}</span></summary><pre>{pretty(item)}</pre></details>;
 });
 
-function Step({item}:{item:Json}){
+function Step({item,threadId,turnId}:{item:Json;threadId:string;turnId?:string}){
   const [open,setOpen]=useState(false),detailsId=useId();
   const reasoning=item.type==='reasoning',summary=reasoning?(item.summary??[]).filter((value:unknown)=>typeof value==='string').join('\n'):item.type==='plan'?item.text??'':'';
   const content=reasoning?(item.content??[]).filter((value:unknown)=>typeof value==='string').join('\n'):'';
@@ -47,6 +49,7 @@ function Step({item}:{item:Json}){
   const short=!!text&&(reasoning||item.type==='plan')&&text.length<=240&&text.split('\n').length<=4;
   const name=item.changes?.map((change:Json)=>change.path).join(', ')??item.tool??item.name??item.query??'';
   return <section className="execution-step"><div className="step-heading"><span>{stepLabels[item.type]??item.type}</span>{name?<code title={name}>{name}</code>:null}<span className="muted step-status">{statusLabel(item)}</span></div>
+    <NativeImages threadId={threadId} turnId={turnId} item={item}/>
     {short?<p className="step-excerpt">{text}</p>:<>{summary?<p className="step-excerpt">{summary.slice(0,240)}{summary.length>240?'…':''}</p>:null}{text?<><button type="button" className="step-toggle quiet" aria-expanded={open} aria-controls={detailsId} onClick={()=>setOpen(value=>!value)}>{open?'收起详情':'查看详情'}</button><div id={detailsId} hidden={!open}>{open?<pre>{text}</pre>:null}</div></>:<p className="muted small">暂无摘要</p>}</>}
   </section>;
 }

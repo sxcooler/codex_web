@@ -1,0 +1,47 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/icon.svg"><title>文档链接回归</title>
+<div id="root"></div><output id="result" style="position:fixed;bottom:0;right:0;z-index:100;background:#111;padding:8px">RUNNING</output>
+<script type="module">
+const options=new URLSearchParams(location.search),linux=options.has('linux'),streaming=options.has('streaming');
+const id='document-links',requests=[],rootPath=linux?'/home/test/project':'C:\\work\\project';
+let text='已整理成 [感知改进：现状评估与下一阶段方案](C:/work/project/docs/方案.md:12)。\n\n[相对路径](docs/方案.md#L12) · [文件地址](file:///C:/work/project/docs/方案.md) · [缺失文件](docs/missing.md) · [外链](https://example.com)\n\n[项目外](C:/private/secret.md) [危险](javascript:alert%281%29)';
+if(linux)text=text.replaceAll('C:/work/project','/home/test/project').replace('file:////home','file:///home');
+const snapshot={project:{id:'document-project',path:rootPath},thread:{id,name:'文档链接验收',cwd:rootPath,turns:[{id:'turn',status:streaming?'inProgress':'completed',items:[{type:'agentMessage',id:'answer',text}]}]},phase:'IDLE',pending:[]};
+history.replaceState(null,'','/sessions/'+id);
+localStorage.setItem('codex-web:panels:v1',JSON.stringify({version:1,left:false,right:false}));
+window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};
+window.fetch=async(input)=>{
+ const url=new URL(String(input),location.origin);requests.push(url.pathname+url.search);
+ if(url.pathname==='/api/auth/session')return Response.json({authenticated:true,csrfToken:'test'});
+ if(url.pathname==='/api/projects')return Response.json({projects:[snapshot.project]});
+ if(url.pathname==='/api/sessions')return Response.json({data:[snapshot.thread]});
+ if(url.pathname==='/api/sessions/'+id)return Response.json(snapshot);
+ if(url.pathname.endsWith('/files'))return Response.json({files:[{path:'docs/方案.md',type:'file'}]});
+ if(url.pathname.endsWith('/files/content'))return url.searchParams.get('path')==='docs/missing.md'?Response.json({error:'missing'},{status:404}):Response.json({text:'# 方案预览\n\n文档链接已正常打开。\n\n[同目录文档](next.md)'});
+ if(url.pathname.endsWith('/git/files'))return Response.json({files:[]});
+ if(url.pathname==='/api/models')return Response.json({data:[]});
+ if(url.pathname.startsWith('/api/permission-modes'))return Response.json({modes:[]});
+ return Response.json({});
+};
+const until=async(test,message)=>{const end=Date.now()+15000;while(!test()){if(Date.now()>end)throw Error(message);await new Promise(resolve=>setTimeout(resolve,25));}};
+const check=(value,message)=>{if(!value)throw Error(message);};
+const link=label=>[...document.querySelectorAll('.timeline a')].find(a=>a.textContent===label);
+const close=async()=>{document.querySelector('[data-panel-toggle="right"][aria-expanded="true"]')?.click();await until(()=>document.querySelector('#right-sidebar')?.hidden,'右侧栏未关闭');};
+try{
+ await import('/src/web/main.tsx');
+ await until(()=>document.querySelector('.markdown-message'),'消息未渲染');
+ await until(()=>link('感知改进：现状评估与下一阶段方案'),'合法文档链接被 blocked');
+ check(!link('项目外')&&!link('危险'),'不安全地址变成可点击链接');
+ check(link('外链')?.target==='_blank','外链行为改变');
+ for(const label of ['感知改进：现状评估与下一阶段方案','相对路径','文件地址']){
+  link(label).click();await until(()=>document.querySelector('#right-sidebar:not([hidden]) .preview-content h1')?.textContent==='方案预览','点击未打开预览');
+  check(document.querySelector('.file-preview h3').textContent==='docs/方案.md','路径未正确解析');await close();
+ }
+ link('缺失文件').click();await until(()=>document.querySelector('.file-preview [role=alert]')?.textContent==='文件已不可用。','缺失文件未说明');await close();
+ link('相对路径').click();await until(()=>document.querySelector('.preview-content h1'),'再次打开失败');
+ document.querySelector('.preview-content a').click();await until(()=>document.querySelector('.file-preview h3')?.textContent==='docs/next.md','文档内相对链接失败');
+ await close();link('相对路径').click();await until(()=>document.querySelector('.file-preview h3')?.textContent==='docs/方案.md','重复点击未重新选中文档');
+ check(!requests.some(url=>url.includes('secret')),'越界路径发出了请求');
+ check(document.documentElement.scrollWidth<=innerWidth,'页面横向溢出');
+ document.querySelector('#result').textContent='PASS: 文档链接 / 桌面与抽屉预览 / 缺失文件 / 安全边界';
+}catch(error){document.querySelector('#result').textContent='FAIL: '+error.message;console.error(error);}
+</script></html>

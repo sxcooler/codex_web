@@ -19,7 +19,7 @@ Windows x64 和 Linux x64 glibc 可使用各自自带 Node 的便携包；首次
 
 ## 配置与数据
 
-`.local/web/config.json` 可设置 `origin`、`port`、`workRoot`、`codexBin`。对应环境变量 `WEB_ORIGIN`、`PORT`、`WORK_ROOT`、`CODEX_BIN` 优先；`WEB_DATA_DIR` 可更换后端数据目录。Windows/Linux 部署脚本固定使用项目的 `.local/web`，不要混用其他数据目录。部署入口按平台放在 `scripts/windows/` 与 `scripts/linux/`，见 [脚本索引](../../scripts/README.md)。
+`.local/web/config.json` 可设置 `origin`、`allowedOrigins`、`port`、`workRoot`、`codexBin`。`origin` 是默认打开地址，`allowedOrigins` 是额外完整 HTTP/HTTPS 站点地址数组（默认空）；两者合并为精确白名单。对应环境变量 `WEB_ORIGIN`、`PORT`、`WORK_ROOT`、`CODEX_BIN` 优先；`WEB_ORIGIN` 只覆盖默认地址，额外地址仍来自配置。`WEB_DATA_DIR` 可更换后端数据目录。便携入口使用包内配置并清除这四项开发环境覆盖。Windows/Linux 部署脚本固定使用项目的 `.local/web`，不要混用其他数据目录。部署入口按平台放在 `scripts/windows/` 与 `scripts/linux/`，见 [脚本索引](../../scripts/README.md)。
 
 默认工作根目录是当前用户的 `~/work`（Windows 为 `%USERPROFILE%\work`），启动前须自行创建，或将 `WORK_ROOT` 设置为已有目录；服务不会自动创建它。只发现一级项目目录；无项目会话也在该根目录运行。现有原生 Thread 保留原 cwd，未关联项目时不提供 Git 操作。跨系统旧路径不会自动映射成可写项目。
 
@@ -76,7 +76,7 @@ scripts\windows\configure-serve.cmd
 
 脚本检查现有 Serve 配置；发现任何映射就退出，保留原配置。首次使用可能要求在 Tailscale 管理页启用 HTTPS/Serve。成功后配置私网 HTTPS → `http://127.0.0.1:3000`，将精确 HTTPS origin 写入本机配置，再重启 Web 服务。
 
-此示例使用仅面向虚拟网络的 Serve，不使用面向公网的 Funnel。HTTPS origin 配置后应通过该 HTTPS 地址登录；直接访问 localhost 会被 Host 检查拒绝。Cookie 在 HTTPS 下设置 Secure。参考 [Tailscale Serve 官方说明](https://tailscale.com/docs/reference/tailscale-cli/serve)。
+此示例使用仅面向虚拟网络的 Serve，不使用面向公网的 Funnel。辅助脚本把 HTTPS 地址设为默认 origin，并将原有地址保留在 allowedOrigins；新配置默认保留 localhost。手动修改 origin 不会自动添加 localhost，需要自行加入数组。不同主机地址各自登录，Cookie 根据本次访问地址设置 Secure；写请求的 Origin 必须匹配本次 Host，同时验证 CSRF。参考 [Tailscale Serve 官方说明](https://tailscale.com/docs/reference/tailscale-cli/serve)。
 
 Linux 在宿主安装并登录 Tailscale、取得 Serve 操作权限后运行 `bash scripts/linux/configure-serve.sh`；可追加实际 Web 端口，例如 `bash scripts/linux/configure-serve.sh 3412`。同样拒绝覆盖已有映射，成功后保留其他 Web 配置并写入 origin 和端口。脚本不自动安装 Tailscale、不提权，也不启用 Funnel。WSL 验证覆盖命令及配置保护逻辑，未安装 Linux Tailscale，因此不代表 Linux 跨设备访问已验收。
 

@@ -7,6 +7,7 @@ import { MetadataStore } from './metadata.ts';
 import { AccountUsage } from './account-usage.ts';
 import { parseTestReport } from './test-reports.ts';
 import type { UploadService } from './uploads.ts';
+import {renderNativeImage} from './native-images.ts';
 
 const text = { type: 'string', minLength: 1, maxLength: 12_000 };
 const short = { type: 'string', minLength: 1, maxLength: 120 };
@@ -28,6 +29,7 @@ export function registerApi(app: FastifyInstance, options: {
     if (route.url.includes(':threadId')) fields.threadId = { ...short, pattern: '^[a-zA-Z0-9-]+$' };
     if (route.url.includes(':requestId')) fields.requestId = { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' };
     for (const name of ['turnId', 'itemId']) if (route.url.includes(':' + name)) fields[name] = { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' };
+    if(route.url.includes(':imageId'))fields.imageId={type:'string',pattern:'^[a-f0-9]{64}$'};
     route.schema = { querystring: empty, ...route.schema,
       ...(Object.keys(fields).length ? { params: { ...empty, required: Object.keys(fields), properties: fields } } : {}),
       ...(/\/(abort|release|refresh|release-on-leave|cancel-release)$/.test(route.url) ? { body: empty } : {}),
@@ -120,6 +122,26 @@ export function registerApi(app: FastifyInstance, options: {
   app.get('/api/sessions/:threadId/turns/:turnId/items/:itemId/output', async request => {
     const { threadId, turnId, itemId } = params(request);
     return runtime.output(threadId, turnId, itemId);
+  });
+  // At most 4 MiB of thumbnails; two workers keep decoding off the history response path.
+  type ImageResult=Awaited<ReturnType<typeof renderNativeImage>>;
+  const thumbnails=new Map<string,ImageResult>(),imageJobs=new Map<string,Promise<ImageResult>>(),workers=[Promise.resolve(),Promise.resolve()];let nextWorker=0;
+  app.get('/api/sessions/:threadId/turns/:turnId/items/:itemId/images/:imageId',{schema:{querystring:{type:'object',additionalProperties:false,properties:{size:{type:'string',enum:['thumbnail','original']}}}}},async(request,reply)=>{
+    const {threadId,turnId,itemId,imageId}=request.params as any,original=(request.query as any).size==='original';
+    const key=JSON.stringify([threadId,turnId,itemId,imageId,original]);
+    let result=!original?thumbnails.get(key):undefined;
+    if(!result){
+      let job=imageJobs.get(key);
+      if(!job){
+        if(imageJobs.size>=32)return reply.code(429).header('retry-after','2').send({error:'图片加载繁忙，请稍后重试。'});
+        const worker=nextWorker++%workers.length;
+        job=workers[worker].then(async()=>renderNativeImage(await runtime.image(threadId,turnId,itemId,imageId),original));
+        workers[worker]=job.then(()=>{},()=>{});imageJobs.set(key,job);
+      }
+      try{result=await job;if(!original){thumbnails.set(key,result);while(thumbnails.size>64)thumbnails.delete(thumbnails.keys().next().value!);}}
+      finally{if(imageJobs.get(key)===job)imageJobs.delete(key);}
+    }
+    return reply.header('cache-control','no-store').header('content-disposition','inline').type(result.type).send(result.bytes);
   });
   app.post('/api/sessions/:threadId/messages', { schema: body({ text:{...text,minLength:0}, clientRequestId: requestId, expectedTurnId:short, ...turnFields }, ['text','clientRequestId']) }, async request => {const input=request.body as any;const nativeInput=await attachments(input,request,params(request).threadId);try{const result=await runtime.send(params(request).threadId,{text:input.text,clientRequestId:input.clientRequestId,expectedTurnId:input.expectedTurnId,model:input.model,effort:input.effort,permissionMode:input.permissionMode,...(nativeInput.length?{nativeInput}:{})});if(nativeInput.length)await options.uploads!.bindClaim(options.uploadOwner!(request),input.clientRequestId,params(request).threadId);return result;}catch(error){await rollbackRejected(input,request,error);throw error;}});
   app.post('/api/sessions/:threadId/abort', async request => runtime.abort(params(request).threadId));

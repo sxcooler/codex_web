@@ -25,7 +25,7 @@ export async function startServer() {
   const workRoot = await realpath(process.env.WORK_ROOT ?? config.workRoot ?? join(homedir(), 'work'));
   const executable = resolveCodexExecutable(config.codexBin);
   const runtime = new Runtime({ executable, cwd: workRoot });
-  const app = await buildServer({ dataDir, origin, runtime, projects: new Projects(workRoot), distDir: join(projectRoot, 'dist') });
+  const app = await buildServer({ dataDir, origin, allowedOrigins: config.allowedOrigins, runtime, projects: new Projects(workRoot), distDir: join(projectRoot, 'dist') });
   try {
     await app.listen({ host: '127.0.0.1', port });
     process.stdout.write(`Codex Web listening at ${origin}\n`);

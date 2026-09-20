@@ -3,6 +3,19 @@ import type {Json} from './api.ts';
 
 export const imagePath=(path:string)=>/\.(png|jpe?g|webp|gif|avif|svg)$/i.test(path);
 
+export function NativeImages({threadId,turnId,item}:{threadId:string;turnId?:string;item:Json}){
+  if(!turnId||!item.id)return null;
+  const prefix='/api/sessions/'+encodeURIComponent(threadId)+'/turns/'+encodeURIComponent(turnId)+'/items/'+encodeURIComponent(item.id)+'/images/';
+  return item.imagePreviews?.length?<div className="native-images">{item.imagePreviews.map((image:Json,index:number)=><NativeImage key={image.id} src={prefix+encodeURIComponent(image.id)} label={'历史图片 '+(index+1)}/>)}</div>:null;
+}
+function NativeImage({src,label}:{src:string;label:string}){
+  const [failed,setFailed]=useState(false),[attempt,setAttempt]=useState(0);
+  return <figure className="native-image">
+    <a href={src+'?size=original'} target="_blank" rel="noopener noreferrer" aria-label={'查看原图：'+label}><img key={attempt} className="history-image" src={src} alt={label} width="384" height="256" loading="lazy" decoding="async" hidden={failed} onError={()=>setFailed(true)}/></a>
+    {failed?<figcaption role="status">图片暂时无法加载。<button type="button" className="quiet" onClick={()=>{setFailed(false);setAttempt(value=>value+1);}}>重试图片</button></figcaption>:<figcaption className="muted small">点击查看原图</figcaption>}
+  </figure>;
+}
+
 export function ImagePreview({id,path,version,revision}:{id:string;path:string;version:string;revision?:string}){
   const [status,setStatus]=useState<'loading'|'ready'|'error'>('loading');
   const src='/api/sessions/'+encodeURIComponent(id)+'/files/image?path='+encodeURIComponent(path)+'&v='+encodeURIComponent(version)+(revision?'&revision='+encodeURIComponent(revision):'');

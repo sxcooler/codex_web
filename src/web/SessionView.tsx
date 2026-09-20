@@ -1,4 +1,4 @@
-import {useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {api,setCsrfToken,type Json} from './api.ts';
 import {applyChange,prependHistory} from './sessionSync.ts';
 import {reconcileMessages,type Outgoing,type Submission} from './submission.ts';
@@ -14,10 +14,12 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
   const saved=useRef(drafts.get(id));
   const [outgoing,setOutgoing]=useState<Outgoing[]>(saved.current?.outgoing??[]),outgoingRef=useRef(outgoing);
   const [snapshot,setSnapshot]=useState<Json|null>(null),[error,setError]=useState(''),[readError,setReadError]=useState(''),[reading,setReading]=useState(false),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[draft,setDraft]=useState(saved.current?.text??''),[settings,setSettings]=useState<TurnSettings>(saved.current?.settings??{}),[attachments,setAttachments]=useState<Attachment[]>(saved.current?.attachments??[]),[gitTick,setGitTick]=useState(0),[aborting,setAborting]=useState(false),[uncertain,setUncertain]=useState(saved.current?.uncertain??false);
+  const [openFile,setOpenFile]=useState<{path:string}>();
   const [historyLoading,setHistoryLoading]=useState(false),[historyError,setHistoryError]=useState('');
   const [opening,setOpening]=useState(true),[openError,setOpenError]=useState('');
   const earlier=useRef<()=>void>(()=>{}),prepend=useRef<{top:number;height:number}|null>(null);
   const intent=useRef<Submission['current']>(saved.current?.intent??null),submitting=useRef(false),mounted=useRef(true),refresh=useRef<()=>void>(()=>{}),recheck=useRef<()=>void>(()=>{}),pause=useRef<()=>void>(()=>{}),scroll=useRef<HTMLDivElement>(null),follow=useRef(saved.current?.follow??true),restored=useRef(false),panes=usePanes();
+  const openDocument=useCallback((path:string)=>{setOpenFile({path});if(!panes.rightVisible)panes.toggle('right');},[panes.rightVisible,panes.toggle]);
   const saveDraft=(text=draft,options=settings,files=attachments,unknown=uncertain)=>{drafts.set(id,{text,settings:options,attachments:files,outgoing:outgoingRef.current,uncertain:unknown,intent:intent.current,top:scroll.current?.scrollTop??saved.current?.top,follow:follow.current});};
   const updateOutgoing=(change:(messages:Outgoing[])=>Outgoing[],notify=true)=>{
     const previous=drafts.get(id)?.outgoing??outgoingRef.current,next=change(previous);if(next===previous)return;
@@ -110,7 +112,7 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
       <div className="timeline-content">{snapshot?.history?.nextCursor?<div className="history-loader"><button type="button" disabled={historyLoading||reading} onClick={()=>earlier.current()}>{historyLoading?'正在加载更早消息…':'加载更早消息'}</button>{historyError?<p role="alert" className="notice error">{historyError}</p>:null}</div>:null}{snapshot?.warning?<div className="notice">{snapshot.warning}</div>:null}{snapshot?.error?<div role="alert" className="notice error">{snapshot.error.message??JSON.stringify(snapshot.error)}</div>:null}
       {snapshot?.unmaterialized?<p className="notice">发送首条消息后保存原生历史。</p>:null}
       {(snapshot?.thread?.turns??[]).filter((t:Json)=>t.error||t.status==='failed').map((t:Json)=><div className="notice error" role="alert" key={t.id}>{t.error?.message??(t.error?JSON.stringify(t.error):'本轮执行失败')}</div>)}
-      {!items.length&&!outgoing.length?<p className="empty muted">{snapshot?'输入第一条任务。':'正在读取原生历史…'}</p>:(snapshot?.thread?.turns??[]).map((turn:Json)=><TurnMessages key={turn.id} turn={turn} threadId={id} attachments={snapshot?.attachmentPreviews} phase={turn.id===snapshot?.activeTurnId?phase:undefined}/>)}
+      {!items.length&&!outgoing.length?<p className="empty muted">{snapshot?'输入第一条任务。':'正在读取原生历史…'}</p>:(snapshot?.thread?.turns??[]).map((turn:Json)=><TurnMessages key={turn.id} turn={turn} threadId={id} attachments={snapshot?.attachmentPreviews} projectRoot={snapshot?.project?.path} onOpenFile={openDocument} phase={turn.id===snapshot?.activeTurnId?phase:undefined}/>)}
       {reconcileMessages(outgoing,items).map(message=><div key={message.id} className="outgoing-message" data-client-id={message.id}><Message threadId={id} item={{type:'userMessage',content:[{type:'text',text:message.text},...message.attachments.map(file=>({type:'text',text:'📎 '+file.name}))]}}/><div className="outgoing-status small" role="status">{{sending:'发送中…',accepted:'已发送，等待历史同步',failed:'发送失败',unknown:'提交结果待核实，请先刷新历史'}[message.status]}{message.error?<span>：{message.error}</span>:null}{message.status==='failed'?<button type="button" disabled={!!draft||!!attachments.length} title={draft||attachments.length?'先处理输入框中的草稿，避免覆盖':'恢复原文和附件到输入框'} onClick={()=>editOutgoing(message)}>重新编辑</button>:null}{message.status==='unknown'?<button type="button" onClick={()=>updateOutgoing(messages=>messages.map(m=>m.id===message.id?{...m,status:'failed'}:m))}>已核对历史，允许重新编辑</button>:null}</div></div>)}
       {(snapshot?.pending??[]).map((pending:Json)=><Pending key={pending.requestId} pending={pending} items={items} busy={busy} respond={async answer=>{await action('/requests/'+encodeURIComponent(pending.requestId)+'/respond',{answer});}}/>)}
       </div>
@@ -127,5 +129,5 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
       {uncertain&&!outgoing.some(m=>m.status==='unknown')?<div className="notice">提交结果待核实，请先检查历史。<button type="button" onClick={()=>{setUncertain(false);saveDraft(draft,settings,attachments,false);}}>已核对历史，允许再次提交</button></div>:null}
       <div className="composer-bottom"><span className="muted small">{canSteer?(panes.mobile?'回车换行 · 点击插话 · 沿用本轮模型和权限':'Enter 插话 · 沿用本轮模型和权限'):canSend?(panes.mobile?'回车换行 · 点击发送':'Enter 发送 · Shift+Enter 换行'):active?'任务进行中':'正在核对会话状态'}</span><div className="composer-actions">{active?<button type="button" className="danger" disabled={busy} onClick={()=>void action('/abort',{})}>{aborting?'正在中止…':'中止'}</button>:null}<button className="primary" disabled={busy||!canSend||!filesReady||(!draft.trim()&&!attachments.length)}>{busy&&!aborting?'提交中…':canSteer?'插话':'发送'}</button></div></div>
     </form>
-  </main></div>{snapshot?.project?<><PaneSeparator side="right"/><GitPanel key={snapshot.project.id} id={id} projectId={snapshot.project.id} tick={gitTick} visible={panes.rightVisible}/></>:null}</div>;
+  </main></div>{snapshot?.project?<><PaneSeparator side="right"/><GitPanel key={snapshot.project.id} id={id} projectId={snapshot.project.id} tick={gitTick} visible={panes.rightVisible} openFile={openFile}/></>:null}</div>;
 }

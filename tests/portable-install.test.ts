@@ -32,13 +32,23 @@ async function fixture(t: any) {
   let opens = 0;
   t.mock.method(childProcess, 'spawn', () => { opens++; throw new Error('Browser unavailable'); });
   const prompts: string[] = [];
-  const terminal = (answers: string[]) => ({ question: async (prompt: string) => {
+  const terminal = (answers: string[], domain = '') => ({ question: async (prompt: string) => {
     prompts.push(prompt);
+    if (prompt.startsWith('额外绑定域名')) return domain;
     assert.ok(answers.length, `Unexpected question: ${prompt}`);
     return answers.shift()!;
   } });
   return { dir, bin, installed, installCalls, terminal, prompts, opens: () => opens };
 }
+
+test('portable asks optional domain after port and preserves localhost and saved configuration',async t=>{
+  const f=await fixture(t);await writeFile(f.bin,'fake');f.installed.add(f.bin);
+  const config=await portable.loadPortableConfig(f.dir,f.terminal([f.dir,'3100'],'Device.Example.ts.net'));
+  assert.equal(config.origin,'http://localhost:3100');assert.deepEqual(config.allowedOrigins,['https://device.example.ts.net']);
+  assert.match(f.prompts[1],/^本地端口/);assert.match(f.prompts[2],/^额外绑定域名/);
+  const saved=await portable.loadPortableConfig(f.dir,{question:async()=>{throw Error('Saved configuration must not prompt again');}});
+  assert.deepEqual(saved,config);
+});
 
 test('portable discovers verified configured, official and PATH executables without developer override', async t => {
   const f = await fixture(t);
@@ -136,7 +146,7 @@ test('portable skips installation choices when an existing CLI is verified', asy
   await writeFile(f.bin, 'fake'); f.installed.add(f.bin);
   const config = await portable.loadPortableConfig(f.dir, f.terminal([f.dir, '3100']));
   assert.equal(config.codexBin, f.bin);
-  assert.equal(f.prompts.length, 2);
+  assert.equal(f.prompts.length, 3);
   assert.equal(f.installCalls.length, 0);
   assert.equal(f.opens(), 0);
 });
