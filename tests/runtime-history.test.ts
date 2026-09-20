@@ -135,3 +135,19 @@ test('window snapshots merge in-flight completion without trimming internal stat
   assert.equal(runtime.replay('thread', result.syncCursor).events.length, 0);
   assert.equal((runtime as any).state('thread').syncTurns.size, 46);
 });
+
+
+test('project binding reads only native cwd without loading or reconciling history',async t=>{
+  const {runtime,calls}=setup(t);
+  const state=(runtime as any).state('thread'),before=structuredClone({revision:state.revision,syncHeader:state.syncHeader,syncTurns:state.syncTurns});
+  t.mock.method(runtime as any,'call',async(method:string,args:any)=>{calls.push({method,...args});return {thread:{cwd:process.cwd()}};});
+  assert.equal(await runtime.threadCwd('thread'),process.cwd());
+  assert.deepEqual(calls,[{method:'thread/read',threadId:'thread',includeTurns:false}]);
+  assert.deepEqual({revision:state.revision,syncHeader:state.syncHeader,syncTurns:state.syncTurns},before);
+  t.mock.method(runtime as any,'call',async()=>({thread:{}}));
+  assert.equal(await runtime.threadCwd('thread'),null);
+  t.mock.method(runtime as any,'call',async()=>({}));
+  await assert.rejects(runtime.threadCwd('thread'),(e:any)=>e.statusCode===503);
+  t.mock.method(runtime as any,'call',async()=>{throw Object.assign(new Error('missing'),{statusCode:404});});
+  await assert.rejects(runtime.threadCwd('thread'),(e:any)=>e.statusCode===404);
+});

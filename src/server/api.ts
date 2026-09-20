@@ -53,11 +53,14 @@ export function registerApi(app: FastifyInstance, options: {
     accountUsage.close(); await runtime.close(); metadata.close();
   });
 
-  async function associated(threadId: string, window = false) {
-    const snapshot = await runtime.snapshot(threadId, { window });
-    const cwd = snapshot.thread.cwd;
-    const project = typeof cwd === 'string' && isAbsolute(cwd) && (process.platform === 'win32' || !cwd.startsWith('//'))
+  async function projectForCwd(cwd: unknown) {
+    return typeof cwd === 'string' && isAbsolute(cwd) && (process.platform === 'win32' || !cwd.startsWith('//'))
       ? (await projects.list()).find(p => pathKey(resolve(p.path)) === pathKey(resolve(cwd))) ?? null : null;
+  }
+
+  async function associated(threadId: string) {
+    const snapshot = await runtime.snapshot(threadId, { window: true });
+    const project = await projectForCwd(snapshot.thread.cwd);
     const warning = saveMeta(threadId, project?.path ?? null, null);
     return { ...snapshot, project, metadata: readMeta(threadId), warning };
   }
@@ -114,7 +117,7 @@ export function registerApi(app: FastifyInstance, options: {
     return { ...result, data, nextCursor:result.nextCursor };
   });
   app.post('/api/sessions', { schema: body({ projectId: short, clientRequestId: requestId, prompt: {...text,minLength:0}, ...turnFields }, ['clientRequestId']) }, async request => createSession(request.body,request));
-  app.get('/api/sessions/:threadId', async request => {const id=params(request).threadId;return {...await associated(id, true),attachmentPreviews:options.uploads&&options.uploadOwner?options.uploads.listForThread(options.uploadOwner(request),id).map(item=>({...item,url:'/api/uploads/'+item.uploadId})):[]};});
+  app.get('/api/sessions/:threadId', async request => {const id=params(request).threadId;return {...await associated(id),attachmentPreviews:options.uploads&&options.uploadOwner?options.uploads.listForThread(options.uploadOwner(request),id).map(item=>({...item,url:'/api/uploads/'+item.uploadId})):[]};});
   app.get('/api/sessions/:threadId/history', { schema: { querystring: { type: 'object', additionalProperties: false, required: ['before'], properties: { before: { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' } } } } }, async request => {
     const id = params(request).threadId;
     return { ...await runtime.history(id, (request.query as any).before), attachmentPreviews: options.uploads && options.uploadOwner ? options.uploads.listForThread(options.uploadOwner(request), id).map(item => ({ ...item, url: '/api/uploads/' + item.uploadId })) : [] };
@@ -155,14 +158,11 @@ export function registerApi(app: FastifyInstance, options: {
   app.post('/api/sessions/:threadId/metadata/clear',{schema:body({},[])},async request=>{metadata.clear(params(request).threadId);return {metadata:null};});
   app.post('/api/sessions/:threadId/requests/:requestId/respond', { schema: body({ answer: { type: 'object', maxProperties: 8 } }) }, async request => runtime.respond(params(request).threadId, params(request).requestId, (request.body as any).answer));
 
-  for (const kind of ['status']) {
-    app.get(`/api/sessions/:threadId/git/${kind}`, { schema: { querystring: { type: 'object', additionalProperties: false, properties: { staged: { type: 'string', enum: ['true','false'] } } } } }, async (request, reply) => {
-      const { project } = await associated(params(request).threadId);
-      if (!project) return reply.code(404).send({ error: 'This thread is not bound to a project in WORK_ROOT' });
-      return kind === 'status' ? projects.gitStatus(project.id) : projects.gitDiff(project.id, (request.query as any).staged === 'true');
-    });
-  }
-  const boundProject=async(threadId:string)=>{const {project}=await associated(threadId);if(!project)throw Object.assign(new Error('This thread is not bound to a project in WORK_ROOT'),{statusCode:404,code:'PROJECT_ERROR'});return project;};
+  const boundProject=async(threadId:string)=>{const project=await projectForCwd(await runtime.threadCwd(threadId));if(!project)throw Object.assign(new Error('This thread is not bound to a project in WORK_ROOT'),{statusCode:404,code:'PROJECT_ERROR'});return project;};
+  app.get('/api/sessions/:threadId/git/status', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { staged: { type: 'string', enum: ['true','false'] } } } } }, async request => {
+    const project = await boundProject(params(request).threadId);
+    return projects.gitStatus(project.id);
+  });
   app.post('/api/sessions/:threadId/git/fetch',{schema:body({},[])},async request=>{const project=await boundProject(params(request).threadId);return projects.fetchRemotes(project.id);});
   app.get('/api/sessions/:threadId/git/log',{schema:{querystring:{type:'object',additionalProperties:false,properties:{ref:{type:'string',minLength:1,maxLength:512},cursor:{type:'string',minLength:1,maxLength:4096}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return projects.gitLog(project.id,q.ref??'HEAD',q.cursor);});
   app.get('/api/sessions/:threadId/git/commit',{schema:{querystring:{type:'object',additionalProperties:false,required:['commit'],properties:{commit:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'},parent:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return projects.gitCommit(project.id,q.commit,q.parent);});

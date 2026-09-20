@@ -202,6 +202,13 @@ export class Runtime extends EventEmitter {
     state.openPromise=Promise.resolve().then(operation);return state.openPromise;
   }
 
+  async threadCwd(threadId: string): Promise<string | null> {
+    this.requireString(threadId, 'threadId');
+    const result = await this.call<any>('thread/read', { threadId, includeTurns: false });
+    if (!isObject(result?.thread)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread information is unavailable');
+    return typeof result.thread.cwd === 'string' ? result.thread.cwd : null;
+  }
+
   async snapshot(threadId: string, options?: { window: boolean }): Promise<any> {
     this.requireString(threadId, 'threadId');
     const state = this.state(threadId);

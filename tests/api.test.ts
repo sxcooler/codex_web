@@ -17,6 +17,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
   let app: any;
   const runtime: any = new EventEmitter();
   let created: any;
+  let allowHistory=true;
   let replayCursor: string | undefined;
   let archiveFilter=false,archiveInput:any;
   const picture=await sharp({create:{width:1200,height:800,channels:3,background:'#89cdb1'}}).png().toBuffer();
@@ -24,7 +25,8 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
   Object.assign(runtime, {
     create: async (input: any) => { created = input; return {threadId:'thread-1',status:'idle'}; },
     list: async (_cursor:string,archived=false) => {archiveFilter=archived;return { data:[{id:'thread-1',cwd:created?.cwd}],nextCursor:null };},
-    snapshot: async () => ({thread:{id:'thread-1',cwd:created?.cwd,turns:[]},phase:'IDLE',pending:[]}),
+    threadCwd: async () => created?.cwd??null,
+    snapshot: async () => {assert.ok(allowHistory,'Workspace requests must not read conversation history');return {thread:{id:'thread-1',cwd:created?.cwd,turns:[]},phase:'IDLE',pending:[]};},
     status: async () => ({resync:false}),
     history: async (_id:string,before:string) => ({turns:[{id:before}],nextCursor:null}),
     output: async (_id:string,turnId:string,itemId:string) => ({output:turnId+':'+itemId}),
@@ -82,6 +84,8 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     }
     assert.equal((await app.inject({url:'/api/sessions?archived=true',headers})).statusCode,200);assert.equal(archiveFilter,true);
     await app.inject({url:'/api/sessions',headers});assert.equal(archiveFilter,false);
+    allowHistory=false;
+    for(const route of ['git/status','git/files','git/diff','git/log','files']){const response=await app.inject({url:'/api/sessions/thread-1/'+route,headers});assert.equal(response.statusCode,200,response.body);}
     const fetchRoute='/api/sessions/thread-1/git/fetch';
     assert.equal((await app.inject({method:'POST',url:fetchRoute,headers:{...headers,cookie:headers.cookie.split(';')[0]},payload:{}})).statusCode,401);
     assert.equal((await app.inject({method:'POST',url:fetchRoute,headers:{...headers,'x-csrf-token':''},payload:{}})).statusCode,403);
@@ -97,6 +101,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files/image?path=missing.png',headers})).statusCode,404);
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png&revision=HEAD',headers})).statusCode,400);
     execFileSync('git',['add','picture.png'],{cwd:join(root,'test'),windowsHide:true});
+    const content=await app.inject({url:'/api/sessions/thread-1/files/content?path=picture.png',headers});assert.equal(content.statusCode,200,content.body);
     const stagedImage=await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png&revision=index',headers});
     assert.equal(stagedImage.statusCode,200,stagedImage.body);
     assert.deepEqual(stagedImage.rawPayload,image.rawPayload);
@@ -105,8 +110,10 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal(chinese.statusCode,200,chinese.body);
     assert.equal(created.prompt,chinesePrompt);
     assert.equal((await app.inject({method:'POST',url:'/api/sessions',headers,payload:{projectId,clientRequestId:'oversize-request-1',prompt:'验'.repeat(100_000)}})).statusCode,400);
+    allowHistory=true;
     const snapshot=await app.inject({url:'/api/sessions/thread-1',headers});
     assert.equal(snapshot.json().project.id,projectId);
+    created.cwd=dir;assert.equal((await app.inject({url:'/api/sessions/thread-1/files/content?path=picture.png',headers})).statusCode,404,'Must not trust stale project metadata');created.cwd=join(root,'test');
     if (process.platform === 'linux') {
       const other = await app.inject({ method:'POST', url:'/api/projects', headers, payload:{name:'Case-sensitive',folderName:'Test'} });
       assert.equal(other.statusCode,200,other.body);
