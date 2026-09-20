@@ -5,7 +5,7 @@ import {MarkdownView} from './MarkdownView.tsx';
 import {api,type Json} from './api.ts';
 import {TestReport} from './GitPanel.tsx';
 const pretty=(value:unknown)=>typeof value==='string'?value:JSON.stringify(value,null,2);
-const stepLabels:Record<string,string>={reasoning:'思考',commandExecution:'命令',fileChange:'文件修改',mcpToolCall:'MCP 工具',dynamicToolCall:'工具调用',webSearch:'搜索',plan:'计划',collabAgentToolCall:'协作',functionCallOutput:'工具输出'};
+const stepLabels:Record<string,string>={reasoning:'思考',commandExecution:'命令',fileChange:'文件修改',mcpToolCall:'MCP 工具',dynamicToolCall:'工具调用',webSearch:'搜索',plan:'计划',collabAgentToolCall:'协作',subAgentActivity:'子 Agent',functionCallOutput:'工具输出'};
 const statusLabel=(item:Json)=>item.exitCode!==undefined&&item.exitCode!==null?`exit ${item.exitCode}`:({inProgress:'运行中',completed:'已完成',failed:'失败',declined:'已拒绝',interrupted:'已中止'} as Record<string,string>)[item.status]??item.status??'';
 
 export const TurnMessages=memo(function TurnMessages({turn,threadId,attachments,phase,projectRoot,onOpenFile}:{turn:Json;threadId:string;attachments?:Json[];phase?:string;projectRoot?:string;onOpenFile?:(path:string)=>void}){
