@@ -148,3 +148,5 @@
 .git-panel .commit-info-popover h3,.git-panel .commit-info-popover .commit-message,.git-panel .commit-info-popover .commit-hash{white-space:pre-wrap;overflow-wrap:anywhere}
 .commit-info-popover h3{padding-right:30px}.commit-info-close{float:right;padding:3px 9px;font-size:18px}
 @media(max-width:700px){.panel-section-toggle{min-height:40px}.commit-metadata>button{min-height:32px}.commit-info-close{min-width:40px;min-height:40px}}
+
+.file-change-counts{white-space:nowrap;font-variant-numeric:tabular-nums}.file-change-counts .added{color:#82d9b4}.file-change-counts .deleted{color:#ef969b}
