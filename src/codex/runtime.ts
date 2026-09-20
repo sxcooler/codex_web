@@ -55,6 +55,8 @@ type ThreadState = {
 type Idempotent = { signature: string; promise: Promise<any> };
 
 const HISTORY_SIZE = 20;
+// ponytail: bound first-paint native reads; a single oversized turn still needs native item pagination.
+const INITIAL_HISTORY_SIZE = 3;
 type HistoryWindow = { before?: string; headersOnly?: boolean };
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -92,7 +94,7 @@ function browserTurn(turn: any): any {
 function historyWindow(turns: any[], before?: string): { turns: any[]; nextCursor: string | null } {
   const end = before === undefined ? turns.length : turns.findIndex(turn => turn.id === before);
   if (end < 0) throw runtimeError(409, 'RUNTIME_HISTORY_CURSOR_INVALID', 'History cursor is no longer available; refresh the session and retry');
-  const start = Math.max(0, end - HISTORY_SIZE);
+  const start = Math.max(0, end - (before === undefined ? INITIAL_HISTORY_SIZE : HISTORY_SIZE));
   return { turns: turns.slice(start, end), nextCursor: start > 0 ? turns[start].id : null };
 }
 

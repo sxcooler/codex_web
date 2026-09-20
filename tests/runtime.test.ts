@@ -209,16 +209,21 @@ test('large history uses bounded item pages instead of oversized full turns', as
 test('legacy threads without item pagination retain windowed history and full command output', async t => {
   const runtime=start(t,60_000,'legacy-items');
   const snapshot=await runtime.snapshot('legacy',{window:true});
-  assert.deepEqual(snapshot.thread.turns.map((t:any)=>t.id),Array.from({length:20},(_,i)=>`legacy-${i+5}`));
-  assert.equal(snapshot.history.nextCursor,'legacy-5');
+  assert.deepEqual(snapshot.thread.turns.map((t:any)=>t.id),['legacy-22','legacy-23','legacy-24']);
+  assert.equal(snapshot.history.nextCursor,'legacy-22');
   assert.equal(snapshot.thread.turns[0].items[0].outputDeferred,true);
   let stats=await (runtime as any).call('fixture/stats',{});
-  assert.equal(stats.fullTurnLists,20,'the latest window still streams one bounded body per turn');
+  assert.equal(stats.fullTurnLists,3,'initial load must not wait for twenty full native turn reads');
   const earlier=await runtime.history('legacy',snapshot.history.nextCursor);
-  assert.deepEqual(earlier.turns.map((t:any)=>t.id),Array.from({length:5},(_,i)=>`legacy-${i}`));
-  assert.equal(earlier.nextCursor,null);
+  assert.deepEqual(earlier.turns.map((t:any)=>t.id),Array.from({length:20},(_,i)=>`legacy-${i+2}`));
+  assert.equal(earlier.nextCursor,'legacy-2');
   let next=await (runtime as any).call('fixture/stats',{});
-  assert.equal(next.fullTurnLists-stats.fullTurnLists,5,'an older window must not load newer turn bodies');
+  assert.equal(next.fullTurnLists-stats.fullTurnLists,20,'an older window must not load newer turn bodies');
+  const oldest=await runtime.history('legacy',earlier.nextCursor);
+  assert.equal(oldest.nextCursor,null);
+  assert.deepEqual([...oldest.turns,...earlier.turns,...snapshot.thread.turns].map((t:any)=>t.id),Array.from({length:25},(_,i)=>`legacy-${i}`));
+  next=await (runtime as any).call('fixture/stats',{});
+  assert.equal(next.fullTurnLists-stats.fullTurnLists,22);
   stats=next;
   assert.deepEqual(await runtime.output('legacy','legacy-7','command-7'),{output:'x'.repeat(9000)});
   next=await (runtime as any).call('fixture/stats',{});

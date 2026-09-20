@@ -66,9 +66,9 @@ function setup(t: any) {
 test('window history reads only selected bodies and keeps the full lightweight status baseline', async t => {
   const { runtime, turns, output, calls } = setup(t);
   const snapshot = await runtime.snapshot('thread', { window: true });
-  assert.deepEqual(snapshot.thread.turns.map((turn: any) => turn.id), turns.slice(25).map(turn => turn.id));
-  assert.equal(snapshot.history.nextCursor, 'turn-25');
-  assert.deepEqual(calls.filter(call => call.method === 'thread/items/list').map(call => call.turnId), turns.slice(25).map(turn => turn.id));
+  assert.deepEqual(snapshot.thread.turns.map((turn: any) => turn.id), turns.slice(-3).map(turn => turn.id));
+  assert.equal(snapshot.history.nextCursor, 'turn-42');
+  assert.deepEqual(calls.filter(call => call.method === 'thread/items/list').map(call => call.turnId), turns.slice(-3).map(turn => turn.id));
   const command = snapshot.thread.turns[0].items[0];
   assert.equal(command.aggregatedOutput, output.slice(0, 2048));
   assert.equal(command.outputChars, output.length);
@@ -77,9 +77,11 @@ test('window history reads only selected bodies and keeps the full lightweight s
   assert.deepEqual(await runtime.status('thread', snapshot.epoch), { resync: false });
   const state = (runtime as any).state('thread'), baseline = structuredClone(state.syncTurns), revision = state.revision;
   const first = await runtime.history('thread', snapshot.history.nextCursor);
-  const last = await runtime.history('thread', first.nextCursor!);
+  assert.equal(first.turns.length,20,'Explicit history loading keeps its existing page size');
+  const second = await runtime.history('thread', first.nextCursor!);
+  const last = await runtime.history('thread', second.nextCursor!);
   assert.equal(last.nextCursor, null);
-  assert.deepEqual([...last.turns, ...first.turns, ...snapshot.thread.turns].map(turn => turn.id), turns.map(turn => turn.id));
+  assert.deepEqual([...last.turns, ...second.turns, ...first.turns, ...snapshot.thread.turns].map(turn => turn.id), turns.map(turn => turn.id));
   assert.equal(first.turns[0].items[0].outputDeferred, true);
   assert.deepEqual(state.syncTurns, baseline);
   assert.equal(state.revision, revision);
@@ -196,6 +198,23 @@ test('abandoned snapshot and earlier-history reads stop scheduling native pages'
     assert.equal(runtime.listenerCount('snapshotChange'),0);assert.equal((runtime as any).reads,0);
     assert.equal((runtime as any).state('thread').syncHeader,undefined,'Canceled history must not replace sync state');
   }
+});
+
+test('small initial window still detects active turns outside its body window', async t => {
+  const { runtime, turns, calls } = setup(t);
+  turns[0].status = 'inProgress';
+  const call = (runtime as any).call.bind(runtime);
+  t.mock.method(runtime as any, 'call', async (method: string, args: any) => {
+    const result = await call(method, args);
+    if (method === 'thread/read') result.thread.status = { type: 'active' };
+    return result;
+  });
+  const snapshot = await runtime.snapshot('thread', { window: true });
+  assert.equal(snapshot.phase, 'EXTERNAL');
+  assert.equal(snapshot.activeTurnId, null, 'Native activity is not a locally owned turn');
+  assert.equal(snapshot.thread.turns.length, 3);
+  assert.equal((runtime as any).state('thread').syncTurns.size, 45);
+  assert.equal(calls.filter(call => call.method === 'thread/items/list').length, 3);
 });
 
 test('cancellation also stops both legacy full-turn fallback paths',async t=>{
