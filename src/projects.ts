@@ -30,6 +30,17 @@ function parsePatch(path: string, patch: string, extra: Record<string, unknown> 
   }
   return {path,...extra,hunks,binary,truncated};
 }
+function parseNumstat(parts:string[],start=0){
+  const stats=new Map<string,{added:number;deleted:number;binary:boolean}>();
+  for(let i=start;i<parts.length;){
+    const record=parts[i++];if(!record)continue;
+    const first=record.indexOf('\t'),second=record.indexOf('\t',first+1);if(first<0||second<0)throw problem('Git returned invalid diff data',409);
+    const added=record.slice(0,first),deleted=record.slice(first+1,second);let path=record.slice(second+1);
+    if(!path){i++;path=parts[i++]??'';}if(!path)throw problem('Git returned invalid diff data',409);
+    stats.set(path,{added:Number(added)||0,deleted:Number(deleted)||0,binary:added==='-'||deleted==='-'});
+  }
+  return stats;
+}
 function problem(message: string, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode, code: 'PROJECT_ERROR' });
 }
@@ -236,6 +247,7 @@ export class Projects {
   async listFiles(id: string, directory = '') {
     const { project, target, rel } = await this.#safePath(id, directory, false);
     this.#checkVisible(rel);
+    const projectRoot=await realpath(project.path);
     const files: { path: string; type: 'file'|'directory'; size: number }[] = [];
     for (const entry of await readdir(target, { withFileTypes: true })) {
       if (entry.isSymbolicLink() || entry.name === '.git' || /^\.env(?:\.|$)/i.test(entry.name)
@@ -243,7 +255,7 @@ export class Projects {
       const path = rel ? `${rel}/${entry.name}` : entry.name;
       const full = join(target, entry.name);
       const resolved = await realpath(full).catch(() => null); if (!resolved) continue;
-      const inside = relative(await realpath(project.path), resolved); if (inside.startsWith(`..${sep}`) || isAbsolute(inside)) continue;
+      const inside = relative(projectRoot, resolved); if (inside.startsWith(`..${sep}`) || isAbsolute(inside)) continue;
       const info = await lstat(resolved); if (!info.isFile() && !info.isDirectory()) continue;
       files.push({ path, type: info.isDirectory() ? 'directory' : 'file', size: info.isFile() ? info.size : 0 });
     }
@@ -307,16 +319,12 @@ export class Projects {
 
   async gitFiles(id: string, staged = false) {
     const { project, entries } = await this.gitStatus(id); const files=[];
-    for (const entry of entries) {
-      const selected=staged?entry.index:entry.worktree;
-      const status = entry.index==='?' ? (staged?'unchanged':'untracked') : selected.trim() ? selected : 'unchanged';
-      if (status === 'unchanged') continue;
-      const path = entry.path; let added=0, deleted=0, binary=false;
+    const changed=entries.map(entry=>{const selected=staged?entry.index:entry.worktree;return {...entry,status:entry.index==='?'?(staged?'unchanged':'untracked'):selected.trim()?selected:'unchanged'};}).filter(entry=>entry.status!=='unchanged');
+    const stats=changed.some(entry=>entry.status!=='untracked')?parseNumstat((await git(project.path,['diff','--numstat','-z','-M','--no-ext-diff','--no-textconv','--no-color',...(staged?['--cached']:[]),'--'])).split('\0')):new Map();
+    for (const entry of changed) {
+      const {status,path}=entry; let added=0, deleted=0, binary=false;
       if (status === 'untracked') { const content=await this.readFile(id,path); binary=content.binary; if (!binary) added=content.text.split('\n').length-(content.text.endsWith('\n')?1:0); }
-      else {
-        const stat=(await git(project.path,['diff','--numstat',...(staged?['--cached']:[]),'--',':(literal)'+path])).trim().split(/\s+/);
-        if (stat[0]==='-') binary=true; else { added=Number(stat[0])||0; deleted=Number(stat[1])||0; }
-      }
+      else {const stat=stats.get(path);if(stat){({added,deleted,binary}=stat);}}
       files.push({path, ...(entry.originalPath?{oldPath:entry.originalPath}:{}), status: status === 'R' ? 'renamed' : status, added, deleted, binary});
     }
     return { files, revision: await this.#revision(project.path) };
@@ -348,11 +356,11 @@ export class Projects {
     return parsePatch(rel,patch,{staged,revision:await this.#revision(project.path)});
   }
 
-  async #historyRefs(projectPath:string) {
-    const current=(await git(projectPath,['symbolic-ref','--quiet','HEAD']).catch(()=>'')).trim();
+  async #historyRefs(projectPath:string,withBranches=true) {
+    const current=withBranches?(await git(projectPath,['symbolic-ref','--quiet','HEAD']).catch(()=>'')).trim():'';
     const text=await git(projectPath,['for-each-ref','--format=%(objectname)%00%(refname)%00%(*objectname)%00%(symref)','refs/heads','refs/remotes','refs/tags']);
     const refs=new Map<string,string[]>(); const branches:{name:string;ref:string;current:boolean}[]=[];
-    for(const line of text.split('\n')){if(!line)continue;const [object,ref,peeled,symbolic]=line.split('\0');const id=peeled||object;if(!refs.has(id))refs.set(id,[]);refs.get(id)!.push(ref);if(ref.startsWith('refs/heads/')||ref.startsWith('refs/remotes/')&&!symbolic)branches.push({name:ref.replace(/^refs\/(heads|remotes)\//,''),ref,current:ref===current});}
+    for(const line of text.split('\n')){if(!line)continue;const [object,ref,peeled,symbolic]=line.split('\0');const id=peeled||object;if(!refs.has(id))refs.set(id,[]);refs.get(id)!.push(ref);if(withBranches&&(ref.startsWith('refs/heads/')||ref.startsWith('refs/remotes/')&&!symbolic))branches.push({name:ref.replace(/^refs\/(heads|remotes)\//,''),ref,current:ref===current});}
     if(current&&!branches.some(branch=>branch.ref===current))branches.push({name:current.slice(11),ref:current,current:true});
     return {refs,branches:branches.sort((a,b)=>a.name.localeCompare(b.name))};
   }
@@ -379,24 +387,38 @@ export class Projects {
     const nextCursor=more?deflateRawSync(JSON.stringify({ref,tips,skip:skip+HISTORY_PAGE_SIZE})).toString('base64url'):null;if(nextCursor&&nextCursor.length>4096)throw problem('分支过多，请选择具体分支',409);return {repository:true,commits,branches,nextCursor};
   }
 
-  async #commitInfo(projectPath:string,value:string) {
-    const requested=this.#historyCommit(value);const id=(await git(projectPath,['rev-parse','--verify',`${requested}^{commit}`]).catch(()=>'')).trim();if(!id)throw problem('Commit not found',404);
-    const raw=await git(projectPath,['show','-s','--format=%H%x00%P%x00%s%x00%B%x00%an%x00%aI%x00',id]);const [commitId,parents,subject,message,author,date]=raw.split('\0');const {refs}=await this.#historyRefs(projectPath);
+  async #commitInfo(projectPath:string,value:string,withRefs=true) {
+    const requested=this.#historyCommit(value);const raw=await git(projectPath,['show','-s','--format=%H%x00%P%x00%s%x00%B%x00%an%x00%aI%x00',`${requested}^{commit}`]).catch(()=>{throw problem('Commit not found',404)});
+    const [commitId,parents,subject,message,author,date]=raw.split('\0');const refs=withRefs?(await this.#historyRefs(projectPath,false)).refs:new Map<string,string[]>();
     return {id:commitId,parents:parents.trim().split(/\s+/).filter(Boolean),subject,message:message.replace(/\n$/,''),author,date,refs:refs.get(commitId)??[]};
   }
 
-  async #historyTreeConflict(projectPath:string,commit:string,parent:string|null,paths:string[]){for(const path of paths)for(const revision of [parent,commit])if(revision&&(await git(projectPath,['cat-file','-t',revision+':'+path]).catch(()=>'')).trim()==='tree')return true;return false;}
-
   async #historyPatch(projectPath:string,commit:string,parent:string|null,paths:string[]){const pathspecs=paths.map(path=>':(literal)'+path);return parent?git(projectPath,['diff','--no-ext-diff','--no-textconv','--no-color','-M',parent,commit,'--',...pathspecs],30_000,MAX_PATCH_BYTES+1):git(projectPath,['diff-tree','--root','--no-commit-id','-r','-p','--no-ext-diff','--no-textconv','--no-color',commit,'--',...pathspecs],30_000,MAX_PATCH_BYTES+1);}
+
+  async #historyChanges(projectPath:string,commit:string,parent:string|null,withStats=true){
+    const args=parent
+      ?['diff','--raw',...(withStats?['--numstat']:[]),'-z','-M','--no-ext-diff','--no-textconv','--no-color',parent,commit,'--']
+      :['diff-tree','--root','--no-commit-id','-r','--raw',...(withStats?['--numstat']:[]),'-z','-M','--no-ext-diff','--no-textconv','--no-color',commit,'--'];
+    const parts=(await git(projectPath,args,30_000,MAX_PATCH_BYTES+1)).split('\0');let i=0;
+    const changes:{path:string;oldPath?:string;statusCode:string}[]=[];
+    while(parts[i]?.startsWith(':')){
+      const header=parts[i++],statusCode=header.slice(header.lastIndexOf(' ')+1)[0];if(!statusCode)throw problem('Git returned invalid diff data',409);
+      const oldPath=/^[RC]/.test(statusCode)?this.#historyPath(parts[i++],false):undefined;
+      const path=this.#historyPath(parts[i++],false);changes.push({path,...(oldPath?{oldPath}:{}),statusCode});
+    }
+    const stats=withStats?parseNumstat(parts,i):new Map<string,{added:number;deleted:number;binary:boolean}>(),paths=new Set(changes.flatMap(change=>change.oldPath?[change.oldPath,change.path]:[change.path])),trees=new Set<string>();
+    for(const path of paths)for(let slash=path.indexOf('/');slash>=0;slash=path.indexOf('/',slash+1)){const ancestor=path.slice(0,slash);if(paths.has(ancestor))trees.add(ancestor);}
+    return changes.filter(change=>!this.#sensitiveHistoryPath(change.path)&&!(change.oldPath&&this.#sensitiveHistoryPath(change.oldPath))&&!trees.has(change.path)&&!(change.oldPath&&trees.has(change.oldPath))).map(change=>{
+      const stat=stats.get(change.path)??{added:0,deleted:0,binary:false};
+      return {path:change.path,...(change.oldPath?{oldPath:change.oldPath}:{}),status:change.statusCode==='A'?'added':change.statusCode==='D'?'deleted':change.statusCode==='R'?'renamed':change.statusCode==='C'?'copied':'modified',...stat};
+    });
+  }
 
   async gitCommit(id:string,commit:string,parent?:string) {
     const {path}=await this.resolve(id);const info=await this.#commitInfo(path,commit);const selected=parent===undefined?info.parents[0]??null:this.#historyCommit(parent);
     if(selected&&!info.parents.includes(selected))throw problem('Parent is not a parent of commit');
-    const args=selected?['diff','--name-status','-z','-M',selected,info.id,'--']:['diff-tree','--root','--no-commit-id','-r','-z','--name-status','-M',info.id];
-    const parts=(await git(path,args)).split('\0');const files:any[]=[];
-    for(let i=0;i<parts.length;){const code=parts[i++];if(!code)continue;const statusCode=code[0];const oldPath=/^[RC]/.test(code)?parts[i++]:undefined;const filePath=parts[i++];const rel=this.#historyPath(filePath,false);const safeOld=oldPath?this.#historyPath(oldPath,false):undefined;if(this.#sensitiveHistoryPath(rel)||(safeOld&&this.#sensitiveHistoryPath(safeOld))||await this.#historyTreeConflict(path,info.id,selected,[...(safeOld?[safeOld]:[]),rel]))continue;const patch=await this.#historyPatch(path,info.id,selected,[...(safeOld?[safeOld]:[]),rel]);let added=0,deleted=0;for(const line of patch.split('\n')){if(line.startsWith('+')&&!line.startsWith('+++'))added++;else if(line.startsWith('-')&&!line.startsWith('---'))deleted++;}files.push({path:rel,...(oldPath?{oldPath}:{}),status:statusCode==='A'?'added':statusCode==='D'?'deleted':statusCode==='R'?'renamed':statusCode==='C'?'copied':'modified',added,deleted,binary:/Binary files |GIT binary patch/.test(patch)});}
-    return {commit:info,parent:selected,files};
+    return {commit:info,parent:selected,files:await this.#historyChanges(path,info.id,selected)};
   }
 
-  async gitCommitDiff(id:string,commit:string,parent:string|undefined,pathValue:string){const project=await this.resolve(id);const path=this.#historyPath(pathValue);const info=await this.#commitInfo(project.path,commit);const parentId=parent===undefined?info.parents[0]??null:this.#historyCommit(parent);if(parentId&&!info.parents.includes(parentId))throw problem('Parent is not a parent of commit');const changed=await this.gitCommit(id,info.id,parentId??undefined);const file=changed.files.find((item:any)=>item.path===path);if(!file)throw problem('Path is not a changed file');if(imagePath(path))return {path,commit:info.id,parent:parentId,images:{before:!parentId||file.status==='added'?null:{path:file.oldPath??path,revision:parentId},after:file.status==='deleted'?null:{path,revision:info.id}}};const patch=await this.#historyPatch(project.path,info.id,parentId,[...(file?.oldPath?[file.oldPath]:[]),path]);return parsePatch(path,patch,{commit:info.id,parent:parentId});}
+  async gitCommitDiff(id:string,commit:string,parent:string|undefined,pathValue:string){const project=await this.resolve(id);const path=this.#historyPath(pathValue);const info=await this.#commitInfo(project.path,commit,false);const parentId=parent===undefined?info.parents[0]??null:this.#historyCommit(parent);if(parentId&&!info.parents.includes(parentId))throw problem('Parent is not a parent of commit');const file=(await this.#historyChanges(project.path,info.id,parentId,false)).find(item=>item.path===path);if(!file)throw problem('Path is not a changed file');if(imagePath(path))return {path,commit:info.id,parent:parentId,images:{before:!parentId||file.status==='added'?null:{path:file.oldPath??path,revision:parentId},after:file.status==='deleted'?null:{path,revision:info.id}}};const patch=await this.#historyPatch(project.path,info.id,parentId,[...(file.oldPath?[file.oldPath]:[]),path]);return parsePatch(path,patch,{commit:info.id,parent:parentId});}
 }

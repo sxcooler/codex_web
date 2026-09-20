@@ -16,6 +16,8 @@ let modelLists = 0;
 let itemLists = 0;
 let threadReads = 0;
 let turnLists = 0;
+let fullTurnLists = 0;
+let headerTurnLists = 0;
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const thread = (id, cwd = process.cwd(), turns = []) => ({
@@ -228,13 +230,16 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (method === 'thread/turns/list') {
     turnLists++;
-    if (mode === 'legacy-items') {
+    if (mode.startsWith('legacy-items')) {
       const values = Array.from({length:25},(_,i)=>turn(`legacy-${i}`,'completed',[{id:`command-${i}`,type:'commandExecution',status:'completed',aggregatedOutput:'x'.repeat(9000)}]));
-      if (params.itemsView === 'notLoaded') return send({id,result:{data:values.map(t=>({...t,items:[],itemsView:'notLoaded'})),nextCursor:null}});
-      if (params.limit !== 1) return send({id,error:{code:-32600,message:'full turns must use bounded pages'}});
       if (params.sortDirection === 'desc') values.reverse();
       const offset=Number(params.cursor??0);
-      return send({id,result:{data:values.slice(offset,offset+1),nextCursor:offset+1<values.length?String(offset+1):null}});
+      const limit=params.limit??20,page=values.slice(offset,offset+limit),nextCursor=offset+page.length<values.length?String(offset+page.length):null;
+      if (params.itemsView === 'notLoaded') {headerTurnLists++;return send({id,result:{data:page.map(t=>({...t,items:[],itemsView:'notLoaded'})),nextCursor:mode==='legacy-items-repeat'?'0':nextCursor}});}
+      fullTurnLists++;
+      if (params.limit !== 1) return send({id,error:{code:-32600,message:'full turns must use bounded pages'}});
+      if (mode === 'legacy-items-mismatch' && page.length) page[0]={...page[0],id:'wrong-turn'};
+      return send({id,result:{data:page,nextCursor}});
     }
     if (mode === 'sync-history') return send({id,result:{data:threads.get(params.threadId).turns.map(value=>({...value,items:[],itemsView:'notLoaded'})),nextCursor:null}});
     if (mode === 'large-history') {
@@ -262,7 +267,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (method === 'thread/items/list') {
     itemLists++;
-    if (mode === 'legacy-items') return send({id,error:{code:-32601,message:'thread/items/list is not supported yet'}});
+    if (mode.startsWith('legacy-items')) return send({id,error:{code:-32601,message:'thread/items/list is not supported yet'}});
     if (mode === 'steering') return send({id,result:{data:threads.get(params.threadId).turns.find(turn=>turn.id===params.turnId).items.map(item=>({turnId:params.turnId,item})),nextCursor:null}});
     if (mode === 'large-history' && (!params.limit || params.limit > 10)) return send({ id, result: { data: [{ turnId: params.turnId, item: { id: 'oversize', text: 'x'.repeat(17 * 1024 * 1024) } }], nextCursor: null } });
     const first = { turnId: params.turnId, item: { type: 'agentMessage', id: 'old-item-1', text: 'old one', phase: null, memoryCitation: null, delivery: null, questions: null } };
@@ -290,6 +295,6 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return finish(params.threadId, activeTurn, 'interrupted');
   }
   if (method === 'thread/unsubscribe') return send({ id, result: { status: mode === 'not-subscribed' ? 'notSubscribed' : 'unsubscribed' } });
-  if (method === 'fixture/stats') return send({ id, result: { turnStarts, interrupts, lastTurn, modelLists, lastThread, lastResume, itemLists, threadReads, turnLists } });
+  if (method === 'fixture/stats') return send({ id, result: { turnStarts, interrupts, lastTurn, modelLists, lastThread, lastResume, itemLists, threadReads, turnLists, fullTurnLists, headerTurnLists } });
   send({ id, error: { code: -32601, message: `unknown ${method}` } });
 });

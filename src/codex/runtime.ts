@@ -55,7 +55,7 @@ type ThreadState = {
 type Idempotent = { signature: string; promise: Promise<any> };
 
 const HISTORY_SIZE = 20;
-type HistoryWindow = { before?: string };
+type HistoryWindow = { before?: string; headersOnly?: boolean };
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 function browserMedia(value: any, images: Map<string, string>): any {
@@ -209,7 +209,7 @@ export class Runtime extends EventEmitter {
     return typeof result.thread.cwd === 'string' ? result.thread.cwd : null;
   }
 
-  async snapshot(threadId: string, options?: { window: boolean }): Promise<any> {
+  async snapshot(threadId: string, options?: { window: boolean; signal?: AbortSignal }): Promise<any> {
     this.requireString(threadId, 'threadId');
     const state = this.state(threadId);
     const revision = state.revision;
@@ -220,7 +220,7 @@ export class Runtime extends EventEmitter {
     const changed = (event: Change) => { if (event.threadId === threadId) changes.push(event); };
     this.on('snapshotChange', changed);
     let thread: any;
-    try { thread = await this.readThread(threadId, options?.window ? {} : undefined); } finally { this.off('snapshotChange', changed); }
+    try { thread = await this.readThread(threadId, options?.window ? {} : undefined, options?.signal); } finally { this.off('snapshotChange', changed); }
     const mergedThread = this.mergeThread(thread, state);
     for (const event of changes) this.mergeSnapshotPatch(mergedThread, event.patch);
     // A read started before a newer operation/notification must not unlock that work.
@@ -257,18 +257,23 @@ export class Runtime extends EventEmitter {
     };
   }
 
-  async history(threadId: string, before: string): Promise<{ turns: any[]; nextCursor: string | null }> {
+  async history(threadId: string, before: string, signal?: AbortSignal): Promise<{ turns: any[]; nextCursor: string | null }> {
     this.requireString(threadId, 'threadId');
     this.requireString(before, 'before');
-    const thread = await this.readThread(threadId, { before });
+    const thread = await this.readThread(threadId, { before }, signal);
     const page = historyWindow(thread.turns, before);
     return { turns: page.turns.map(browserTurn), nextCursor: page.nextCursor };
   }
 
   async output(threadId: string, turnId: string, itemId: string): Promise<{ output: string }> {
-    const item = await this.readItem(threadId, turnId, itemId);
-    if (item?.type !== 'commandExecution') throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Command output was not found');
+    const item = await this.command(threadId, turnId, itemId);
     return { output: typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '' };
+  }
+
+  async command(threadId: string, turnId: string, itemId: string): Promise<any> {
+    const item = await this.readItem(threadId, turnId, itemId);
+    if (item?.type !== 'commandExecution') throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Command item was not found');
+    return item;
   }
 
   async image(threadId: string, turnId: string, itemId: string, imageId: string): Promise<Buffer> {
@@ -353,8 +358,8 @@ export class Runtime extends EventEmitter {
   }
 
   private threadHeader(thread: any): any {
-    const { turns, ...header } = structuredClone(thread);
-    return header;
+    const { turns, ...header } = thread;
+    return structuredClone(header);
   }
 
   private turnSignature(turn: any): string {
@@ -530,7 +535,7 @@ export class Runtime extends EventEmitter {
     const operation = async () => {
       try {
         if (!state.released) {
-          const thread = await this.readThread(threadId);
+          const thread = await this.readThread(threadId, { headersOnly: true });
           this.reconcile(threadId, thread);
           if (!['idle', 'notLoaded'].includes(thread.status?.type) || state.activeTurnId || state.pending.size || thread.turns.some((t: any) => t.status === 'inProgress')) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Native thread must be idle before release');
           const result = await this.mutation<any>('thread/unsubscribe', { threadId });
@@ -1114,18 +1119,21 @@ export class Runtime extends EventEmitter {
     state.liveTurns.set(incoming.id, merged);
   }
 
-  private async readThread(threadId: string, window?: HistoryWindow): Promise<any> {
+  private async readThread(threadId: string, window?: HistoryWindow, signal?: AbortSignal): Promise<any> {
     this.reads++;
     try {
+      signal?.throwIfAborted();
       await this.getServer();
-      const epoch=this.epoch,thread=await this.loadThread(threadId, window);
+      signal?.throwIfAborted();
+      const epoch=this.epoch,thread=await this.loadThread(threadId, window, signal);
+      signal?.throwIfAborted();
       if(epoch!==this.epoch)throw runtimeError(503,'RUNTIME_SYNC_RESTARTED','会话运行时已切换，请重新读取历史。');
       return thread;
     }
     finally { this.reads--; this.scheduleIdle(); }
   }
 
-  private async loadThread(threadId: string, window?: HistoryWindow): Promise<any> {
+  private async loadThread(threadId: string, window?: HistoryWindow, signal?: AbortSignal): Promise<any> {
     const state = this.state(threadId);
     let result: any;
     try { result = await this.call<any>('thread/read', { threadId, includeTurns: false }); }
@@ -1135,6 +1143,7 @@ export class Runtime extends EventEmitter {
       }
       throw error;
     }
+    signal?.throwIfAborted();
     if (!isObject(result?.thread)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread history is unavailable');
     const thread = structuredClone(result.thread);
     const turns = new Map<string, any>();
@@ -1153,6 +1162,7 @@ export class Runtime extends EventEmitter {
         }
         throw error;
       }
+      signal?.throwIfAborted();
       if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn history is unavailable');
       for (const value of page.data) if (isObject(value) && typeof value.id === 'string') this.mergeNativeTurn(turns, value);
       if (page.nextCursor === null) break;
@@ -1161,8 +1171,8 @@ export class Runtime extends EventEmitter {
       cursor = page.nextCursor;
     }
 
-    const selected = window ? historyWindow([...turns.values()], window.before).turns : [...turns.values()];
-    await this.readTurnBodies(threadId, selected);
+    const selected = window?.headersOnly ? [] : window ? historyWindow([...turns.values()], window.before).turns : [...turns.values()];
+    await this.readTurnBodies(threadId, selected, undefined, Boolean(window?.before), signal);
     thread.turns = [...turns.values()];
     // A turn may finish while history is paginating; confirm the earlier active header.
     if (thread.status?.type === 'active' && !thread.turns.some((turn: any) => turn.status === 'inProgress')) {
@@ -1173,23 +1183,67 @@ export class Runtime extends EventEmitter {
     return thread;
   }
 
-  private async readTurnBodies(threadId: string, turns: any[], itemId?: string): Promise<void> {
+  private async readTurnBodies(threadId: string, turns: any[], itemId?: string, seek = false, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     try {
       for (const turn of turns) {
         if (turn.itemsView === 'full') continue;
-        turn.items = await this.readItems(threadId, turn.id, itemId);
+        turn.items = await this.readItems(threadId, turn.id, itemId, signal);
         turn.itemsView = 'full';
       }
       return;
     } catch (error) {
       if (!isObject(error) || error.code !== 'RUNTIME_ITEMS_UNSUPPORTED') throw error;
     }
+    signal?.throwIfAborted();
     // Older persisted threads expose full turns but do not implement item pagination.
     const pending = new Map(turns.filter(turn => turn.itemsView !== 'full').map(turn => [turn.id, turn]));
+    if (itemId || seek) {
+      const seen = new Set<string>();
+      let cursor: string | null = null;
+      while (pending.size) {
+        const pageCursor = cursor;
+        const page: any = await this.call('thread/turns/list', { threadId, cursor, limit: HISTORY_SIZE, sortDirection: 'desc', itemsView: 'notLoaded' });
+        signal?.throwIfAborted();
+        if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn history is unavailable');
+        const targets: { index: number; id: string; turn: any }[] = [];
+        for (let index = 0; index < page.data.length; index++) {
+          const id = page.data[index]?.id, turn = pending.get(id);
+          if (turn) targets.push({ index, id, turn });
+        }
+        let bodyCursor = pageCursor, consumed = 0;
+        for (const target of targets) {
+          const gap = target.index - consumed;
+          if (gap) {
+            const skipped: any = await this.call('thread/turns/list', { threadId, cursor: bodyCursor, limit: gap, sortDirection: 'desc', itemsView: 'notLoaded' });
+            signal?.throwIfAborted();
+            if (!Array.isArray(skipped?.data) || skipped.data.length !== gap || typeof skipped.nextCursor !== 'string') throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn pagination changed while loading history');
+            bodyCursor = skipped.nextCursor;
+          }
+          const full: any = await this.call('thread/turns/list', { threadId, cursor: bodyCursor, limit: 1, sortDirection: 'desc', itemsView: 'full' });
+          signal?.throwIfAborted();
+          if (!Array.isArray(full?.data) || full.data.length !== 1 || full.data[0]?.id !== target.id) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn pagination changed while loading history');
+          const value = full.data[0];
+          if (value.itemsView !== 'full' || !Array.isArray(value.items)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native full turn history is incomplete');
+          target.turn.items = structuredClone(value.items);
+          target.turn.itemsView = 'full';
+          pending.delete(target.id);
+          bodyCursor = full.nextCursor;
+          consumed = target.index + 1;
+        }
+        if (!pending.size) return;
+        if (page.nextCursor === null) throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Requested turn history was not found');
+        if (typeof page.nextCursor !== 'string' || seen.has(page.nextCursor)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn pagination is invalid');
+        seen.add(page.nextCursor);
+        cursor = page.nextCursor;
+      }
+      return;
+    }
     const seen = new Set<string>();
     let cursor: string | null = null;
     while (pending.size) {
       const page: any = await this.call('thread/turns/list', { threadId, cursor, limit: 1, sortDirection: 'desc', itemsView: 'full' });
+      signal?.throwIfAborted();
       if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native full turn history is unavailable');
       for (const value of page.data) {
         const turn = pending.get(value?.id);
@@ -1207,12 +1261,13 @@ export class Runtime extends EventEmitter {
     }
   }
 
-  private async readItems(threadId: string, turnId: string, itemId?: string): Promise<any[]> {
+  private async readItems(threadId: string, turnId: string, itemId?: string, signal?: AbortSignal): Promise<any[]> {
     const items = new Map<string, any>();
     let cursor: string | null = null;
     const seen = new Set<string>();
     for (;;) {
       const page: any = await this.call('thread/items/list', { threadId, turnId, cursor, limit: 10, sortDirection: 'asc' });
+      signal?.throwIfAborted();
       if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native item history is unavailable');
       for (const entry of page.data) if (entry?.turnId === turnId && isObject(entry.item) && typeof entry.item.id === 'string') {
         if (itemId && entry.item.id === itemId) return [structuredClone(entry.item)];

@@ -2,6 +2,8 @@ export type PanelTab='changes'|'files'|'history';
 type Reading={collapsed:boolean;listScroll:number;previewScroll:number;contentScroll:number};
 export type PanelState={tab:PanelTab;changes:{staged:boolean;path:string;split:boolean}&Reading;files:{directory:string;path:string;mode:'preview'|'source'}&Reading;history:{ref:string;commit:string;parent:string;path:string;scroll:number;listScroll:number;pages:number;listCollapsed:boolean;filesCollapsed:boolean;filesScroll:number}};
 export type StorageLike=Pick<Storage,'getItem'|'setItem'>;
+// ponytail: panel responses are refetchable; keep 20 recent entries unless measured navigation needs more.
+export function cacheEntry<T>(cache:Record<string,T>,entryKey:string,value:T,limit=20):Record<string,T>{const next={...cache};delete next[entryKey];next[entryKey]=value;for(const key of Object.keys(next).slice(0,-limit))delete next[key];return next;}
 const initial=():PanelState=>({tab:'changes',changes:{collapsed:false,staged:false,path:'',split:false,listScroll:0,previewScroll:0,contentScroll:0},files:{collapsed:false,directory:'',path:'',mode:'preview',listScroll:0,previewScroll:0,contentScroll:0},history:{listCollapsed:false,filesCollapsed:false,filesScroll:0,ref:'HEAD',commit:'',parent:'',path:'',scroll:0,listScroll:0,pages:1}});
 const key=(projectId:string)=>'codex.project-panel.'+projectId;
 const string=(value:unknown,fallback='')=>typeof value==='string'?value:fallback;

@@ -5,9 +5,8 @@ import type { Projects } from '../projects.ts';
 const array=<T>(value:T|T[]|undefined):T[]=>value===undefined?[]:Array.isArray(value)?value:[value];
 const fail=(message:string,statusCode=400)=>Object.assign(new Error(message),{statusCode,code:'REPORT_ERROR'});
 
-export async function parseTestReport(projects:Projects,projectId:string,snapshot:any,input:{commandItemId:string;relativePath:string;format:'junit'}){
-  const turns=snapshot?.thread?.turns??[]; const turn=turns.find((candidate:any)=>(candidate.items??[]).some((item:any)=>item.type==='commandExecution'&&item.id===input.commandItemId)); const command=turn?.items.find((item:any)=>item.type==='commandExecution'&&item.id===input.commandItemId);
-  if(!command)throw fail('Command item does not belong to this thread',404);
+export async function parseTestReport(projects:Projects,projectId:string,command:any,input:{commandItemId:string;relativePath:string;format:'junit'}){
+  if(command?.type!=='commandExecution'||command.id!==input.commandItemId)throw fail('Command item does not belong to this thread',404);
   const source=await projects.readReportFile(projectId,input.relativePath,5*1024*1024); const xml=source.bytes.toString('utf8');
   if(/<!DOCTYPE|<!ENTITY/i.test(xml))throw fail('DTD and external entities are not allowed');
   if(XMLValidator.validate(xml)!==true)throw fail('Unable to parse JUnit report');

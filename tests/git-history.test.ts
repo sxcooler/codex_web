@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { deflateRawSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -117,13 +117,58 @@ test('git history covers roots, merges, branches, rename/delete, and frozen 100-
     await assert.rejects(()=>projects.gitCommitDiff(project.id,mixedId,undefined,'.'),(error:any)=>error.statusCode===400);
     await assert.rejects(()=>projects.gitCommitDiff(project.id,mixedId,undefined,'.env.example'),(error:any)=>error.statusCode===403);
     await writeFile(join(repo,'config'),'public file'); await git(repo,'add','--','config'); await git(repo,'commit','-m','config file');
-    await rm(join(repo,'config')); await mkdir(join(repo,'config')); await writeFile(join(repo,'config','.env'),'DUMMY_SECRET'); await git(repo,'add','-A'); await git(repo,'commit','-m','file to directory'); const toDirectory=await git(repo,'rev-parse','HEAD');
+    await rm(join(repo,'config')); await mkdir(join(repo,'config')); await writeFile(join(repo,'config','.env'),'DUMMY_SECRET'); await writeFile(join(repo,'config-other'),'public sibling'); await git(repo,'add','-A'); await git(repo,'commit','-m','file to directory'); const toDirectory=await git(repo,'rev-parse','HEAD');
     assert.ok(!(await projects.gitCommit(project.id,toDirectory)).files.some(file=>file.path==='config'));
     await assert.rejects(()=>projects.gitCommitDiff(project.id,toDirectory,undefined,'config'),(error:any)=>error.statusCode===400);
     await rm(join(repo,'config'),{recursive:true}); await writeFile(join(repo,'config'),'replacement file'); await git(repo,'add','-A'); await git(repo,'commit','-m','directory to file'); const toFile=await git(repo,'rev-parse','HEAD');
     assert.ok(!(await projects.gitCommit(project.id,toFile)).files.some(file=>file.path==='config'));
     await assert.rejects(()=>projects.gitCommitDiff(project.id,toFile,undefined,'config'),(error:any)=>error.statusCode===400);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('commit summaries do not load full patches and count header-like source lines', async () => {
+  const root=await mkdtemp(join(tmpdir(),'codex-history-summary-')),repo=join(root,'repo');
+  try {
+    await mkdir(repo);await git(repo,'init','-b','main');
+    await git(repo,'config','user.name','History Tester');await git(repo,'config','user.email','history@example.test');
+    const base=await commit(repo,'base','marker.txt','--removed\n');
+    await writeFile(join(repo,'marker.txt'),'++added\n');
+    await writeFile(join(repo,'huge.txt'),'x'.repeat(5*1024*1024+64));
+    await git(repo,'add','--','marker.txt','huge.txt');await git(repo,'commit','-m','large summary');
+    const head=await git(repo,'rev-parse','HEAD');
+    const projects=new Projects(root),project=(await projects.list())[0];
+    const detail=await projects.gitCommit(project.id,head,base);
+    assert.deepEqual(detail.files.map(file=>[file.path,file.added,file.deleted,file.binary]),[
+      ['huge.txt',1,0,false],
+      ['marker.txt',1,1,false],
+    ]);
+    const diff=await projects.gitCommitDiff(project.id,head,base,'marker.txt');
+    assert.deepEqual(diff.hunks.flatMap(hunk=>hunk.lines.filter((line:any)=>line.kind!=='context').map((line:any)=>[line.kind,line.text])),[
+      ['delete','--removed'],['add','++added'],
+    ]);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test('Git process counts stay constant as changed files grow', async () => {
+  const root=await mkdtemp(join(tmpdir(),'codex-history-processes-')),repo=join(root,'repo'),trace=join(root,'git-trace.json');
+  const previousTrace=process.env.GIT_TRACE2_EVENT;
+  try {
+    await mkdir(repo);await git(repo,'init','-b','main');
+    await git(repo,'config','user.name','History Tester');await git(repo,'config','user.email','history@example.test');
+    await Promise.all(Array.from({length:20},(_,i)=>writeFile(join(repo,`file-${i}.txt`),'base\n')));
+    await git(repo,'add','.');await git(repo,'commit','-m','base');const base=await git(repo,'rev-parse','HEAD');
+    await Promise.all(Array.from({length:20},(_,i)=>writeFile(join(repo,`file-${i}.txt`),'next\n')));
+    await git(repo,'add','.');await git(repo,'commit','-m','next');const head=await git(repo,'rev-parse','HEAD');
+    await Promise.all(Array.from({length:20},(_,i)=>writeFile(join(repo,`file-${i}.txt`),'worktree\n')));
+    const projects=new Projects(root),project=(await projects.list())[0];process.env.GIT_TRACE2_EVENT=trace.replaceAll('\\','/');
+    const count=async(action:()=>Promise<unknown>)=>{await rm(trace,{force:true});await action();return (await readFile(trace,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)).filter(event=>event.event==='start').length;};
+    assert.ok(await count(()=>projects.gitCommit(project.id,head,base))<=8);
+    assert.ok(await count(()=>projects.gitCommitDiff(project.id,head,base,'file-0.txt'))<=8);
+    assert.ok(await count(()=>projects.gitFiles(project.id,false))<=5);
+  } finally {
+    if(previousTrace===undefined)delete process.env.GIT_TRACE2_EVENT;else process.env.GIT_TRACE2_EVENT=previousTrace;
+    await rm(root,{recursive:true,force:true});
+  }
 });
 
 test('git history rejects forged refs, commits, parents, paths, and distinguishes an empty repository', async () => {

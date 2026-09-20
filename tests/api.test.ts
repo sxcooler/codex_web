@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import { get } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtemp, rm, mkdir, copyFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, copyFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { initializeAuth } from '../src/server/auth.ts';
@@ -27,6 +27,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     list: async (_cursor:string,archived=false) => {archiveFilter=archived;return { data:[{id:'thread-1',cwd:created?.cwd}],nextCursor:null };},
     threadCwd: async () => created?.cwd??null,
     snapshot: async () => {assert.ok(allowHistory,'Workspace requests must not read conversation history');return {thread:{id:'thread-1',cwd:created?.cwd,turns:[]},phase:'IDLE',pending:[]};},
+    command: async (id:string,turnId:string,itemId:string) => {assert.equal(id,'thread-1');if(turnId!=='turn-1'||itemId!=='command-1')throw Object.assign(new Error('missing command'),{statusCode:404,code:'RUNTIME_NOT_FOUND'});return {id:itemId,type:'commandExecution'};},
     status: async () => ({resync:false}),
     history: async (_id:string,before:string) => ({turns:[{id:before}],nextCursor:null}),
     output: async (_id:string,turnId:string,itemId:string) => ({output:turnId+':'+itemId}),
@@ -86,6 +87,11 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     await app.inject({url:'/api/sessions',headers});assert.equal(archiveFilter,false);
     allowHistory=false;
     for(const route of ['git/status','git/files','git/diff','git/log','files']){const response=await app.inject({url:'/api/sessions/thread-1/'+route,headers});assert.equal(response.statusCode,200,response.body);}
+    await writeFile(join(root,'test','junit.xml'),'<testsuite><testcase name="ok"/></testsuite>');
+    const reportUrl='/api/sessions/thread-1/test-reports',reportInput={turnId:'turn-1',commandItemId:'command-1',relativePath:'junit.xml',format:'junit'};
+    const report=await app.inject({method:'POST',url:reportUrl,headers,payload:reportInput});assert.equal(report.statusCode,200,report.body);assert.equal(report.json().summary.passed,1);
+    assert.equal((await app.inject({method:'POST',url:reportUrl,headers,payload:{...reportInput,turnId:'other'}})).statusCode,404);
+    const {turnId,...missingTurn}=reportInput;assert.equal((await app.inject({method:'POST',url:reportUrl,headers,payload:missingTurn})).statusCode,400);
     const fetchRoute='/api/sessions/thread-1/git/fetch';
     assert.equal((await app.inject({method:'POST',url:fetchRoute,headers:{...headers,cookie:headers.cookie.split(';')[0]},payload:{}})).statusCode,401);
     assert.equal((await app.inject({method:'POST',url:fetchRoute,headers:{...headers,'x-csrf-token':''},payload:{}})).statusCode,403);
@@ -139,6 +145,15 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal((await app.inject({url:'/api/sessions',headers})).json().data.length,0);
     assert.equal((await app.inject({url:'/api/sessions?includeHidden=true',headers})).json().data.length,1);
     assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/metadata/clear',headers,payload:{}})).json().metadata,null);
+    const originalList=runtime.list;let hiddenPageReads=0;
+    for(let i=0;i<8;i++)await app.inject({method:'POST',url:'/api/sessions/hidden-'+i+'/metadata',headers,payload:{hidden:true}});
+    runtime.list=async(cursor:string|undefined)=>{hiddenPageReads++;const i=Number(cursor??0);return {data:[{id:'hidden-'+i}],nextCursor:i<7?String(i+1):null};};
+    const hiddenPage=await app.inject({url:'/api/sessions',headers});assert.equal(hiddenPage.statusCode,200,hiddenPage.body);assert.equal(hiddenPageReads,5,'Hidden sessions must not scan the entire history in one request');assert.deepEqual(hiddenPage.json().data,[]);assert.equal(hiddenPage.json().nextCursor,'5');
+    const nextHiddenPage=await app.inject({url:'/api/sessions?cursor=5',headers});assert.equal(nextHiddenPage.json().nextCursor,null);
+    runtime.list=async()=>({data:[{id:'hidden-0'}],nextCursor:'repeated'});
+    assert.equal((await app.inject({url:'/api/sessions',headers})).statusCode,503,'Repeated native cursor must fail instead of looping');
+    runtime.list=originalList;
+
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files',headers})).statusCode,200);
     assert.equal((await app.inject({url:'/api/sessions/bad%3Aid',headers})).statusCode,400);
     assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/abort',headers,payload:{unexpected:true}})).statusCode,400);
@@ -160,6 +175,20 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.deepEqual((await app.inject({url:'/api/sessions/thread-1/status?epoch=epoch',headers})).json(),{resync:false});
     assert.equal((await app.inject({url:'/api/sessions/thread-1/events?cursor=bad',headers})).statusCode,400);
     const address=await app.listen({host:'127.0.0.1',port:0});
+    for(const route of ['snapshot','history']){
+      const original=runtime[route];let entered!:()=>void,aborted!:()=>void;
+      const started=new Promise<void>(resolve=>{entered=resolve;}),stopped=new Promise<void>(resolve=>{aborted=resolve;});
+      runtime[route]=async(_id:string,option:any,historySignal?:AbortSignal)=>{
+        const signal:AbortSignal=route==='snapshot'?option.signal:historySignal!;
+        assert.ok(signal instanceof AbortSignal);entered();
+        await new Promise<void>(resolve=>signal.addEventListener('abort',()=>{aborted();resolve();},{once:true}));
+        signal.throwIfAborted();
+      };
+      const client=get(address+'/api/sessions/thread-1'+(route==='history'?'/history?before=turn-20':''),{headers});
+      client.on('error',()=>{});
+      try{await started;client.destroy();await Promise.race([stopped,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(new Error('Disconnected '+route+' did not cancel the runtime read')),1000);timer.unref();})]);}
+      finally{client.destroy();runtime[route]=original;}
+    }
     const queryResponse=await new Promise<any>(resolve=>get(address+'/api/sessions/thread-1/events?cursor=epoch:7',{headers},resolve));
     assert.equal(queryResponse.statusCode,200); assert.equal(replayCursor,'epoch:7'); queryResponse.destroy();
     const response=await new Promise<any>(resolve=>get(address+'/api/sessions/thread-1/events?cursor=epoch:7',{headers:{...headers,'last-event-id':'epoch:9'}},resolve));

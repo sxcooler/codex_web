@@ -1,5 +1,5 @@
 import { join, resolve, isAbsolute } from 'node:path';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { Runtime } from '../codex/runtime.ts';
 import type { Projects } from '../projects.ts';
 import { pathKey } from '../projects.ts';
@@ -16,6 +16,11 @@ const body = (properties: Record<string, unknown>, required: string[] = Object.k
   body: { type: 'object', additionalProperties: false, properties, required },
 });
 const params = (request: FastifyRequest) => request.params as { threadId: string; requestId: string; turnId: string; itemId: string };
+function readSignal(reply: FastifyReply): AbortSignal {
+  const controller = new AbortController();
+  reply.raw.once('close', () => { if (!reply.raw.writableEnded) controller.abort(); });
+  return controller.signal;
+}
 
 export function registerApi(app: FastifyInstance, options: {
   dataDir: string; runtime: Runtime; projects: Projects; authenticated: (request: FastifyRequest) => () => boolean;
@@ -58,8 +63,8 @@ export function registerApi(app: FastifyInstance, options: {
       ? (await projects.list()).find(p => pathKey(resolve(p.path)) === pathKey(resolve(cwd))) ?? null : null;
   }
 
-  async function associated(threadId: string) {
-    const snapshot = await runtime.snapshot(threadId, { window: true });
+  async function associated(threadId: string, signal?: AbortSignal) {
+    const snapshot = await runtime.snapshot(threadId, { window: true, signal });
     const project = await projectForCwd(snapshot.thread.cwd);
     const warning = saveMeta(threadId, project?.path ?? null, null);
     return { ...snapshot, project, metadata: readMeta(threadId), warning };
@@ -113,14 +118,21 @@ export function registerApi(app: FastifyInstance, options: {
   }
   app.get('/api/sessions', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { ...text, maxLength: 2048 }, includeHidden:{type:'string',enum:['true','false']},archived:{type:'string',enum:['true','false']} } } } }, async request => {
     const query=request.query as any; let result=await runtime.list(query.cursor,query.archived==='true'); const wanted=result.data.length; const data:any[]=[];
-    while(true){for(const thread of result.data){const meta=readMeta(thread.id);if(query.archived==='true'||query.includeHidden==='true'||!meta?.hidden)data.push({...thread,metadata:meta});}if(data.length>=wanted||!result.nextCursor)break;result=await runtime.list(result.nextCursor,query.archived==='true');}
+    // Keep hidden-heavy histories bounded; the existing Load more action continues at nextCursor.
+    const seen=new Set<string>(query.cursor?[query.cursor]:[]);
+    for(let pages=1;;pages++){
+      for(const thread of result.data){const meta=readMeta(thread.id);if(query.archived==='true'||query.includeHidden==='true'||!meta?.hidden)data.push({...thread,metadata:meta});}
+      if(result.nextCursor&&seen.has(result.nextCursor))throw Object.assign(new Error('Native session pagination is invalid'),{statusCode:503,code:'RUNTIME_UNAVAILABLE'});
+      if(data.length>=wanted||!result.nextCursor||pages>=5)break;
+      seen.add(result.nextCursor);result=await runtime.list(result.nextCursor,query.archived==='true');
+    }
     return { ...result, data, nextCursor:result.nextCursor };
   });
   app.post('/api/sessions', { schema: body({ projectId: short, clientRequestId: requestId, prompt: {...text,minLength:0}, ...turnFields }, ['clientRequestId']) }, async request => createSession(request.body,request));
-  app.get('/api/sessions/:threadId', async request => {const id=params(request).threadId;return {...await associated(id),attachmentPreviews:options.uploads&&options.uploadOwner?options.uploads.listForThread(options.uploadOwner(request),id).map(item=>({...item,url:'/api/uploads/'+item.uploadId})):[]};});
-  app.get('/api/sessions/:threadId/history', { schema: { querystring: { type: 'object', additionalProperties: false, required: ['before'], properties: { before: { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' } } } } }, async request => {
+  app.get('/api/sessions/:threadId', async (request,reply) => {const id=params(request).threadId;return {...await associated(id,readSignal(reply)),attachmentPreviews:options.uploads&&options.uploadOwner?options.uploads.listForThread(options.uploadOwner(request),id).map(item=>({...item,url:'/api/uploads/'+item.uploadId})):[]};});
+  app.get('/api/sessions/:threadId/history', { schema: { querystring: { type: 'object', additionalProperties: false, required: ['before'], properties: { before: { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' } } } } }, async (request,reply) => {
     const id = params(request).threadId;
-    return { ...await runtime.history(id, (request.query as any).before), attachmentPreviews: options.uploads && options.uploadOwner ? options.uploads.listForThread(options.uploadOwner(request), id).map(item => ({ ...item, url: '/api/uploads/' + item.uploadId })) : [] };
+    return { ...await runtime.history(id, (request.query as any).before, readSignal(reply)), attachmentPreviews: options.uploads && options.uploadOwner ? options.uploads.listForThread(options.uploadOwner(request), id).map(item => ({ ...item, url: '/api/uploads/' + item.uploadId })) : [] };
   });
   app.get('/api/sessions/:threadId/turns/:turnId/items/:itemId/output', async request => {
     const { threadId, turnId, itemId } = params(request);
@@ -173,7 +185,7 @@ export function registerApi(app: FastifyInstance, options: {
   app.get('/api/sessions/:threadId/files',{schema:{querystring:{type:'object',additionalProperties:false,properties:{directory:{type:'string',maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.listFiles(project.id,(request.query as any).directory??'');});
   app.get('/api/sessions/:threadId/files/content',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{path:{type:'string',minLength:1,maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.readFile(project.id,(request.query as any).path);});
   app.get('/api/sessions/:threadId/files/image',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{path:{type:'string',minLength:1,maxLength:1024},v:{type:'string',maxLength:64},revision:{type:'string',pattern:'^(index|[0-9a-fA-F]{40,64})$'}}}}},async(request,reply)=>{const project=await boundProject(params(request).threadId);const image=await projects.readImage(project.id,(request.query as any).path,(request.query as any).revision);return reply.headers({'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"}).type('image/webp').send(image);});
-  app.post('/api/sessions/:threadId/test-reports',{schema:body({commandItemId:short,relativePath:{type:'string',minLength:1,maxLength:1024},format:{type:'string',enum:['junit']}},['commandItemId','relativePath','format'])},async request=>{const id=params(request).threadId,project=await boundProject(id),snapshot=await runtime.snapshot(id);return parseTestReport(projects,project.id,snapshot,request.body as any);});
+  app.post('/api/sessions/:threadId/test-reports',{schema:body({turnId:short,commandItemId:short,relativePath:{type:'string',minLength:1,maxLength:1024},format:{type:'string',enum:['junit']}},['turnId','commandItemId','relativePath','format'])},async request=>{const id=params(request).threadId,input=request.body as any,project=await boundProject(id),command=await runtime.command(id,input.turnId,input.commandItemId);return parseTestReport(projects,project.id,command,input);});
 
   app.get('/api/sessions/:threadId/status', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { epoch: { ...short, pattern: '^[a-zA-Z0-9-]+$' } } } } }, async request => runtime.status(params(request).threadId, (request.query as any).epoch));
   app.get('/api/sessions/:threadId/events', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { type: 'string', maxLength: 160, pattern: '^[a-zA-Z0-9-]+:[0-9]+$' } } } } }, async (request, reply) => {

@@ -212,13 +212,30 @@ test('legacy threads without item pagination retain windowed history and full co
   assert.deepEqual(snapshot.thread.turns.map((t:any)=>t.id),Array.from({length:20},(_,i)=>`legacy-${i+5}`));
   assert.equal(snapshot.history.nextCursor,'legacy-5');
   assert.equal(snapshot.thread.turns[0].items[0].outputDeferred,true);
-  const stats=await (runtime as any).call('fixture/stats',{});
-  assert.equal(stats.turnLists,21,'one metadata page and one body page per selected turn');
+  let stats=await (runtime as any).call('fixture/stats',{});
+  assert.equal(stats.fullTurnLists,20,'the latest window still streams one bounded body per turn');
   const earlier=await runtime.history('legacy',snapshot.history.nextCursor);
   assert.deepEqual(earlier.turns.map((t:any)=>t.id),Array.from({length:5},(_,i)=>`legacy-${i}`));
   assert.equal(earlier.nextCursor,null);
+  let next=await (runtime as any).call('fixture/stats',{});
+  assert.equal(next.fullTurnLists-stats.fullTurnLists,5,'an older window must not load newer turn bodies');
+  stats=next;
   assert.deepEqual(await runtime.output('legacy','legacy-7','command-7'),{output:'x'.repeat(9000)});
+  next=await (runtime as any).call('fixture/stats',{});
+  assert.equal(next.fullTurnLists-stats.fullTurnLists,1,'targeted output must load only its turn body');
+  stats=next;
   await assert.rejects(runtime.output('legacy','legacy-7','missing'),{code:'RUNTIME_NOT_FOUND'});
+  next=await (runtime as any).call('fixture/stats',{});
+  assert.equal(next.fullTurnLists-stats.fullTurnLists,1,'a missing item still checks only its declared turn');
+  stats=next;
+  await assert.rejects(runtime.output('legacy','missing-turn','missing'),{code:'RUNTIME_NOT_FOUND'});
+  next=await (runtime as any).call('fixture/stats',{});
+  assert.equal(next.fullTurnLists-stats.fullTurnLists,0,'a missing turn must not load unrelated bodies');
+});
+
+test('legacy targeted reads reject unstable native turn cursors', async t => {
+  await assert.rejects(start(t,60_000,'legacy-items-repeat').output('legacy','missing-turn','missing'),{code:'RUNTIME_UNAVAILABLE'});
+  await assert.rejects(start(t,60_000,'legacy-items-mismatch').output('legacy','legacy-7','command-7'),{code:'RUNTIME_UNAVAILABLE'});
 });
 
 test('automatic leave and idle shutdown preserve explicit permissions while manual handoff resets them', async t => {

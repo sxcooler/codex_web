@@ -151,3 +151,63 @@ test('project binding reads only native cwd without loading or reconciling histo
   t.mock.method(runtime as any,'call',async()=>{throw Object.assign(new Error('missing'),{statusCode:404});});
   await assert.rejects(runtime.threadCwd('thread'),(e:any)=>e.statusCode===404);
 });
+
+
+test('release reads turn status headers without loading item bodies',async t=>{
+  const {runtime,calls}=setup(t);
+  t.mock.method(runtime as any,'mutation',async(method:string)=>{assert.equal(method,'thread/unsubscribe');return {status:'unsubscribed'};});
+  t.mock.method(runtime as any,'closeIdleServer',async()=>false);
+  const released=await runtime.release('thread');
+  assert.equal(released.status,'released');
+  assert.ok(calls.some(call=>call.method==='thread/turns/list'));
+  assert.ok(calls.every(call=>call.method!=='thread/items/list'&&call.itemsView!=='full'),'Release loaded conversation bodies');
+});
+
+test('release refuses a running header without loading its body',async t=>{
+  const {runtime,turns,calls}=setup(t);turns.at(-1)!.status='inProgress';
+  t.mock.method(runtime as any,'mutation',async()=>{assert.fail('Must not unsubscribe a running turn');});
+  await assert.rejects(runtime.release('thread'),(e:any)=>e.code==='RUNTIME_THREAD_BUSY');
+  assert.ok(calls.every(call=>call.method!=='thread/items/list'&&call.itemsView!=='full'));
+});
+
+test('sync header extraction never traverses discarded conversation bodies',async t=>{
+  const {runtime}=setup(t);let reads=0;
+  const thread={id:'thread',status:{type:'idle'},turns:[{get items(){reads++;return [{text:'large body'}];}}]};
+  const header=(runtime as any).threadHeader(thread);header.status.type='active';
+  assert.equal(reads,0);assert.equal(thread.status.type,'idle');assert.equal('turns' in header,false);
+});
+
+test('test report command lookup stays scoped to its native turn and item',async t=>{
+  const {runtime,calls}=setup(t);
+  const command=await runtime.command('thread','turn-30','command-turn-30');
+  assert.equal(command.id,'command-turn-30');assert.equal(command.type,'commandExecution');
+  assert.ok(calls.every(call=>call.method==='thread/items/list'&&call.turnId==='turn-30'));
+  await assert.rejects(runtime.command('thread','turn-29','command-turn-30'),(e:any)=>e.statusCode===404);
+});
+
+
+test('abandoned snapshot and earlier-history reads stop scheduling native pages',async t=>{
+  for(const earlier of [false,true]){
+    const {runtime,calls}=setup(t),controller=new AbortController(),call=(runtime as any).call.bind(runtime);
+    t.mock.method(runtime as any,'call',async(method:string,args:any)=>{const result=await call(method,args);if(method==='thread/items/list')controller.abort();return result;});
+    const pending=earlier?runtime.history('thread','turn-30',controller.signal):runtime.snapshot('thread',{window:true,signal:controller.signal});
+    await assert.rejects(pending,(e:any)=>e.name==='AbortError');
+    assert.equal(calls.filter(call=>call.method==='thread/items/list').length,1,'Canceled read kept loading other turns');
+    assert.equal(runtime.listenerCount('snapshotChange'),0);assert.equal((runtime as any).reads,0);
+    assert.equal((runtime as any).state('thread').syncHeader,undefined,'Canceled history must not replace sync state');
+  }
+});
+
+test('cancellation also stops both legacy full-turn fallback paths',async t=>{
+  for(const seek of [false,true]){
+    const {runtime}=setup(t),controller=new AbortController();let bodies=0;
+    t.mock.method(runtime as any,'call',async(method:string,args:any)=>{
+      if(method==='thread/items/list')throw Object.assign(new Error('legacy'),{code:'RUNTIME_ITEMS_UNSUPPORTED'});
+      if(args.itemsView==='full'){bodies++;controller.abort();return {data:[{id:'target',itemsView:'full',items:[{id:'command'}]}],nextCursor:'next'};}
+      return {data:[{id:'target'},{id:'other'}],nextCursor:null};
+    });
+    const turns=[{id:'target',itemsView:'notLoaded'},{id:'other',itemsView:'notLoaded'}];
+    await assert.rejects((runtime as any).readTurnBodies('thread',turns,undefined,seek,controller.signal),(e:any)=>e.name==='AbortError');
+    assert.equal(bodies,1);assert.ok(turns.every(turn=>turn.itemsView==='notLoaded'));
+  }
+});

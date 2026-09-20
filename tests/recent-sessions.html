@@ -28,8 +28,10 @@
   const refresh = () => document.querySelector('button[aria-label="刷新最近会话"]');
   const more = () => [...document.querySelectorAll('nav.recent button')].find(b => b.textContent === '加载更多');
   const titles = () => [...document.querySelectorAll('nav.recent button[title]')].map(b => b.title).join(',');
+  const sessionAlert = () => [...document.querySelectorAll('[role="alert"]')].find(node => node.textContent.includes('模拟刷新失败'));
   async function respond(data, status = 200) {
     await until(() => pending.length, 'Expected session request');
+    await until(() => refresh() && refresh().disabled, 'Refresh control did not enter loading state');
     pending.shift().resolve(reply(data, status));
     await until(() => refresh() && !refresh().disabled, 'Refresh control missing or stuck');
   }
@@ -40,6 +42,7 @@
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
     setter.call(draft, '保留未发送草稿');
     draft.dispatchEvent(new Event('input', {bubbles:true}));
+    await until(() => more(), 'Initial continuation missing');
     more().click();
     await respond({data:[{id:'older',name:'旧分页会话'}],nextCursor:'stale cursor'});
     check(titles() === '待归档会话,旧分页会话', 'Pagination must append');
@@ -52,19 +55,25 @@
     await respond({data:[{id:'new',name:'VS Code 新会话'}],nextCursor:'fresh cursor'});
     check(titles() === 'VS Code 新会话', 'Refresh must replace archived and paginated entries');
     check(document.querySelector('textarea') === draft && draft.value === '保留未发送草稿', 'Refresh must preserve current form');
+    await until(() => more(), 'Refreshed continuation missing');
     more().click();
     await until(() => pending.length, 'Expected next page');
-    check(pending[0].path === '/api/sessions?cursor=fresh%20cursor', 'Pagination must use refreshed cursor');
+    check(pending[0].path === '/api/sessions?cursor=fresh+cursor', 'Pagination must use refreshed cursor');
     await respond({data:[{id:'new',name:'VS Code 新会话'},{id:'next',name:'下一页'}],nextCursor:null});
     check(titles() === 'VS Code 新会话,下一页', 'Pagination must deduplicate');
     refresh().click();
     await respond({error:'模拟刷新失败'}, 500);
-    check(document.querySelector('[role="alert"]')?.textContent.includes('模拟刷新失败'), 'Failure must be visible');
+    check(sessionAlert(), 'Failure must be visible');
     check(titles() === 'VS Code 新会话,下一页', 'Failure must preserve list');
     refresh().click();
     await respond({data:[],nextCursor:null});
-    check(!document.querySelector('[role="alert"]'), 'Retry must clear error');
+    await until(() => !sessionAlert(), 'Retry did not clear error');
     check(document.querySelector('nav.recent').textContent.includes('暂无会话') && !more(), 'Empty refresh must clear list and cursor');
+    document.querySelector('.show-hidden input').click();
+    await until(() => pending.length, 'Hidden filter did not refresh sessions');
+    check(pending[0].path === '/api/sessions?includeHidden=true', 'Hidden filter used wrong session query');
+    await respond({data:[],nextCursor:'hidden cursor'});
+    check(more(), 'Empty filtered page must retain continuation cursor');
     check(requests.filter(path => path === '/api/projects').length === 1, 'Session refresh must not reload projects');
     check(requests.filter(path => path.startsWith('/api/auth/')).length === 1, 'Session refresh must not log in again');
     document.querySelector('#result').textContent = 'PASS: 新增 / 归档 / 分页 / 防重复 / 草稿 / 失败重试';

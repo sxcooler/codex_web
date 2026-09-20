@@ -83,8 +83,11 @@ test('safe files and structured diffs cover untracked, staged, rename and binary
     await writeFile(join(project.path,'new assets/nested/note.txt'),'nested\n');
     await writeFile(join(project.path,'binary.bin'),Buffer.from([0,1,2,3]));
     const files=await projects.gitFiles(project.id,false);
+    assert.deepEqual(files.files.find(f=>f.path==='new name.txt'),{path:'new name.txt',oldPath:'old name.txt',status:'M',added:1,deleted:1,binary:false});
+    assert.deepEqual(files.files.find(f=>f.path==='binary.bin'),{path:'binary.bin',status:'untracked',added:0,deleted:0,binary:true});
     assert.ok(files.files.some(f=>f.path==='untracked.txt'&&f.status==='untracked'&&f.added===1));
     assert.ok(files.files.some(f=>f.path==='new assets/nested/note.txt'&&f.status==='untracked'&&f.added===1));
+    assert.deepEqual((await projects.gitFiles(project.id,true)).files.find(f=>f.path==='new name.txt'),{path:'new name.txt',oldPath:'old name.txt',status:'renamed',added:0,deleted:0,binary:false});
     assert.match(await projects.gitPatch(project.id,'new assets/nested/note.txt'),/\+nested/);
     const diff=await projects.gitFileDiff(project.id,'untracked.txt',false);
     assert.equal(diff.hunks[0].lines[0].kind,'add'); assert.equal(diff.hunks[0].lines[0].newLine,1);

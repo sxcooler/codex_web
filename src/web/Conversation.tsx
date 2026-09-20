@@ -71,7 +71,7 @@ function Command({item,threadId,turnId,visible}:{item:Json;threadId:string;turnI
     <button type="button" className="step-toggle quiet" aria-expanded={open} aria-controls={detailsId} onClick={()=>setOpen(value=>!value)}>{open?'收起输出':'查看输出'}</button>
     <div id={detailsId} hidden={!open}>{open?<><pre className="command-source">{item.command}</pre>
       {item.outputDeferred&&output===null?<div className="output-status small" role="status">{loading?'正在加载完整输出…':error?<>{error} <button type="button" onClick={()=>setAttempt(n=>n+1)}>重试加载输出</button></>:`输出 ${(Number(item.outputBytes)/1024).toFixed(1)} KiB，展开后加载全文`}</div>:null}
-      <pre>{output??item.aggregatedOutput??'等待命令输出…'}</pre>{item.status!=='inProgress'?<TestReport threadId={threadId} itemId={item.id}/>:null}
+      <pre>{output??item.aggregatedOutput??'等待命令输出…'}</pre>{turnId&&item.status!=='inProgress'?<TestReport threadId={threadId} turnId={turnId} itemId={item.id}/>:null}
     </>:null}</div>
   </section>;
 }
