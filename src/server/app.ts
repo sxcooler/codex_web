@@ -111,7 +111,8 @@ export async function buildServer(options: { dataDir: string; origin: string; al
   app.addHook('onSend', async (request, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'same-origin');
-    reply.header('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    // Mermaid generates SVG styles and layout attributes; script sources remain self-only.
+    reply.header('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     if (matchedApiRoute(request)) reply.header('cache-control', 'no-store');
     return payload;
   });
