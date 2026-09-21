@@ -1,0 +1,28 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>文件列表回归</title>
+<style>#root{max-width:650px;margin:auto}#right-sidebar{height:calc(100dvh - 50px)}</style><div id="root"></div><output id="result">RUNNING</output>
+<script type="module">
+import '/src/web/style.css';import React from 'react';import{createRoot}from'react-dom/client';import{GitPanel}from'/src/web/GitPanel.tsx';
+const base='runs/diablo4_run_2026-09-19_160917/annotations/semantic-pilot/images',requests=[];
+const entries=[['file10.txt','file'],['folder10','directory'],['file2.txt','file'],['folder2','directory']];
+window.fetch=async input=>{const url=new URL(String(input),location.origin);requests.push(url);if(url.pathname.endsWith('/files')&&!url.pathname.endsWith('/git/files'))return Response.json({files:entries.map(([name,type])=>({path:url.searchParams.get('directory')+'/'+name,type}))});if(url.pathname.endsWith('/files/content'))return Response.json({text:'preview '+url.searchParams.get('path')});return Response.json({files:[{path:'src/nested/code.ts',status:'M',added:2,deleted:1}]});};
+const until=async(fn,message)=>{for(let i=0;i<150;i++){if(fn())return;await new Promise(r=>setTimeout(r,20))}throw Error(message)},check=(ok,message)=>{if(!ok)throw Error(message)};
+const buttons=()=>[...document.querySelectorAll('.panel-list-body .file-list>button')],button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);
+try{
+ localStorage.clear();createRoot(document.querySelector('#root')).render(React.createElement(GitPanel,{id:'files-test',projectId:'files-test',tick:0,visible:true,openFile:{path:base+'/file2.txt'}}));
+ await until(()=>buttons().length===4,'文件列表未加载');
+ check(JSON.stringify(buttons().map(b=>b.title))===JSON.stringify(['folder2','folder10','file2.txt','file10.txt'].map(n=>base+'/'+n)),'文件夹优先或自然排序错误');
+ check(buttons().every(b=>!b.textContent.includes(base)),'列表仍重复目录路径');
+ const labels=buttons().map(b=>b.querySelector('.file-name-text').getBoundingClientRect().left);
+ check(Math.max(...labels)-Math.min(...labels)<1,'文件和目录名称未对齐');
+ check(document.querySelector('.directory-path').textContent===base,'顶部路径丢失');
+ const up=button('上一级'),panel=document.querySelector('#right-sidebar').getBoundingClientRect(),rect=up.getBoundingClientRect();
+ check(rect.left>=panel.left&&rect.right<=panel.right,'长路径把上一级挤出面板');
+ check(document.documentElement.scrollWidth<=innerWidth,'页面横向溢出');
+ buttons()[0].click();await until(()=>requests.some(u=>u.searchParams.get('directory')===base+'/folder2'),'目录跳转未保留完整路径');
+ await until(()=>buttons()[0]?.title===base+'/folder2/folder2','子目录未加载');button('上一级').click();await until(()=>buttons()[0]?.title===base+'/folder2','返回父目录失败');
+ buttons()[3].click();await until(()=>document.querySelector('.preview-content')?.textContent.includes(base+'/file10.txt'),'预览未使用完整路径');
+ button('变更').click();await until(()=>buttons()[0]?.title==='src/nested/code.ts','变更未加载');check(buttons()[0].textContent.includes('src/nested/code.ts'),'变更的路径被错误缩短');
+ button('文件').click();await until(()=>buttons().length===4,'切回文件列表失败');
+ document.querySelector('#result').textContent='PASS · 文件名、目录优先、自然排序、名称对齐、长路径导航、预览、变更路径';
+}catch(error){document.querySelector('#result').textContent='FAIL · '+error.message;console.error(error)}
+</script></html>

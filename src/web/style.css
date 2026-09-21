@@ -126,6 +126,11 @@
 .panel-sections{flex:1}.git-history{height:100%}
 .panel-list-section{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
 .panel-list-body>.file-list{flex:1}.panel-list-body>.actions,.panel-list-body>.path{flex-shrink:0;margin:0 0 6px}
+.directory-navigation{display:flex;align-items:center;gap:8px;flex-shrink:0;min-width:0;margin-bottom:6px}
+.git-panel .directory-path{flex:1;min-width:0;margin:0;padding:0 4px;font-size:12px}
+.directory-navigation>button{flex-shrink:0;margin:0;padding:5px 8px;font-size:12px}
+.directory-list .file-name{display:inline-flex;align-items:center;gap:6px}
+.directory-list .file-kind{display:inline-block;width:12px;text-align:center;color:#9fadb7}
 .panel-list-body>.actions button{font-size:12px;padding:6px 8px}
 .panel-list-body>.notice{max-height:40%;overflow:auto;flex-shrink:0;margin-bottom:6px}
 .file-preview{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;border-top:1px solid #354047;padding-top:6px}

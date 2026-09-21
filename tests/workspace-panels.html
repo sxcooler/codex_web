@@ -19,7 +19,7 @@ globalThis.fetch=async (input,options)=>{
  return baseFetch(input);
 };
 const render=(project='one',session='session')=>root.render(h(React.Fragment,null,h(MarkdownView,{text:'[Chat link](https://example.com)'}),h(GitPanel,{key:project,id:session,projectId:project,tick:dataTick,visible:true})));
-const button=text=>[...document.querySelectorAll('button')].find(node=>node.textContent===text);
+const button=text=>[...document.querySelectorAll('.file-list button')].find(node=>node.title===text)??[...document.querySelectorAll('button')].find(node=>node.textContent===text);
 try{
  localStorage.clear();root.render(h(MarkdownView,{text:'[Chat link](https://example.com)'}));await tick(1200);render();await tick();button('文件').click();await tick();button('文件').click();await tick();check(button('文件').getAttribute('aria-pressed')==='true','重复点击重置标签');
  if(new URLSearchParams(location.search).has('fetch')){
