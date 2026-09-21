@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>查看图片回归</title><style>body{padding:16px}#root{max-width:800px;margin:auto}</style><div id="root"></div>
+<script type="module">
+import React from 'react';import{createRoot}from'react-dom/client';import{Message}from'/src/web/Conversation.tsx';import'/src/web/style.css';
+const examples=[['C:\\work\\project','C:\\work\\project\\runs\\预览 #100%.png'],['/home/project','/home/project/runs/linux.png'],['/home/project','runs/relative.png'],['C:\\work\\project','C:\\outside\\private.png'],['/home/project','https://example.invalid/remote.png'],['/home/project','../../outside.png'],[undefined,'/home/project/unknown.png'],['/home/project','/home/project/missing.png']];
+createRoot(document.querySelector('#root')).render(React.createElement(React.Fragment,null,...examples.map(([projectRoot,path],i)=>React.createElement(Message,{key:i,threadId:'image-view-test',projectRoot,item:{id:String(i),type:'imageView',path,_syncCompleted:true}}))));
+</script></html>

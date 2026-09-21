@@ -1,6 +1,6 @@
 import {memo,useEffect,useId,useRef,useState} from 'react';
 import {chatFileUrl,linkedFile} from './fileLinks.ts';
-import {NativeImages} from './ImagePreview.tsx';
+import {ImagePreview,NativeImages} from './ImagePreview.tsx';
 import {MarkdownView} from './MarkdownView.tsx';
 import {api,type Json} from './api.ts';
 import {TestReport} from './GitPanel.tsx';
@@ -37,9 +37,21 @@ export const Message=memo(function Message({item,threadId,turnId,attachments=[],
   if(item.type==='userMessage')return <article className="message user"><div className="avatar">U</div><div className="message-body"><MessageHeader user timestamp={timestamp} timeLabel={timeLabel}/><div className="prose">{(item.content??[]).map((c:Json,i:number)=><div key={i}>{c.type==='localImage'&&attachments.some(a=>a.path===c.path)?<a href={attachments.find(a=>a.path===c.path)!.url} target="_blank" rel="noreferrer"><img className="history-image" src={attachments.find(a=>a.path===c.path)!.url} alt={attachments.find(a=>a.path===c.path)!.name}/></a>:c.type==='image'&&item.imagePreviews?.length?null:c.type==='localImage'||c.type==='image'?<span>图片附件（原生历史）</span>:c.text??`[${c.type}]`}</div>)}</div><NativeImages threadId={threadId} turnId={turnId} item={item}/></div></article>;
   if(item.type==='agentMessage')return <article className="message"><div className="avatar codex">A</div><div className="message-body"><MessageHeader timestamp={timestamp} timeLabel={timeLabel}/><MarkdownView text={item.text??''} streaming={streaming} linkScope={threadId+'|'+(projectRoot??'')} resolveUrl={projectRoot&&onOpenFile?url=>chatFileUrl(threadId,projectRoot,url):undefined} onLink={url=>{const path=linkedFile(threadId,'',url);if(!path||!onOpenFile)return false;onOpenFile(path);return true;}}/><NativeImages threadId={threadId} turnId={turnId} item={item}/></div></article>;
   if(item.type==='commandExecution')return <Command item={item} threadId={threadId} turnId={turnId} visible={visible}/>;
+  if(item.type==='imageView')return <ViewedImage key={threadId+'|'+item.id+'|'+item.path} item={item} threadId={threadId} projectRoot={projectRoot}/>;
   if(Object.hasOwn(stepLabels,item.type))return <Step item={item} threadId={threadId} turnId={turnId}/>;
   return <details className="tool"><summary><span>{item.type}</span><code>{item.command??item.changes?.map((change:Json)=>change.path).join(', ')??''}</code><span className="muted">{statusLabel(item)}</span></summary><pre>{pretty(item)}</pre></details>;
 });
+
+function ViewedImage({item,threadId,projectRoot}:{item:Json;threadId:string;projectRoot?:string}){
+  const [open,setOpen]=useState(false),path=typeof item.path==='string'?item.path:'';
+  // Tool paths are literal filesystem names, not Markdown URLs (# and % are valid filenames).
+  const url=path&&projectRoot?chatFileUrl(threadId,projectRoot,encodeURIComponent(path)):'';
+  const relative=url?linkedFile(threadId,'',url):'';
+  return <details className="tool image-view" open={open} onToggle={event=>{if(event.target===event.currentTarget)setOpen(event.currentTarget.open);}}>
+    <summary><span>查看图片</span><code title={path}>{path.split(/[\\/]/).pop()}</code></summary>
+    {open?<><p className="path">{path||'图片路径未提供'}</p>{relative?<ImagePreview id={threadId} path={relative} version={item.id}/>:<p className="notice error" role="alert">无法预览：图片不在当前项目内，或缺少项目路径。仅支持项目内的本地图片。</p>}</>:null}
+  </details>;
+}
 
 function Step({item,threadId,turnId}:{item:Json;threadId:string;turnId?:string}){
   const [open,setOpen]=useState(false),detailsId=useId();
