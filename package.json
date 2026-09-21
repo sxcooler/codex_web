@@ -19,6 +19,7 @@
   "dependencies": {
     "@fastify/multipart": "^10.1.1",
     "@streamdown/code": "1.1.1",
+    "@streamdown/mermaid": "1.0.2",
     "fast-xml-parser": "^5.11.1",
     "fastify": "5.12.3",
     "react": "19.2.8",

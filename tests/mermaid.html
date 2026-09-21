@@ -1,0 +1,62 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"><link rel="icon" href="/icon.svg"><title>Mermaid 回归</title>
+<style>body{padding:16px}.fixtures{max-width:760px;margin:auto}#result{position:fixed;right:8px;bottom:8px;z-index:100;background:#17251e;padding:10px}</style>
+<main class="fixtures"><h1>Mermaid 图形预览</h1><div id="root"></div></main><output id="result">RUNNING</output>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {MarkdownView} from '/src/web/MarkdownView.tsx';
+import {Message} from '/src/web/Conversation.tsx';
+import '/src/web/style.css';
+const h=React.createElement,root=createRoot(document.querySelector('#root')),fence='```',copies=[];
+const chart='flowchart TD\n  A[预检与定位] --> B{可信阶段证据}\n  B -->|继续| C[清怪与探索]\n  C --> B\n  B -->|完成| D[释放并结束]';
+const markdown=fence+'mermaid\n'+chart+'\n'+fence;
+Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>copies.push(text)}});
+const check=(ok,message)=>{if(!ok)throw Error(message)};
+const until=async(fn,message)=>{const deadline=Date.now()+20000;while(!fn()){if(Date.now()>deadline)throw Error(message);await new Promise(r=>setTimeout(r,30))}};
+const tick=()=>new Promise(r=>setTimeout(r,120));
+const svg=()=>document.querySelector('[role="img"][aria-label="Mermaid chart"] svg');
+const button=label=>[...document.querySelectorAll('button')].find(b=>b.textContent===label||b.getAttribute('aria-label')===label);
+const render=(text=markdown,streaming=false,chat=false)=>root.render(chat?h(Message,{item:{id:'mermaid',type:'agentMessage',text},threadId:'test',streaming}):h(MarkdownView,{text,streaming,linkScope:'file-preview'}));
+try{
+ if(new URLSearchParams(location.search).has('lazy')){
+   root.render(h('div',null,h('div',{style:{height:'2200px'}},'屏外流程图不应提前加载'),h(MarkdownView,{text:markdown})));
+   await until(()=>document.querySelector('.mermaid-placeholder'),'Lazy placeholder missing');await tick();
+   check(!svg(),'Offscreen diagram rendered');
+   check(!performance.getEntriesByType('resource').some(entry=>entry.name.includes('streamdown_mermaid')),'Offscreen Mermaid library loaded');
+   document.querySelector('.mermaid-preview').scrollIntoView();await until(svg,'Visible diagram did not render');
+   document.querySelector('#result').textContent='PASS · 屏外不加载，进入视口后渲染';
+ }else if(new URLSearchParams(location.search).has('blocked')){
+   render();await until(()=>document.querySelector('.mermaid-source'),'Failed module must retain source');
+   check(document.body.textContent.includes('绘图模块加载失败'),'Failed module notice missing');
+   document.querySelector('#result').textContent='PASS · 绘图库加载失败保留源码';
+ }else{
+ render();await until(svg,'Diagram was not rendered');
+ check(svg().textContent.includes('预检与定位'),'Chinese labels missing');
+ check(button('放大').getBoundingClientRect().top>=svg().getBoundingClientRect().bottom-1,'Zoom controls overlap the diagram');
+ check(document.documentElement.scrollWidth<=innerWidth,'Horizontal page overflow');
+ const stage=document.querySelector('.mermaid-preview [role="application"]');const original=stage.style.transform;
+ button('放大').click();await until(()=>stage.style.transform!==original,'Zoom did not change');
+ button('重置视图').click();await until(()=>stage.style.transform===original,'Reset failed');
+ const wheel=new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:100});stage.dispatchEvent(wheel);check(!wheel.defaultPrevented,'Normal wheel was trapped');
+ button('复制源码').click();await until(()=>copies.length,'Copy missing');check(copies[0].trimEnd()===chart,'Copy changed Mermaid source');
+ button('源码').click();await tick();check(document.querySelector('.mermaid-source')?.textContent.trimEnd()===chart,'Source view missing');
+ button('图形').click();await tick();check(svg(),'Diagram did not return');
+ button('全屏查看').click();await until(()=>button('退出全屏'),'Fullscreen missing');button('退出全屏').click();
+ button('放大').click();await tick();const zoomed=stage.style.transform,originalSvg=svg();
+ render(markdown+'\n\n后续文字');await tick();check(svg()===originalSvg&&stage.style.transform===zoomed,'Following text reset diagram state');
+ render(fence+'mermaid\nflowchart TD\n A -->',true);await until(()=>document.querySelector('.mermaid-source'),'Incomplete diagram must show source');check(!svg(),'Incomplete diagram rendered');
+ render(markdown,true);await until(svg,'Closed streaming diagram did not render');
+ render(fence+'mermaid\nnot_a_diagram ! !\n'+fence);await until(()=>document.querySelector('.mermaid-error'),'Invalid syntax has no fallback');check(document.querySelector('.mermaid-error pre')?.textContent.includes('not_a_diagram'),'Invalid source lost');
+ render(fence+'mermaid\n'+ 'x'.repeat(20001)+'\n'+fence);await until(()=>document.querySelector('.mermaid-source'),'Oversized diagram source missing');check(!svg(),'Oversized diagram rendered');
+ render(fence+'mermaid\n%%{init: {"securityLevel":"loose","flowchart":{"htmlLabels":true}}}%%\nflowchart LR\n A["<img src=x onerror=alert(1)>"] --> B[安全]\n click A "javascript:alert(1)"\n'+fence);
+ await until(()=>svg()||document.querySelector('.mermaid-error'),'Hostile diagram stuck');
+ check(!document.querySelector('.mermaid-preview img,.mermaid-preview iframe,.mermaid-preview script,.mermaid-preview [onerror],.mermaid-preview a[href^="javascript:"]'),'Unsafe diagram content rendered');
+ render('````mermaid\nflowchart TD\n```\n![外部图片](https://example.invalid/tracker.png)\n````');
+ await until(()=>document.querySelector('.mermaid-error'),'Nested fence escaped the diagram renderer');check(!document.querySelector('.mermaid-preview img'),'Nested fence loaded Markdown image');
+ render(markdown,false,true);await until(svg,'Conversation diagram missing');
+ await tick();check(svg().getBoundingClientRect().height>100,'Diagram is present but not laid out');
+ check(!document.querySelector('.mermaid-preview script,.mermaid-preview iframe'),'Executable elements present');
+ document.querySelector('#result').textContent='PASS · 图形、中文、源码/复制、缩放/重置、全屏、滚轮、流式、错误、大小上限、对话';
+ }
+}catch(error){document.querySelector('#result').textContent='FAIL · '+error.message;console.error(error)}
+</script></html>

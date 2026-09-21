@@ -2,6 +2,7 @@
 <div id="root"></div><output id="result" style="position:fixed;bottom:0;right:0;z-index:100;background:#111;padding:8px">RUNNING</output>
 <script type="module">
 const options=new URLSearchParams(location.search),linux=options.has('linux'),streaming=options.has('streaming');
+const diagram=options.has('mermaid')?'\n\n```mermaid\nflowchart TD\n A[读取文件] --> B[渲染流程图]\n B --> C[查看细节]\n```':'';
 const id='document-links',requests=[],rootPath=linux?'/home/test/project':'C:\\work\\project';
 let text='已整理成 [感知改进：现状评估与下一阶段方案](C:/work/project/docs/方案.md:12)。\n\n[相对路径](docs/方案.md#L12) · [文件地址](file:///C:/work/project/docs/方案.md) · [缺失文件](docs/missing.md) · [外链](https://example.com)\n\n[项目外](C:/private/secret.md) [危险](javascript:alert%281%29)';
 if(linux)text=text.replaceAll('C:/work/project','/home/test/project').replace('file:////home','file:///home');
@@ -16,7 +17,7 @@ window.fetch=async(input)=>{
  if(url.pathname==='/api/sessions')return Response.json({data:[snapshot.thread]});
  if(url.pathname==='/api/sessions/'+id)return Response.json(snapshot);
  if(url.pathname.endsWith('/files'))return Response.json({files:[{path:'docs/方案.md',type:'file'}]});
- if(url.pathname.endsWith('/files/content'))return url.searchParams.get('path')==='docs/missing.md'?Response.json({error:'missing'},{status:404}):Response.json({text:'# 方案预览\n\n文档链接已正常打开。\n\n[同目录文档](next.md)'});
+ if(url.pathname.endsWith('/files/content'))return url.searchParams.get('path')==='docs/missing.md'?Response.json({error:'missing'},{status:404}):Response.json({text:'# 方案预览\n\n文档链接已正常打开。\n\n[同目录文档](next.md)'+diagram});
  if(url.pathname.endsWith('/git/files'))return Response.json({files:[]});
  if(url.pathname==='/api/models')return Response.json({data:[]});
  if(url.pathname.startsWith('/api/permission-modes'))return Response.json({modes:[]});
@@ -42,6 +43,15 @@ try{
  await close();link('相对路径').click();await until(()=>document.querySelector('.file-preview h3')?.textContent==='docs/方案.md','重复点击未重新选中文档');
  check(!requests.some(url=>url.includes('secret')),'越界路径发出了请求');
  check(document.documentElement.scrollWidth<=innerWidth,'页面横向溢出');
+ if(diagram){
+  const chart=()=>document.querySelector('.preview-content [aria-label="Mermaid chart"] svg');
+  await until(()=>document.querySelector('.preview-content .mermaid-preview'),'文件流程图入口缺失');
+  document.querySelector('.preview-content .mermaid-preview').scrollIntoView();await until(chart,'文件流程图未渲染');
+  check(chart().getBoundingClientRect().height<=361,'流程图撑高预览区');
+  const source=[...document.querySelectorAll('.preview-content .mermaid-toolbar button')].find(button=>button.textContent==='源码');source.click();
+  await until(()=>document.querySelector('.preview-content .mermaid-source'),'文件图形源码切换失败');
+  const pre=document.querySelector('.preview-content .mermaid-source');check(getComputedStyle(pre).overflowX==='auto'&&getComputedStyle(pre).maxHeight==='360px','侧栏覆盖了源码滚动/高度限制');
+ }
  document.querySelector('#result').textContent='PASS: 文档链接 / 桌面与抽屉预览 / 缺失文件 / 安全边界';
 }catch(error){document.querySelector('#result').textContent='FAIL: '+error.message;console.error(error);}
 </script></html>
