@@ -44,12 +44,13 @@ export const Message=memo(function Message({item,threadId,turnId,attachments=[],
 
 function ViewedImage({item,threadId,projectRoot}:{item:Json;threadId:string;projectRoot?:string}){
   const [open,setOpen]=useState(false),path=typeof item.path==='string'?item.path:'';
+  const remote=/^(?:https?:)?\/\//i.test(path);
   // Tool paths are literal filesystem names, not Markdown URLs (# and % are valid filenames).
-  const url=path&&projectRoot?chatFileUrl(threadId,projectRoot,encodeURIComponent(path)):'';
+  const url=!remote&&path&&projectRoot?chatFileUrl(threadId,projectRoot,encodeURIComponent(path)):'';
   const relative=url?linkedFile(threadId,'',url):'';
   return <details className="tool image-view" open={open} onToggle={event=>{if(event.target===event.currentTarget)setOpen(event.currentTarget.open);}}>
     <summary><span>查看图片</span><code title={path}>{path.split(/[\\/]/).pop()}</code></summary>
-    {open?<><p className="path">{path||'图片路径未提供'}</p>{relative?<ImagePreview id={threadId} path={relative} version={item.id}/>:<p className="notice error" role="alert">无法预览：图片不在当前项目内，或缺少项目路径。仅支持项目内的本地图片。</p>}</>:null}
+    {open?<><p className="path">{path||'图片路径未提供'}</p>{remote?null:relative?<ImagePreview id={threadId} path={relative} version={item.id}/>:<p className="notice error" role="alert">无法预览：图片不在当前项目内，或缺少项目路径。仅支持项目内的本地图片。</p>}</>:null}
   </details>;
 }
 
