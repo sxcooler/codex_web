@@ -871,11 +871,18 @@ export class Runtime extends EventEmitter {
       let server: AppServer;
       try { server = await this.getServer(); }
       catch (error) { throw this.mapError(error); }
-      try { return await server.request<T>(method, params); }
-      catch (error) {
-        const mapped = this.mapError(error, method, params);
-        if (uncertain && mapped.statusCode === 503) throw runtimeError(504, 'RUNTIME_RESULT_UNKNOWN', 'Codex did not confirm the operation; its result is unknown');
-        throw mapped;
+      for (let attempt = 0; ; attempt++) {
+        try { return await server.request<T>(method, params); }
+        catch (error) {
+          const mapped = this.mapError(error, method, params);
+          // thread/start may return before its rollout metadata is flushed. Retry only this read race.
+          if (!uncertain && mapped.code === 'RUNTIME_HISTORY_NOT_READY' && attempt < 4) {
+            await new Promise(resolve => setTimeout(resolve, 50 * 2 ** attempt));
+            continue;
+          }
+          if (uncertain && mapped.statusCode === 503) throw runtimeError(504, 'RUNTIME_RESULT_UNKNOWN', 'Codex did not confirm the operation; its result is unknown');
+          throw mapped;
+        }
       }
     } catch (error) {
       throw this.mapError(error, method, params);
@@ -1418,6 +1425,9 @@ export class Runtime extends EventEmitter {
       return runtimeError(503, 'RUNTIME_UNAVAILABLE', `无法启动 Codex：${this.options.executable}。请检查文件、执行权限以及 CODEX_BIN 或 codexBin 配置。`);
     }
     const message = error instanceof Error ? error.message : '';
+    if (method === 'thread/read' && /^failed to read thread: thread-store internal error: failed to read session metadata .+: rollout at .+ is empty$/.test(message)) {
+      return runtimeError(503, 'RUNTIME_HISTORY_NOT_READY', '会话历史暂不可读，原生记录仍为空，请稍后重试');
+    }
     if (method === 'thread/items/list' && message === 'thread/items/list is not supported yet') return runtimeError(503, 'RUNTIME_ITEMS_UNSUPPORTED', 'Native item pagination is not supported');
     if (method === 'turn/steer' && /no active turn|expected.*turn|turn.*mismatch/i.test(message)) return runtimeError(409, 'RUNTIME_STEER_CONFLICT', '当前轮次已结束或变化，请刷新后重新发送');
     if (method === 'thread/turns/list' && message.trim().toLowerCase() === 'list_turns is not supported yet') return runtimeError(503, 'RUNTIME_HISTORY_UNSUPPORTED', 'Native turn history is not supported');

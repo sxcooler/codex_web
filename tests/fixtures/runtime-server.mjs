@@ -20,6 +20,7 @@ let fullTurnLists = 0;
 let headerTurnLists = 0;
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
+const emptyRolloutError = 'failed to read thread: thread-store internal error: failed to read session metadata /private/rollout.jsonl: rollout at /private/rollout.jsonl is empty';
 const thread = (id, cwd = process.cwd(), turns = []) => ({
   id, sessionId: id, forkedFromId: null, parentThreadId: null, preview: '', ephemeral: false,
   section: null, sectionEnteredAt: null, projectId: null, historyMode: 'unlimited', modelProvider: 'openai',
@@ -209,6 +210,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (method === 'fixture/external-change') { const value=threads.get(params.threadId); value.name='External name'; value.updatedAt++; return send({id,result:{}}); }
   if (method === 'thread/read') {
     threadReads++;
+    if (mode === 'metadata-empty' || (mode === 'metadata-delayed' && threadReads <= 2)) return send({ id, error: { code: -32603, message: emptyRolloutError } });
+    if (mode === 'metadata-denied') return send({ id, error: { code: -32603, message: emptyRolloutError.replace('is empty', 'access denied') } });
     if (mode === 'notfound') return send({ id, error: { code: -32000, message: 'record not found' } });
     if (mode === 'unsupported-empty' && !threads.has(params.threadId)) return send({ id, error: { code: -32000, message: `thread not loaded: ${params.threadId}` } });
     if (mode === 'recovery') {
@@ -277,6 +280,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       : send({ id, result: { data: [first], nextCursor: 'item-page-2', backwardsCursor: null } });
   }
   if (method === 'turn/start') {
+    if (mode === 'metadata-write-error') { turnStarts++; return send({ id, error: { code: -32603, message: emptyRolloutError } }); }
     if (mode === 'active-resume') return send({ id, error: { code: -32000, message: 'turn/start must not follow active resume' } });
     return startTurn(id, params);
   }

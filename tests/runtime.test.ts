@@ -338,6 +338,37 @@ test('current native unmaterialized error uses the same narrow empty-thread fall
   assert.deepEqual(snapshot.thread.turns, []);
 });
 
+test('new thread metadata retries preserve the accepted first turn without resending it', async t => {
+  const runtime = start(t, 60_000, 'metadata-delayed');
+  const { threadId, turnId } = await runtime.create({ cwd, clientRequestId: 'metadata-create', prompt: 'hold' });
+  const snapshot = await runtime.snapshot(threadId, { window: true });
+  assert.equal(snapshot.phase, 'RUNNING');
+  assert.equal(snapshot.activeTurnId, turnId);
+  assert.equal(snapshot.thread.turns[0].id, turnId);
+  const stats = await (runtime as any).call('fixture/stats', {});
+  assert.equal(stats.threadReads, 3);
+  assert.equal(stats.turnStarts, 1);
+  await runtime.abort(threadId);
+});
+
+test('empty metadata retries are bounded and do not mask unrelated reads or replay writes', async t => {
+  for (const mode of ['metadata-empty', 'metadata-denied', 'metadata-write-error']) {
+    const runtime = start(t, 60_000, mode);
+    if (mode === 'metadata-write-error') {
+      await assert.rejects(runtime.create({ cwd, clientRequestId: mode, prompt: 'hold' }), { code: 'RUNTIME_RESULT_UNKNOWN' });
+      assert.equal((await (runtime as any).call('fixture/stats', {})).turnStarts, 1);
+      continue;
+    }
+    const { threadId } = await runtime.create({ cwd, clientRequestId: mode });
+    await assert.rejects(runtime.threadCwd(threadId), (error: any) => {
+      assert.equal(error.code, mode === 'metadata-empty' ? 'RUNTIME_HISTORY_NOT_READY' : 'RUNTIME_UNAVAILABLE');
+      assert.doesNotMatch(error.message, /private|rollout.jsonl/);
+      return true;
+    });
+    assert.equal((await (runtime as any).call('fixture/stats', {})).threadReads, mode === 'metadata-empty' ? 5 : 1);
+  }
+});
+
 test('empty-thread fallback ends before the first turn is submitted', async (t) => {
   const runtime = start(t, 60_000, 'unsupported-empty');
   const { threadId } = await runtime.create({ cwd, clientRequestId: 'empty-create' });
