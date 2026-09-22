@@ -2,11 +2,12 @@ import {createContext,useCallback,useContext,useEffect,useRef,useState,type CSSP
 import {defaultLayout,fitLayout,layoutKey,parseLayout,resizeLayout,type Layout} from './layout.ts';
 import {AccountUsageButton,AccountUsageProvider} from './AccountUsage.tsx';
 type Side='left'|'right';
-type PaneState={layout:Layout;total:number;mobile:boolean;drawer:Side|null;leftVisible:boolean;rightVisible:boolean;rightAvailable:boolean;setRightAvailable:(value:boolean)=>void;toggle:(side:Side)=>void;adjust:(side:Side,delta:number,base?:Layout)=>void;save:()=>void;reset:()=>void};
+type PaneState={layout:Layout;total:number;mobile:boolean;drawer:Side|null;leftVisible:boolean;rightVisible:boolean;rightAvailable:boolean;setRightAvailable:(value:boolean)=>void;toggle:(side:Side)=>void;adjust:(side:Side,delta:number,base?:Layout)=>void;save:()=>void;reset:()=>void;composerCollapsed:boolean;setComposerCollapsed:(value:boolean)=>void};
 const Context=createContext<PaneState>(null!);
 const visibilityKey='codex-web:panels:v1';
 export const usePanes=()=>useContext(Context);
 export function PaneLayout({children,className}:{children:ReactNode;className:string}) {
+  const [composerCollapsed,setComposerCollapsed]=useState(false);
   const [layout,setLayout]=useState(()=>{try{return parseLayout(localStorage.getItem(layoutKey))??defaultLayout;}catch{return defaultLayout;}});
   const [shown,setShown]=useState(()=>{try{const v=JSON.parse(localStorage.getItem(visibilityKey)??'null');if(v?.version===1&&typeof v.left==='boolean'&&typeof v.right==='boolean')return {left:v.left as boolean,right:v.right as boolean};}catch{}return {left:true,right:true};});
   const [mobile,setMobile]=useState(()=>matchMedia('(max-width:1000px)').matches),[drawer,setDrawer]=useState<Side|null>(null);
@@ -33,12 +34,12 @@ export function PaneLayout({children,className}:{children:ReactNode;className:st
   const toggle=useCallback((side:Side)=>{if(mobile)setDrawer(value=>value===side?null:side);else setShown(value=>({...value,[side]:!value[side]}));},[mobile]);
   const adjust=(side:Side,delta:number,base=current.current)=>{const next=resizeLayout(base,total,side,delta,rightVisible,leftVisible);current.current=next;setLayout(next);};
   const reset=()=>{current.current=defaultLayout;setLayout(defaultLayout);setShown({left:true,right:true});setDrawer(null);try{localStorage.removeItem(layoutKey);}catch{}};
-  return <Context.Provider value={{layout,total,mobile,drawer,leftVisible,rightVisible,rightAvailable,setRightAvailable,toggle,adjust,save,reset}}><AccountUsageProvider><div ref={root} className={className} data-left-open={leftVisible} data-right-open={rightVisible} data-drawer={drawer??''} style={{'--left-width':`${left}px`,'--right-width':`${right}px`} as CSSProperties}>{children}{mobile&&drawer?<button className="drawer-backdrop" aria-label="关闭侧栏" onClick={()=>setDrawer(null)}/>:null}</div></AccountUsageProvider></Context.Provider>;
+  return <Context.Provider value={{layout,total,mobile,drawer,leftVisible,rightVisible,rightAvailable,setRightAvailable,toggle,adjust,save,reset,composerCollapsed,setComposerCollapsed}}><AccountUsageProvider><div ref={root} className={className} data-left-open={leftVisible} data-right-open={rightVisible} data-drawer={drawer??''} style={{'--left-width':`${left}px`,'--right-width':`${right}px`} as CSSProperties}>{children}{mobile&&drawer?<button className="drawer-backdrop" aria-label="关闭侧栏" onClick={()=>setDrawer(null)}/>:null}</div></AccountUsageProvider></Context.Provider>;
 }
-export function PaneToolbar(){
+export function PaneToolbar({children}:{children?:ReactNode}){
   const panes=usePanes();
   const button=(side:Side)=>{const shown=side==='left'?panes.leftVisible:panes.rightVisible,label=(shown?'收起':'展开')+(side==='left'?'左侧栏':'右侧栏');return <button type="button" className="quiet pane-toggle" data-panel-toggle={side} title={label} aria-label={label} aria-expanded={shown} aria-controls={side==='left'?'left-sidebar':'right-sidebar'} disabled={side==='right'&&!panes.rightAvailable} onClick={()=>panes.toggle(side)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d={side==='left'?'M9 4v16':'M15 4v16'}/><rect x={side==='left'?4:16} y="5" width="4" height="14" fill="currentColor" opacity={shown?'.35':'0'}/></svg></button>;};
-  return <div className="pane-toolbar">{button('left')}<span className="muted small pane-brand">Codex Web</span><AccountUsageButton/>{button('right')}</div>;
+  return <div className={'pane-toolbar'+(children?' session-toolbar':'')}>{button('left')}{children??<span className="muted small pane-brand">Codex Web</span>}<AccountUsageButton/>{button('right')}</div>;
 }
 export function PaneSeparator({side}:{side:Side}) {
   const panes=usePanes(),drag=useRef<{x:number;base:Layout}|null>(null),value=side==='left'?panes.layout.left:1-panes.layout.right;

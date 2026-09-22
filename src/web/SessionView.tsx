@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {api,setCsrfToken,type Json} from './api.ts';
 import {applyChange,prependHistory} from './sessionSync.ts';
 import {reconcileMessages,type Outgoing,type Submission} from './submission.ts';
@@ -9,7 +9,7 @@ import {TurnOptions,type TurnSettings} from './TurnOptions.tsx';
 import {PaneSeparator,PaneToolbar,usePanes} from './PaneLayout.tsx';
 import {Message,Pending,TurnMessages} from './Conversation.tsx';
 import {GitPanel} from './GitPanel.tsx';
-const phases:Record<string,string>={IDLE:'就绪',RUNNING:'运行中',WAITING_APPROVAL:'等待审批',WAITING_INPUT:'等待输入',RELEASED:'已释放，可继续',EXTERNAL:'其他客户端占用',UNKNOWN:'状态待核实'};
+const phases:Record<string,string>={IDLE:'空闲',RUNNING:'运行中',WAITING_APPROVAL:'等待审批',WAITING_INPUT:'等待输入',RELEASED:'已释放',EXTERNAL:'被占用',UNKNOWN:'待核实'};
 export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promise<void>;onReleased:(result:Json)=>void}){
   const saved=useRef(drafts.get(id));
   const [outgoing,setOutgoing]=useState<Outgoing[]>(saved.current?.outgoing??[]),outgoingRef=useRef(outgoing);
@@ -17,9 +17,16 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
   const [openFile,setOpenFile]=useState<{path:string}>();
   const [historyLoading,setHistoryLoading]=useState(false),[historyError,setHistoryError]=useState('');
   const [opening,setOpening]=useState(true),[openError,setOpenError]=useState('');
+  const [optionsError,setOptionsError]=useState(''),[attachmentError,setAttachmentError]=useState('');
   const earlier=useRef<()=>void>(()=>{}),prepend=useRef<{top:number;height:number}|null>(null);
   const intent=useRef<Submission['current']>(saved.current?.intent??null),submitting=useRef(false),mounted=useRef(true),refresh=useRef<()=>void>(()=>{}),recheck=useRef<()=>void>(()=>{}),pause=useRef<()=>void>(()=>{}),scroll=useRef<HTMLDivElement>(null),follow=useRef(saved.current?.follow??true),restored=useRef(false),panes=usePanes();
   const openDocument=useCallback((path:string)=>{setOpenFile({path});if(!panes.rightVisible)panes.toggle('right');},[panes.rightVisible,panes.toggle]);
+  const collapsed=panes.composerCollapsed,composerId=useId(),menuId=useId(),menu=useRef<HTMLDivElement>(null),menuButton=useRef<HTMLButtonElement>(null),[menuOpen,setMenuOpen]=useState(false),input=useRef<HTMLTextAreaElement>(null),expandButton=useRef<HTMLButtonElement>(null);
+  const composerScroll=useRef<{top:number;following:boolean}|null>(null),layoutScroll=useRef<number|null>(null);
+  const setCollapsed=(value:boolean)=>{if(value===collapsed)return;if(scroll.current)composerScroll.current={top:scroll.current.scrollTop,following:follow.current};panes.setComposerCollapsed(value);};
+  useLayoutEffect(()=>{const anchor=composerScroll.current;composerScroll.current=null;if(!anchor)return;const timeline=scroll.current;if(timeline){timeline.scrollTop=anchor.following?timeline.scrollHeight:anchor.top;layoutScroll.current=timeline.scrollTop;follow.current=anchor.following;}if(collapsed)expandButton.current?.focus({preventScroll:true});else if(!panes.mobile)input.current?.focus({preventScroll:true});},[collapsed]);
+  useEffect(()=>{menu.current?.hidePopover();},[id,panes.drawer]);
+  const closeMenu=()=>{menu.current?.hidePopover();menuButton.current?.focus({preventScroll:true});};
   const saveDraft=(text=draft,options=settings,files=attachments,unknown=uncertain)=>{drafts.set(id,{text,settings:options,attachments:files,outgoing:outgoingRef.current,uncertain:unknown,intent:intent.current,top:scroll.current?.scrollTop??saved.current?.top,follow:follow.current});};
   const updateOutgoing=(change:(messages:Outgoing[])=>Outgoing[],notify=true)=>{
     const previous=drafts.get(id)?.outgoing??outgoingRef.current,next=change(previous);if(next===previous)return;
@@ -88,7 +95,7 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
   },[id,onChanged]);
   useLayoutEffect(()=>{const anchor=prepend.current;if(anchor&&scroll.current){scroll.current.scrollTop=anchor.top+scroll.current.scrollHeight-anchor.height;prepend.current=null;}},[snapshot]);
   useEffect(()=>{if(!scroll.current||!snapshot)return;if(!restored.current){scroll.current.scrollTop=saved.current?.top??scroll.current.scrollHeight;restored.current=true;}else if(follow.current)scroll.current.scrollTop=scroll.current.scrollHeight;},[snapshot,outgoing]);
-  useEffect(()=>{const timeline=scroll.current,content=timeline?.firstElementChild;if(!timeline||!content)return;const observer=new ResizeObserver(()=>{if(restored.current&&follow.current)timeline.scrollTop=timeline.scrollHeight;});observer.observe(content);return()=>observer.disconnect();},[]);
+  useEffect(()=>{const timeline=scroll.current,content=timeline?.firstElementChild;if(!timeline||!content)return;const observer=new ResizeObserver(()=>{if(restored.current&&follow.current)timeline.scrollTop=timeline.scrollHeight;});observer.observe(content);observer.observe(timeline);return()=>observer.disconnect();},[]);
   const action=async(path:string,payload:Json)=>{if(submitting.current)return;submitting.current=true;setBusy(true);setAborting(path==='/abort');setError('');if(path==='/release')pause.current();
     try{const result=await api('/sessions/'+id+path,payload);
       if(mounted.current){if(path==='/release'&&result.handoffReady){onReleased(result);return result;}if(path==='/release')setError(result.warning??'订阅已取消，仍在等待释放占用。');recheck.current();}return result;
@@ -106,9 +113,23 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
     }catch(e:any){updateOutgoing(messages=>messages.map(m=>m.id===message.id?{...m,status:!e.status||e.status>=500?'unknown':'failed',error:e.message}:m));}
     finally{submitting.current=false;if(mounted.current){setBusy(false);if(message.attachments.length)refresh.current();else recheck.current();}}
   };
-  const editOutgoing=(message:Outgoing)=>{if(draft||attachments.length)return;setDraft(message.text);setSettings(message.settings);setAttachments(message.attachments);intent.current=null;updateOutgoing(messages=>messages.filter(m=>m.id!==message.id));saveDraft(message.text,message.settings,message.attachments,false);};
-  return <div className={`session-layout ${snapshot?.project&&panes.rightVisible?'with-git':''}`}><div className="session-center"><PaneToolbar/><main className="session-main" inert={panes.mobile&&panes.drawer!==null}><header className="session-header"><div><h1>{snapshot?(snapshot.thread.name||snapshot.metadata?.web_title||snapshot.thread.preview||'未命名会话'):readError?'会话暂不可用':'读取会话…'}</h1><p className="path">{snapshot?.thread?.cwd??id}</p></div><div className="session-controls"><span className={`connection ${connected?'online':''}`}>{connected?'已连接':'正在重连'} · {readError?'同步失败':(snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?'历史浏览':phases[phase])}</span><div className="actions"><button disabled={busy||!snapshot} onClick={()=>void action('/release',{})}>释放并关闭</button><button className="quiet" aria-label="刷新当前会话" aria-busy={reading} onClick={()=>refresh.current()}>{reading?'刷新中…':'刷新'}</button></div></div></header>
-    <div className="timeline" ref={scroll} onScroll={()=>{const el=scroll.current!;follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<120;saveDraft();}}>
+  const editOutgoing=(message:Outgoing)=>{if(draft||attachments.length)return;setCollapsed(false);setDraft(message.text);setSettings(message.settings);setAttachments(message.attachments);intent.current=null;updateOutgoing(messages=>messages.filter(m=>m.id!==message.id));saveDraft(message.text,message.settings,message.attachments,false);};
+  const title=snapshot?(snapshot.thread.name||snapshot.metadata?.web_title||snapshot.thread.preview||'未命名会话'):readError?'会话暂不可用':'读取会话…';
+  const projectPath=snapshot?.project?.path??snapshot?.thread?.cwd??'',projectName=snapshot?.project?.name||projectPath.replace(/[\\/]+$/,'').split(/[\\/]/).pop()||'未关联项目';
+  const taskStatus=snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?'历史浏览':phases[phase];
+  const status=readError?'同步失败':!connected?'重连中':opening?'核对中':openError?'待核实':taskStatus,statusDetail=`${connected?'已连接':'正在重连'} · ${taskStatus}${reading?' · 刷新中':''}${busy?aborting?' · 正在中止':' · 操作中':''}`;
+  const notices=[uncertain?'提交结果待核实，请先检查历史。':'',error,opening?'正在核对会话占用…':openError|| (phase==='EXTERNAL'?'已在另一个应用中打开，请先关闭该会话。':''),readError,!connected?'正在恢复连接，消息不会自动重发。':'',snapshot?.release?.requested?snapshot.release.error??'等待释放占用':'',snapshot?.retry?`Codex 正在重试：${snapshot.retry.message}`:'',attachmentError,optionsError,snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?'会话已从运行时卸载，可刷新核对最新占用状态。':''].filter(Boolean);
+  const stopButton=active?<button type="button" className="danger" disabled={busy} onClick={()=>void action('/abort',{})}>{aborting?'正在中止…':'中止'}</button>:null;
+  return <div className={`session-layout ${snapshot?.project&&panes.rightVisible?'with-git':''}`}><div className="session-center"><PaneToolbar>
+    <span className="session-project muted" title={[projectName,projectPath].filter(Boolean).join('\n')}>{projectName}</span><h1 className="session-title" title={title}>{title}</h1>
+    <button type="button" ref={menuButton} className="session-actions-trigger" aria-label="操作" aria-expanded={menuOpen} aria-controls={menuId} aria-haspopup="true" aria-busy={reading||busy} popoverTarget={menuId} onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();if(menu.current){menu.current.style.top=`${rect.bottom+4}px`;menu.current.style.left=`${Math.max(8,Math.min(rect.right-128,window.innerWidth-136))}px`;}}}>{reading?'刷新中':busy?aborting?'中止中':'操作中':'操作'}<span aria-hidden="true"> ▾</span></button>
+    <div id={menuId} ref={menu} popover="auto" className="session-actions-menu" onToggle={event=>setMenuOpen(event.newState==='open')}>
+      <button type="button" autoFocus aria-label="刷新当前会话" aria-busy={reading} onClick={()=>{closeMenu();refresh.current();}}>刷新</button>
+      <button type="button" disabled={busy||!snapshot} onClick={()=>{closeMenu();void action('/release',{});}}>释放</button>
+    </div>
+    <span role="status" className={`connection ${connected&&!readError?'online':''}`} title={statusDetail} aria-label={`${status} · ${statusDetail}`}>{status}</span>
+  </PaneToolbar><main className="session-main" inert={panes.mobile&&panes.drawer!==null}>
+    <div className="timeline" ref={scroll} onScroll={()=>{const el=scroll.current!;if(layoutScroll.current!==null){const expected=layoutScroll.current;layoutScroll.current=null;if(Math.abs(el.scrollTop-expected)<1){saveDraft();return;}}follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<120;saveDraft();}}>
       <div className="timeline-content">{snapshot?.history?.nextCursor?<div className="history-loader"><button type="button" disabled={historyLoading||reading} onClick={()=>earlier.current()}>{historyLoading?'正在加载更早消息…':'加载更早消息'}</button>{historyError?<p role="alert" className="notice error">{historyError}</p>:null}</div>:null}{snapshot?.warning?<div className="notice">{snapshot.warning}</div>:null}{snapshot?.error?<div role="alert" className="notice error">{snapshot.error.message??JSON.stringify(snapshot.error)}</div>:null}
       {snapshot?.unmaterialized?<p className="notice">发送首条消息后保存原生历史。</p>:null}
       {(snapshot?.thread?.turns??[]).filter((t:Json)=>t.error||t.status==='failed').map((t:Json)=><div className="notice error" role="alert" key={t.id}>{t.error?.message??(t.error?JSON.stringify(t.error):'本轮执行失败')}</div>)}
@@ -117,17 +138,21 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
       {(snapshot?.pending??[]).map((pending:Json)=><Pending key={pending.requestId} pending={pending} items={items} busy={busy} respond={async answer=>{await action('/requests/'+encodeURIComponent(pending.requestId)+'/respond',{answer});}}/>)}
       </div>
     </div>
-    <form className="composer" onSubmit={e=>{e.preventDefault();void sendMessage();}}>
+    <form className={'composer'+(collapsed?' is-collapsed':'')} onSubmit={e=>{e.preventDefault();if(!collapsed)void sendMessage();}}>
+      {collapsed&&notices.length?<div className={'composer-notice notice'+(uncertain||error||readError||openError||attachmentError||optionsError?' error':'')} role="status"><span>{notices[0]}{notices.length>1?`（另有 ${notices.length-1} 条提示）`:''}</span><button type="button" onClick={()=>setCollapsed(false)}>查看详情</button></div>:null}
+      <div id={composerId} hidden={collapsed}>
       {error||readError?<div role="alert" className="notice error">{[error,readError].filter(Boolean).join('\n')}</div>:null}
       {!connected?<div role="status" className="notice">正在恢复连接，消息不会自动重发。</div>:null}{snapshot?.retry?<div role="status" className="notice">Codex 正在重试：{snapshot.retry.message}</div>:null}
       {snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?<div role="status" className="notice">会话已从运行时卸载，可刷新核对最新占用状态。</div>:null}
       {opening?<p role="status" className="muted">正在核对会话占用…</p>:openError?<div role="alert" className="notice error">{openError}<button type="button" onClick={()=>refresh.current()}>重试</button></div>:phase==='EXTERNAL'?<div role="status" className="notice session-locked"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2"/><path d="M5 7V4a3 3 0 0 1 6 0v3"/></svg><span><strong>已在另一个应用中打开</strong><br/>请先在那里关闭会话，才能在这里继续。</span><button type="button" onClick={()=>refresh.current()}>重试</button></div>:null}
       {snapshot?.release?.requested?<div role="status" className="notice">{snapshot.release.error??'等待释放占用'}</div>:null}
-      <Attachments items={attachments} onChange={next=>{setAttachments(next);saveDraft(draft,settings,next);}} disabled={busy}/>
-      <label className="sr-only" htmlFor="message">继续这个会话</label><textarea id="message" enterKeyHint={panes.mobile?'enter':'send'} placeholder="继续这个会话…" maxLength={12000} rows={3} value={draft} onChange={e=>{setDraft(e.target.value);saveDraft(e.target.value);}} onKeyDown={e=>{if(!panes.mobile&&e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();e.currentTarget.form?.requestSubmit();}}}/>
-      <TurnOptions value={settings} onChange={next=>{setSettings(next);saveDraft(draft,next);}} projectId={snapshot?.project?.id} permissions={['RELEASED','EXTERNAL','UNKNOWN'].includes(phase)||snapshot?.thread?.status?.type==='notLoaded'?undefined:snapshot?.permissions} effectiveModel={snapshot?.thread?.model??snapshot?.model??null} effectiveEffort={snapshot?.thread?.reasoningEffort??null} disabled={busy||active}/>
+      <Attachments items={attachments} onChange={next=>{setAttachments(next);saveDraft(draft,settings,next);}} onError={setAttachmentError} disabled={busy} hidden={collapsed}><button type="button" className="quiet composer-collapse" aria-label="收起输入区" title="收起输入区" aria-expanded={!collapsed} aria-controls={composerId} onClick={()=>setCollapsed(true)}>⌄</button></Attachments>
+      <label className="sr-only" htmlFor="message">继续这个会话</label><textarea ref={input} id="message" enterKeyHint={panes.mobile?'enter':'send'} placeholder="继续这个会话…" maxLength={12000} rows={3} value={draft} onChange={e=>{setDraft(e.target.value);saveDraft(e.target.value);}} onKeyDown={e=>{if(!panes.mobile&&e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();e.currentTarget.form?.requestSubmit();}}}/>
+      <TurnOptions value={settings} onChange={next=>{setSettings(next);saveDraft(draft,next);}} onError={setOptionsError} projectId={snapshot?.project?.id} permissions={['RELEASED','EXTERNAL','UNKNOWN'].includes(phase)||snapshot?.thread?.status?.type==='notLoaded'?undefined:snapshot?.permissions} effectiveModel={snapshot?.thread?.model??snapshot?.model??null} effectiveEffort={snapshot?.thread?.reasoningEffort??null} disabled={busy||active} hidden={collapsed}/>
       {uncertain&&!outgoing.some(m=>m.status==='unknown')?<div className="notice">提交结果待核实，请先检查历史。<button type="button" onClick={()=>{setUncertain(false);saveDraft(draft,settings,attachments,false);}}>已核对历史，允许再次提交</button></div>:null}
-      <div className="composer-bottom"><span className="muted small">{canSteer?(panes.mobile?'回车换行 · 点击插话 · 沿用本轮模型和权限':'Enter 插话 · 沿用本轮模型和权限'):canSend?(panes.mobile?'回车换行 · 点击发送':'Enter 发送 · Shift+Enter 换行'):active?'任务进行中':'正在核对会话状态'}</span><div className="composer-actions">{active?<button type="button" className="danger" disabled={busy} onClick={()=>void action('/abort',{})}>{aborting?'正在中止…':'中止'}</button>:null}<button className="primary" disabled={busy||!canSend||!filesReady||(!draft.trim()&&!attachments.length)}>{busy&&!aborting?'提交中…':canSteer?'插话':'发送'}</button></div></div>
+      <div className="composer-bottom"><span className="muted small">{canSteer?(panes.mobile?'回车换行 · 点击插话 · 沿用本轮模型和权限':'Enter 插话 · 沿用本轮模型和权限'):canSend?(panes.mobile?'回车换行 · 点击发送':'Enter 发送 · Shift+Enter 换行'):active?'任务进行中':'正在核对会话状态'}</span><div className="composer-actions">{!collapsed?stopButton:null}<button className="primary" disabled={busy||!canSend||!filesReady||(!draft.trim()&&!attachments.length)}>{busy&&!aborting?'提交中…':canSteer?'插话':'发送'}</button></div></div>
+      </div>
+      {collapsed?<div className="composer-compact"><span className="muted small">输入已收起{draft.trim()?' · 有草稿':''}{attachments.length?` · ${attachments.length} 个附件`:''}{attachments.some(file=>file.status==='uploading')?' · 上传中…':''}{attachments.some(file=>file.status==='failed')?' · 上传失败':''}</span>{snapshot?.pending?.length?<button type="button" className="quiet" onClick={()=>{const card=scroll.current?.querySelector<HTMLElement>('.approval');card?.scrollIntoView({block:'nearest'});card?.querySelector<HTMLElement>('button,input,select')?.focus({preventScroll:true});}}>查看待处理</button>:null}{stopButton}<button ref={expandButton} type="button" className="quiet" aria-label="展开输入" aria-expanded={!collapsed} aria-controls={composerId} onClick={()=>setCollapsed(false)}>展开输入 <span aria-hidden="true">⌃</span></button></div>:null}
     </form>
   </main></div>{snapshot?.project?<><PaneSeparator side="right"/><GitPanel key={snapshot.project.id} id={id} projectId={snapshot.project.id} tick={gitTick} visible={panes.rightVisible} openFile={openFile}/></>:null}</div>;
 }

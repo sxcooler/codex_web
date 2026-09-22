@@ -1,0 +1,27 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>会话顶栏与输入区回归</title><div id="root"></div>
+<script type="module">
+const deferModels=new URLSearchParams(location.search).has('deferModels');
+history.replaceState(null,'','/sessions/toolbar-test');
+window.testState={calls:[],holdRead:false,upload:null,released:false,snapshot:{thread:{id:'toolbar-test',name:'完善示例应用的帮助文档与快速入门说明',cwd:'C:\\demo\\demo-workspace',turns:[{id:'turn',status:'completed',items:Array.from({length:30},(_,i)=>({id:'message-'+i,type:'agentMessage',text:'演示消息 '+i+'\n\n'+('用于验证阅读位置和可用空间。'.repeat(15))}))}]},phase:'IDLE',pending:[]}};
+const state=window.testState,response=(data,status=200)=>new Response(JSON.stringify(data),{status});
+window.EventSource=class extends EventTarget{constructor(){super();state.stream=this;queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};
+window.fetch=async(path,options={})=>{
+ state.calls.push(String(path));
+ if(path==='/api/auth/session')return response({authenticated:true,csrfToken:'test'});
+ if(path==='/api/account/usage')return response({accountId:null});
+ if(path==='/api/projects')return response({projects:[]});
+ if(path==='/api/sessions')return response({data:[state.snapshot.thread,{id:'other',name:'另一演示会话'}]});
+ if(path==='/api/models'){if(deferModels)return new Promise(resolve=>state.failModels=()=>resolve(response({error:'演示模型读取失败'},503)));return response({data:[{id:'demo',model:'demo',displayName:'演示模型',supportedReasoningEfforts:['high']}]});}
+ if(path.startsWith('/api/permission-modes'))return response({current:'ask',modes:[{id:'ask',available:true},{id:'full-access',available:true}]});
+ if(path==='/api/uploads')return new Promise(resolve=>{state.upload={signal:options.signal,finish:()=>resolve(response({uploadId:'mock-file',kind:'file'}))};});
+ if(path.endsWith('/release')){state.released=true;return response({handoffReady:true});}
+ if(path.endsWith('/abort'))return response({});
+ if(path.endsWith('/messages'))return response({error:'演示提交失败'},409);
+ if(path.endsWith('/open'))return state.failOpen?response({error:'占用核对失败'},503):response({});
+ if(path.endsWith('/cancel-release')||path.endsWith('/release-on-leave')||path.includes('/status?'))return response({});
+ if(path==='/api/sessions/toolbar-test'){if(state.failRead)return response({error:'演示同步失败'},503);if(state.holdRead)await new Promise(resolve=>state.finishRead=resolve);return response(state.snapshot);}
+ if(path==='/api/sessions/other')return response({thread:{id:'other',name:'另一演示会话',turns:[]},phase:'IDLE',pending:[]});
+ throw Error('Unexpected API '+path);
+};
+await import('/src/web/main.tsx');
+</script></html>

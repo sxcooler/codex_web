@@ -99,9 +99,9 @@ test('release waits for confirmation and reconnect never resubmits an uncertain 
  const sourceCount=await page.evaluate(()=>(window as any).sources.length);
  await page.clock.fastForward(50_000);
  expect(await page.evaluate(()=>(window as any).sources.length)).toBeGreaterThan(sourceCount);expect(sends).toBe(1);
- await page.getByRole('button',{name:'释放并关闭',exact:true}).click();
+ await page.getByRole('button',{name:'操作',exact:true}).click();await page.getByRole('button',{name:'释放',exact:true}).click();
  await expect(page).toHaveURL(/\/sessions\/recovery$/);await expect(page.getByText('仍在等待释放占用')).toBeVisible();
- await page.getByRole('button',{name:'释放并关闭',exact:true}).click();await expect(page).toHaveURL(/\/$/);expect(sends).toBe(1);
+ await page.getByRole('button',{name:'操作',exact:true}).click();await page.getByRole('button',{name:'释放',exact:true}).click();await expect(page).toHaveURL(/\/$/);expect(sends).toBe(1);
 });
 
 test('file diff and an attachment-only task use the selected options',async({page})=>{
@@ -163,7 +163,7 @@ test('rapid return cancels release only after the delayed leave request complete
  await page.getByRole('button',{name:'乙',exact:true}).click();await expect(page.locator('h1')).toHaveText('乙');
  await expect.poll(()=>!!completeLeave).toBe(true);
  await page.getByRole('button',{name:'甲',exact:true}).click();await expect(page).toHaveURL(/sessions\/a$/);
- await page.getByRole('button',{name:'刷新当前会话'}).click();await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+ await page.getByRole('button',{name:'操作',exact:true}).click();await page.getByRole('button',{name:'刷新当前会话'}).click();await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
  expect(calls).toEqual(['leave-start']);completeLeave!();
  await expect(page.locator('h1')).toHaveText('甲');expect(calls).toEqual(['leave-start','leave-done','cancel']);
