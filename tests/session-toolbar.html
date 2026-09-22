@@ -16,7 +16,7 @@ window.fetch=async(path,options={})=>{
  if(path==='/api/uploads')return new Promise(resolve=>{state.upload={signal:options.signal,finish:()=>resolve(response({uploadId:'mock-file',kind:'file'}))};});
  if(path.endsWith('/release')){state.released=true;return response({handoffReady:true});}
  if(path.endsWith('/abort'))return response({});
- if(path.endsWith('/messages'))return response({error:'演示提交失败'},409);
+ if(path.endsWith('/messages')){(state.messages??=[]).push(JSON.parse(options.body));if(state.unknownSend)throw Error('演示网络中断');return response({error:'演示提交失败'},409);}
  if(path.endsWith('/open'))return state.failOpen?response({error:'占用核对失败'},503):response({});
  if(path.endsWith('/cancel-release')||path.endsWith('/release-on-leave')||path.includes('/status?'))return response({});
  if(path==='/api/sessions/toolbar-test'){if(state.failRead)return response({error:'演示同步失败'},503);if(state.holdRead)await new Promise(resolve=>state.finishRead=resolve);return response(state.snapshot);}

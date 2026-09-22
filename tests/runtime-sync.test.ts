@@ -2,8 +2,32 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Runtime } from '../src/codex/runtime.ts';
+import {applyChange} from '../src/web/sessionSync.ts';
 const cwd = fileURLToPath(new URL('..', import.meta.url));
 const fixture = fileURLToPath(new URL('./fixtures/runtime-server.mjs', import.meta.url));
+
+test('reasoning streams indexed parts through snapshots, replay and authoritative completion',async t=>{
+  const runtime=start(t),{threadId,turnId}=await runtime.create({cwd,clientRequestId:'reasoning',prompt:'hold'});
+  let browser:any=await runtime.snapshot(threadId);const cursor=browser.syncCursor,changes:any[]=[];
+  runtime.on('change',event=>{changes.push(event);browser=applyChange(browser,event);assert.ok(browser,'delta must extend browser baseline');});
+  const notify=(method:string,extra:any)=>(runtime as any).onNotification({method,params:{threadId,turnId,itemId:'reason',...extra}});
+  notify('item/reasoning/summaryPartAdded',{summaryIndex:0});
+  notify('item/reasoning/summaryTextDelta',{summaryIndex:0,delta:'检查'});
+  notify('item/reasoning/summaryTextDelta',{summaryIndex:0,delta:'接口'});
+  notify('item/reasoning/summaryTextDelta',{summaryIndex:1,delta:'验证行为'});
+  notify('item/reasoning/textDelta',{contentIndex:0,delta:'接口提供的说明'});
+  const item=()=>browser.thread.turns.find((turn:any)=>turn.id===turnId).items.find((item:any)=>item.id==='reason');
+  assert.deepEqual(item()?.summary,['检查接口','验证行为']);assert.deepEqual(item()?.content,['接口提供的说明']);
+  assert.deepEqual(changes.filter(e=>e.patch.delta?.text).map(e=>e.patch.delta.offset),[0,2,0,0]);
+  assert.ok(changes.every(e=>JSON.stringify(e).length<1500));assert.deepEqual(runtime.replay(threadId,cursor).events,changes);
+  const full=await runtime.snapshot(threadId);assert.deepEqual(full.thread.turns.find((turn:any)=>turn.id===turnId).items.find((item:any)=>item.id==='reason').summary,item().summary);
+  const count=changes.length;notify('item/reasoning/summaryTextDelta',{summaryIndex:-1,delta:'invalid'});notify('item/reasoning/textDelta',{contentIndex:1.5,delta:'invalid'});assert.equal(changes.length,count);
+  notify('item/completed',{item:{type:'reasoning',id:'reason',summary:['最终摘要'],content:[]}});
+  notify('item/reasoning/summaryTextDelta',{summaryIndex:0,delta:'late'});assert.deepEqual(item().summary,['最终摘要']);
+  const thread=structuredClone(browser.thread);thread.turns.find((turn:any)=>turn.id===turnId).items=[{type:'reasoning',id:'reason',summary:['检查接'],content:[]}];
+  (runtime as any).mergeSnapshotPatch(thread,{delta:{turnId,itemId:'reason',field:'summary',index:0,offset:2,text:'接口'}});
+  assert.deepEqual(thread.turns.find((turn:any)=>turn.id===turnId).items[0].summary,['检查接口']);
+});
 
 test('snapshot waits for a stopping runtime before capturing its history epoch',async t=>{
   const runtime=start(t,'pagination');const gate=Promise.withResolvers<void>();

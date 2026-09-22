@@ -28,12 +28,17 @@ export function applyChange(snapshot:Json,event:Json):Json|null{
     if(!terminal(turn)||record.completed){if(n<0)turn.items.push(item);else if(!turn.items[n]._syncCompleted||record.completed)turn.items[n]=item;}
   }
   if(delta){
-    if(!['text','aggregatedOutput'].includes(delta.field)||typeof delta.itemId!=='string'||typeof delta.text!=='string'||!Number.isSafeInteger(delta.offset)||delta.offset<0)return null;
-    const n=turn.items.findIndex((item:Json)=>item.id===delta.itemId),old=n<0?{id:delta.itemId,type:delta.field==='text'?'agentMessage':'commandExecution',status:'inProgress',[delta.field]:''}:turn.items[n];
+    const reasoning=delta.field==='summary'||delta.field==='content';
+    if(!['text','aggregatedOutput','summary','content'].includes(delta.field)||typeof delta.itemId!=='string'||typeof delta.text!=='string'||!Number.isSafeInteger(delta.offset)||delta.offset<0)return null;
+    if(reasoning?(!Number.isSafeInteger(delta.index)||delta.index<0||delta.index>10000):delta.index!==undefined)return null;
+    const n=turn.items.findIndex((item:Json)=>item.id===delta.itemId),old=n<0?reasoning?{id:delta.itemId,type:'reasoning',summary:[],content:[]}:{id:delta.itemId,type:delta.field==='text'?'agentMessage':'commandExecution',status:'inProgress',[delta.field]:''}:turn.items[n];
     if(!terminal(turn)&&!old._syncCompleted){
-      const text=old[delta.field]??'';if(typeof text!=='string'||text.length<delta.offset)return null;
+      if(reasoning&&(old.type!=='reasoning'||!Array.isArray(old[delta.field])))return null;
+      const text=(reasoning?old[delta.field][delta.index]:old[delta.field])??'';if(typeof text!=='string'||text.length<delta.offset)return null;
       const overlap=Math.min(text.length-delta.offset,delta.text.length);if(text.slice(delta.offset,delta.offset+overlap)!==delta.text.slice(0,overlap))return null;
-      const item={...old,[delta.field]:text+delta.text.slice(overlap)};if(n<0)turn.items.push(item);else turn.items[n]=item;
+      const value=text+delta.text.slice(overlap),parts=reasoning?[...old[delta.field]]:null;
+      if(parts){while(parts.length<=delta.index)parts.push('');parts[delta.index]=value;}
+      const item={...old,[delta.field]:parts??value};if(n<0)turn.items.push(item);else turn.items[n]=item;
     }
   }
   if(index<0)turns.push(turn);else turns[index]=turn;

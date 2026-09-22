@@ -67,14 +67,19 @@ function ViewedImage({item,threadId,projectRoot}:{item:Json;threadId:string;proj
 
 function Step({item,threadId,turnId}:{item:Json;threadId:string;turnId?:string}){
   const [open,setOpen]=useState(false),detailsId=useId();
+  if(item.type==='subAgentActivity'){
+    const path=typeof item.agentPath==='string'?item.agentPath:'',name=path.split('/').filter(Boolean).at(-1)||'未命名 Agent';
+    const activity=({started:'启动',interacted:'交互',completed:'完成',interrupted:'中断'} as Record<string,string>)[item.kind]??'活动';
+    return <section className="execution-step"><div className="step-heading"><span>子 Agent</span><code>{name}</code><span className="muted step-status">{activity}</span></div><button type="button" className="step-toggle quiet" aria-expanded={open} aria-controls={detailsId} onClick={()=>setOpen(value=>!value)}>{open?'收起原始数据':'原始数据'}</button><div id={detailsId} hidden={!open}>{open?<pre>{pretty(item)}</pre>:null}</div></section>;
+  }
   const reasoning=item.type==='reasoning',summary=reasoning?(item.summary??[]).filter((value:unknown)=>typeof value==='string').join('\n'):item.type==='plan'?item.text??'':'';
   const content=reasoning?(item.content??[]).filter((value:unknown)=>typeof value==='string').join('\n'):'';
   const text=reasoning?[summary,content!==summary?content:''].filter(Boolean).join('\n\n'):item.type==='plan'?summary:pretty(item);
   const short=!!text&&(reasoning||item.type==='plan')&&text.length<=240&&text.split('\n').length<=4;
   const name=item.changes?.map((change:Json)=>change.path).join(', ')??item.tool??item.name??item.query??'';
-  return <section className="execution-step"><div className="step-heading"><span>{stepLabels[item.type]??item.type}</span>{name?<code title={name}>{name}</code>:null}<span className="muted step-status">{statusLabel(item)}</span></div>
+  return <section className="execution-step"><div className="step-heading"><span>{stepLabels[item.type]??item.type}</span>{name?<code title={name}>{name}</code>:null}<span className="muted step-status">{reasoning&&!text?'未提供摘要':statusLabel(item)}</span></div>
     <NativeImages threadId={threadId} turnId={turnId} item={item}/>
-    {short?<p className="step-excerpt">{text}</p>:<>{summary?<p className="step-excerpt">{summary.slice(0,240)}{summary.length>240?'…':''}</p>:null}{text?<><button type="button" className="step-toggle quiet" aria-expanded={open} aria-controls={detailsId} onClick={()=>setOpen(value=>!value)}>{open?'收起详情':'查看详情'}</button><div id={detailsId} hidden={!open}>{open?<pre>{text}</pre>:null}</div></>:<p className="muted small">暂无摘要</p>}</>}
+    {short?<p className="step-excerpt">{text}</p>:<>{summary?<p className="step-excerpt">{summary.slice(0,240)}{summary.length>240?'…':''}</p>:null}{text?<><button type="button" className="step-toggle quiet" aria-expanded={open} aria-controls={detailsId} onClick={()=>setOpen(value=>!value)}>{open?'收起详情':'查看详情'}</button><div id={detailsId} hidden={!open}>{open?<pre>{text}</pre>:null}</div></>:null}</>}
   </section>;
 }
 

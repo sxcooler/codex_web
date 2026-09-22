@@ -15,7 +15,7 @@ type Options = {
   sandbox?: 'read-only' | 'danger-full-access';
   args?: string[];
 };
-type Patch = { state?: any; thread?: any; turn?: any; item?: { turnId: string; item: any; completed?: boolean }; delta?: { turnId: string; itemId: string; field: 'text' | 'aggregatedOutput'; offset: number; text: string } };
+type Patch = { state?: any; thread?: any; turn?: any; item?: { turnId: string; item: any; completed?: boolean }; delta?: { turnId: string; itemId: string; field: 'text' | 'aggregatedOutput' | 'summary' | 'content'; index?: number; offset: number; text: string } };
 type Change = { id: string; threadId: string; kind: string; revision: number; patch: Patch };
 type Waiter = { promise: Promise<'started' | 'completed' | 'failed'>; resolve: (value: 'started' | 'completed' | 'failed') => void };
 type PendingRequest = { requestId: string; nativeId: Id; method: string; params: Record<string, any>; epoch: string; threadId: string; turnId: string; answered: boolean };
@@ -408,8 +408,10 @@ export class Runtime extends EventEmitter {
     if (patch.delta) {
       const delta = patch.delta, item = turn.items.find((entry: any) => entry.id === delta.itemId);
       if (item && turn.status === 'inProgress') {
-        const text = item[delta.field] ?? '';
-        if (text.length >= delta.offset && text.length < delta.offset + delta.text.length) item[delta.field] = text + delta.text.slice(text.length - delta.offset);
+        const target=delta.index===undefined?item:(item[delta.field]??=[]),key=delta.index??delta.field;
+        if(delta.index!==undefined)while(target.length<=delta.index)target.push('');
+        const text = target[key] ?? '';
+        if (text.length >= delta.offset && text.length < delta.offset + delta.text.length) target[key] = text + delta.text.slice(text.length - delta.offset);
       }
     }
     if (patch.item) {
@@ -1001,21 +1003,28 @@ export class Runtime extends EventEmitter {
       this.change(params.threadId, 'item', { item: { turnId: params.turnId, item: params.item, completed: method === 'item/completed' } });
       return;
     }
-    if ((method === 'item/agentMessage/delta' || method === 'item/commandExecution/outputDelta') && typeof params.turnId === 'string' && typeof params.itemId === 'string' && typeof params.delta === 'string') {
+    const summaryPart=method==='item/reasoning/summaryPartAdded',reasoning=summaryPart||method==='item/reasoning/summaryTextDelta'||method==='item/reasoning/textDelta';
+    if ((reasoning || method === 'item/agentMessage/delta' || method === 'item/commandExecution/outputDelta') && typeof params.turnId === 'string' && typeof params.itemId === 'string' && (summaryPart||typeof params.delta === 'string')) {
+      const index=reasoning?(method==='item/reasoning/textDelta'?params.contentIndex:params.summaryIndex):undefined;
+      if(reasoning&&(!Number.isSafeInteger(index)||index<0||index>10000))return;
       if (state.completedTurns.has(params.turnId) || state.completedItems.has(`${params.turnId}:${params.itemId}`)) return;
       const activeTurn = state.liveTurns.get(params.turnId) ?? { id: params.turnId, items: [], itemsView: 'full', status: 'inProgress', error: null, startedAt: null, completedAt: null, durationMs: null };
       let item = activeTurn.items.find((candidate: any) => candidate.id === params.itemId);
       if (!item) {
-        item = method === 'item/agentMessage/delta'
+        item = reasoning ? {type:'reasoning',id:params.itemId,summary:[],content:[]} : method === 'item/agentMessage/delta'
           ? { type: 'agentMessage', id: params.itemId, text: '', phase: null, memoryCitation: null, delivery: null, questions: null }
           : { type: 'commandExecution', id: params.itemId, pluginId: null, scriptPath: null, command: '', cwd: '', processId: null, source: 'agent', status: 'inProgress', commandActions: [], aggregatedOutput: '', exitCode: null, durationMs: null };
         activeTurn.items.push(item);
       }
-      const field = method === 'item/agentMessage/delta' ? 'text' : 'aggregatedOutput';
-      const offset = (item[field] ?? '').length;
-      item[field] = `${item[field] ?? ''}${params.delta}`;
+      const field = reasoning ? method==='item/reasoning/textDelta'?'content':'summary' : method === 'item/agentMessage/delta' ? 'text' : 'aggregatedOutput';
+      if(reasoning&&(item.type!=='reasoning'||!Array.isArray(item[field])))return;
+      const target=reasoning?item[field]:item,key=reasoning?index:field;
+      if(summaryPart&&target[index]!==undefined)return;
+      if(reasoning)while(target.length<=index)target.push('');
+      const offset = (target[key] ?? '').length,text=summaryPart?'':params.delta;
+      target[key] = `${target[key] ?? ''}${text}`;
       state.liveTurns.set(params.turnId, activeTurn);
-      this.change(params.threadId, 'delta', { delta: { turnId: params.turnId, itemId: params.itemId, field, offset, text: params.delta } });
+      this.change(params.threadId, 'delta', { delta: { turnId: params.turnId, itemId: params.itemId, field, ...(reasoning?{index}:{}), offset, text } });
       return;
     }
     if (method === 'error') {

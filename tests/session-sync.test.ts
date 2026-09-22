@@ -11,6 +11,17 @@ test('new turn and command output merge by id; malformed events require baseline
 
 test('late item start cannot overwrite completed snapshot history',()=>{const before=baseline();before.thread.turns[1].status='completed';const next=applyChange(before,event(6,{item:{turnId:'turn',item:{id:'item',type:'agentMessage',text:''},completed:false}}))!;assert.equal(next.thread.turns[1].items[0].text,'hello');});
 
+test('reasoning parts keep independent offsets, immutable snapshots and terminal text',()=>{
+ const patch=(index:number,offset:number,text:string)=>({delta:{turnId:'turn',itemId:'reason',field:'summary',index,offset,text}});
+ const before=baseline(),first=applyChange(before,event(6,patch(1,0,'summary')))!;
+ assert.deepEqual(first.thread.turns[1].items[1].summary,['','summary']);assert.equal(before.thread.turns[1].items.length,1);
+ const next=applyChange(first,event(7,patch(1,4,'ary!')))!;assert.deepEqual(next.thread.turns[1].items[1].summary,['','summary!']);assert.equal(first.thread.turns[1].items[1].summary[1],'summary');
+ assert.equal(applyChange(next,event(7,patch(1,0,'repeat'))),next);
+ for(const p of [patch(-1,0,'bad'),patch(10001,0,'bad'),patch(1,20,'gap'),patch(1,0,'conflict')])assert.equal(applyChange(first,event(7,p)),null);
+ const completed=applyChange(next,event(8,{item:{turnId:'turn',completed:true,item:{id:'reason',type:'reasoning',summary:['final'],content:[]}}}))!;
+ assert.deepEqual(applyChange(completed,event(9,patch(0,5,' late')))!.thread.turns[1].items[1].summary,['final']);
+});
+
 test('history prepend keeps newer live messages, cursor and attachment references authoritative',()=>{
   const before={...baseline(),history:{nextCursor:'old'},syncCursor:'epoch:5',attachmentPreviews:[{path:'image',url:'current'}]};
   const page={turns:[{id:'older',status:'completed',items:[]},{id:'old',items:[]},{id:'turn',items:[]}],nextCursor:'older',attachmentPreviews:[{path:'image',url:'stale'},{path:'old-image',url:'older'}]};

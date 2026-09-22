@@ -40,8 +40,11 @@ try{
   const before=await page.locator('.timeline').evaluate(e=>e.clientHeight);
   await collapse.click();
   await expand.waitFor();
-  assert.equal(await page.locator('#message').isVisible(),false);
-  assert.equal(await page.locator('.composer-compact').textContent().then(t=>t.includes('有草稿')&&t.includes('上传中')),true);
+  assert.equal(await page.locator('#message').isVisible(),true,'Compact composer must be editable');
+  assert.equal(await page.locator('.composer-compact').textContent().then(t=>t.includes('上传中')),true);
+  assert.equal(await page.getByRole('button',{name:'发送',exact:true}).isDisabled(),true,'Uploading attachment must block compact send');
+  await page.locator('#message').fill('紧凑栏输入');await page.locator('#message').press('End');await page.locator('#message').press(width>1000?'Shift+Enter':'Enter');await page.locator('#message').pressSequentially('第二行');
+  assert.equal(await page.locator('#message').inputValue(),'紧凑栏输入\n第二行');
   assert.ok(await page.locator('.timeline').evaluate(e=>e.clientHeight)>before+80);
   assert.equal(await page.evaluate(()=>testState.upload.signal.aborted),false);
   await page.evaluate(()=>{const data=new DataTransfer();data.items.add(new File(['mock'],'hidden.png',{type:'image/png'}));document.querySelector('.composer').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true}));document.querySelector('.composer').dispatchEvent(new DragEvent('drop',{dataTransfer:data,bubbles:true}));});
@@ -49,7 +52,7 @@ try{
   await page.evaluate(()=>testState.upload.finish());
   await page.waitForFunction(()=>!document.querySelector('.composer-compact').textContent.includes('上传中'));
   await expand.click();
-  assert.equal(await page.locator('#message').inputValue(),'保留这条演示草稿');
+  assert.equal(await page.locator('#message').inputValue(),'紧凑栏输入\n第二行');
   assert.equal(await page.getByLabel('模型',{exact:true}).inputValue(),'demo');
   assert.equal(await page.locator('#message').evaluate(e=>document.activeElement===e),width>1000);
   assert.equal(await page.evaluate(()=>testState.textarea===document.querySelector('#message')),true,'Composer remounted');
@@ -75,7 +78,7 @@ try{
   await page.evaluate(()=>testState.failRead=true);await refresh();assert.match(await page.locator('.composer-notice').textContent(),/演示同步失败|另一个应用/);
   await page.evaluate(()=>{testState.failRead=false;testState.snapshot.phase='IDLE';});await refresh();
   await expand.click();await page.locator('#message').fill('提交失败后重新编辑');await page.getByRole('button',{name:'移除附件 example.txt'}).click();
-  await page.getByRole('button',{name:'发送',exact:true}).click();await page.getByRole('button',{name:'重新编辑',exact:true}).waitFor();await collapse.click();
+  await collapse.click();await page.getByRole('button',{name:'发送',exact:true}).click();await page.getByRole('button',{name:'重新编辑',exact:true}).waitFor();
   await page.getByRole('button',{name:'重新编辑',exact:true}).click();assert.equal(await page.locator('#message').inputValue(),'提交失败后重新编辑');
   await collapse.click();await toggleMenu();
   await page.evaluate(()=>{history.pushState(null,'','/sessions/other');window.dispatchEvent(new PopStateEvent('popstate'));});
@@ -103,6 +106,21 @@ try{
   await collapse.click();await page.evaluate(()=>testState.failModels());
   await page.waitForFunction(()=>document.querySelector('.composer-notice')?.textContent.includes('演示模型读取失败'));
   await page.getByRole('button',{name:'查看详情'}).click();assert.equal(await page.locator('.option-error').isVisible(),true);
+  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/tests/session-toolbar.html`);
+  await page.waitForFunction(()=>document.querySelector('.connection')?.textContent==='空闲');await collapse.click();
+  await page.locator('#message').fill('紧凑发送');
+  await page.locator('#message').evaluate(e=>e.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',isComposing:true,bubbles:true,cancelable:true})));
+  assert.equal(await page.evaluate(()=>testState.messages?.length??0),0,'IME Enter sent a message');
+  if(width<=1000){await page.locator('#message').press('End');await page.locator('#message').press('Enter');assert.equal(await page.evaluate(()=>testState.messages?.length??0),0,'Mobile Enter sent a message');await page.getByRole('button',{name:'发送',exact:true}).click();}
+  else await page.locator('#message').press('Enter');
+  await page.getByRole('button',{name:'重新编辑',exact:true}).waitFor();assert.equal(await page.evaluate(()=>testState.messages.length),1);
+  await page.getByRole('button',{name:'重新编辑',exact:true}).click();await collapse.click();
+  await page.evaluate(()=>{testState.snapshot.phase='RUNNING';testState.snapshot.activeTurnId='turn';testState.unknownSend=true;});await refresh();
+  await page.getByRole('button',{name:'插话',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.composer-notice')?.textContent.includes('提交结果待核实'));
+  const steer=await page.evaluate(()=>testState.messages[1]);assert.equal(steer.expectedTurnId,'turn');assert.equal(steer.model,undefined);assert.equal(steer.permissionMode,undefined);
+  assert.equal(await page.getByRole('button',{name:'插话',exact:true}).isDisabled(),true);
+  assert.equal(await page.locator('.composer').evaluate(e=>e.scrollWidth>e.clientWidth),false,'Compact input overflows');
+  await page.screenshot({path:`.local/compact-input-${width}.png`});
   assert.deepEqual(errors,[]);
   console.log(`${width}: toolbar/menu/draft/upload/scroll/status/navigation/release PASS`);
   await page.close();

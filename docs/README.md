@@ -22,7 +22,7 @@
 - [会话工作区](design/session-workspace.md)：第二阶段流程、模型/权限、附件、报告与通知；2026-09-22 固定单行顶栏与输入区收起已实施，含 mock 原型图及[验收记录](verification/2026-09-22-session-toolbar.md)。
 - [会话同步与性能](design/session-sync.md)：水位、回放、gzip、历史分页、按需输出与列表性能。
 - [工作区面板](design/workspace-panels.md)：布局、项目阅读状态、Git 历史、三标签图片预览、忽略文件显示，以及统一刷新与异步 fetch。
-- [Markdown](design/markdown.md) 与 [执行过程](design/execution-process.md)：渲染、安全、折叠和可访问性。
+- [Markdown](design/markdown.md) 与 [执行过程](design/execution-process.md)：渲染、安全、折叠和可访问性；[紧凑输入、摘要同步与子 Agent 展示验收](verification/2026-09-22-compact-input-reasoning.md)。
 - [Linux 支持与文档整理](design/linux-support-and-docs.md)：已批准方案、便携安装补充和实施清单。
 
 ## 验证与归档
