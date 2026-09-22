@@ -82,7 +82,10 @@
 .session-actions-menu>button:hover:enabled,.session-actions-menu>button:focus-visible{background:#303940}
 .composer [hidden]{display:none!important}
 .composer>div>.notice{margin:0 0 8px;padding:8px 10px;font-size:12px}
-.attachments>.composer-collapse{margin-left:auto;min-width:44px;min-height:44px;font-size:20px;line-height:1;padding:6px}
+.attachments>.composer-collapse{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;min-width:44px;min-height:44px;font-size:20px;line-height:1;padding:6px}
+.attachments>.attachment-picker{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:44px;min-height:44px}
+.is-collapsed .attachments{flex:0 0 auto;padding:0}
+.is-collapsed .attachments>.attachment-picker{padding:0}
 .composer .attachment-hint{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .composer.is-collapsed{padding:8px 10px}
 .is-collapsed .composer-input-row{display:flex;align-items:center;gap:8px}
@@ -97,7 +100,7 @@
 .composer-notice>button{margin:0;flex-shrink:0;padding:6px;font-size:12px}
 @container(max-width:600px){.session-toolbar .session-project{max-width:15%}.session-toolbar .session-actions-trigger>span{display:none}.session-toolbar .connection{font-size:11px}.session-toolbar .connection:before{display:none}.session-toolbar .usage-headline,.session-toolbar .usage-stale{display:none}.session-toolbar .usage-badge{padding-inline:6px}.session-toolbar .session-title{font-size:12px}}
 @media(max-width:1000px){.session-toolbar{gap:4px;padding-inline:4px}.session-actions-trigger{min-height:44px;padding-inline:5px}.session-toolbar .pane-toggle{min-width:44px;min-height:44px}}
-@media(max-width:680px){.composer .attachment-hint{display:none}.composer-compact{gap:4px}.composer-compact>.small{font-size:11px}.composer-compact>button{padding-inline:5px}}
+@media(max-width:680px){.composer:not(.is-collapsed){padding-top:4px}.composer:not(.is-collapsed) .attachments{padding-bottom:4px}.composer .attachment-hint{display:none}.composer .attachments>.attachment-picker{background:transparent;border-color:transparent}.is-collapsed .composer-input-row{gap:4px}.composer-compact{gap:4px}.composer-compact>.small{font-size:11px}.composer-compact>button{padding-inline:5px}}
 .pane-toggle{display:grid;place-items:center;min-width:36px;min-height:36px}
 .shell[data-left-open=false]>.sidebar{display:none}
 .shell[data-right-open=false] .git-panel{display:none}

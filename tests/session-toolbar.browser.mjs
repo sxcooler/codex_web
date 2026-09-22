@@ -121,6 +121,24 @@ try{
   assert.equal(await page.getByRole('button',{name:'插话',exact:true}).isDisabled(),true);
   assert.equal(await page.locator('.composer').evaluate(e=>e.scrollWidth>e.clientWidth),false,'Compact input overflows');
   await page.screenshot({path:`.local/compact-input-${width}.png`});
+  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/tests/session-toolbar.html`);await collapse.waitFor();await collapse.click();
+  const attach=page.getByRole('button',{name:'添加附件',exact:true});
+  assert.equal(await attach.isVisible(),true,'Compact composer needs an attachment picker');
+  const chooser=page.waitForEvent('filechooser');await attach.click();
+  await (await chooser).setFiles({name:'compact.txt',mimeType:'text/plain',buffer:Buffer.from('mock')});
+  await page.waitForFunction(()=>testState.upload);
+  assert.match(await page.locator('.composer-compact').textContent(),/1 个附件.*上传中/);
+  assert.equal(await page.getByRole('button',{name:'发送',exact:true}).isDisabled(),true);
+  await page.evaluate(()=>testState.upload.finish());
+  await page.waitForFunction(()=>!document.querySelector('.composer-compact').textContent.includes('上传中'));
+  await page.screenshot({path:`.local/attachment-${width}-compact.png`});
+  await expand.click();assert.equal(await page.getByRole('button',{name:'移除附件 compact.txt'}).isVisible(),true);
+  await page.getByRole('button',{name:'移除附件 compact.txt'}).click();
+  if(width<680){
+   const spacing=await page.locator('.composer').evaluate(e=>{const box=e.getBoundingClientRect(),row=e.querySelector('.attachments').getBoundingClientRect(),text=e.querySelector('textarea').getBoundingClientRect();return {top:row.top-box.top,gap:text.top-row.bottom,height:row.height};});
+   assert.ok(spacing.top<=5&&spacing.gap<=4&&spacing.height<=48,'Mobile attachment row has excess spacing');
+  }
+  await page.screenshot({path:`.local/attachment-${width}-expanded.png`});
   assert.deepEqual(errors,[]);
   console.log(`${width}: toolbar/menu/draft/upload/scroll/status/navigation/release PASS`);
   await page.close();
