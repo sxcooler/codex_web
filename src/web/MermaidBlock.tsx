@@ -28,8 +28,9 @@ export const MermaidBlock=memo(function MermaidBlock({text,incomplete,children}:
   const fence=oversized?'```':'`'.repeat(Math.max(3,...(text.match(/`+/g)??[]).map(run=>run.length+1)));
   // Remount on source changes: upstream otherwise retains the last SVG after a parse error.
   return <section ref={ref} className="mermaid-preview" aria-label="Mermaid 流程图"
-    onWheelCapture={event=>{if(!event.altKey&&!event.ctrlKey)event.stopPropagation();}}
-    onPointerDownCapture={event=>{if(event.pointerType==='touch')event.stopPropagation();}}>
+    // Portal events still bubble through React; preserve page scrolling only inside the inline preview.
+    onWheelCapture={event=>{if(event.currentTarget.contains(event.target as Node)&&!event.altKey&&!event.ctrlKey)event.stopPropagation();}}
+    onPointerDownCapture={event=>{if(event.pointerType==='touch'&&event.currentTarget.contains(event.target as Node))event.stopPropagation();}}>
     <div className="mermaid-toolbar"><div><button type="button" aria-pressed={!showSource} disabled={incomplete||oversized||failed} onClick={()=>setSource(false)}>图形</button><button type="button" aria-pressed={showSource} onClick={()=>setSource(true)}>源码</button></div>{children}</div>
     {incomplete?<p className="muted small">流程图生成中…</p>:oversized?<p className="muted small">流程图超过预览上限，显示源码。</p>:failed?<p className="notice error" role="status">绘图模块加载失败，显示源码。请刷新后重试。</p>:null}
     {showSource?<pre className="mermaid-source">{text}</pre>:null}
