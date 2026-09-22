@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { isAbsolute, resolve } from 'node:path';
 import { permissionChoices, threadPermissionOptions, type PermissionMode, type PermissionPolicy } from './permissions.ts';
 import { AppServer } from './app-server.ts';
+import {diagnosticId,type DiagnosticEvent} from '../server/diagnostics.ts';
 
 export type NativeInput = { type: 'text'; text: string; text_elements: [] } | { type: 'localImage'; path: string };
 export type TurnOptions = { model?: string; effort?: string; permissionMode?: PermissionMode; nativeInput?: NativeInput[] };
@@ -14,6 +15,7 @@ type Options = {
   idleMs?: number;
   sandbox?: 'read-only' | 'danger-full-access';
   args?: string[];
+  diagnostic?:(event:DiagnosticEvent)=>void;
 };
 type Patch = { state?: any; thread?: any; turn?: any; item?: { turnId: string; item: any; completed?: boolean }; delta?: { turnId: string; itemId: string; field: 'text' | 'aggregatedOutput' | 'summary' | 'content'; index?: number; offset: number; text: string } };
 type Change = { id: string; threadId: string; kind: string; revision: number; patch: Patch };
@@ -24,6 +26,7 @@ type ThreadState = {
   externalWriter?: boolean;
   activeTurnId: string | null;
   cwd?: string;
+  diagnosticProjectKey?:string;
   model?: string;
   retry?: { turnId: string; message: string };
   releaseRequested?: boolean;
@@ -657,6 +660,13 @@ export class Runtime extends EventEmitter {
     }
   }
 
+  // No RPC or filesystem access: sampling must not wake or wait for the native process.
+  diagnosticState(){
+    const native=this.server?.diagnosticState(),waiting=new Set(native?.pending.map(request=>request.threadId));
+    return {epoch:this.epoch,inFlight:this.inFlight,reads:this.reads,failures:this.failures,diagnosticsSeen:this.diagnosticsSeen,
+      native,threads:[...this.states.entries()].filter(([id,state])=>state.loaded||state.activeTurnId||state.reserved||waiting.has(id)).sort(([left],[right])=>Number(waiting.has(right))-Number(waiting.has(left))).slice(0,20).map(([id,state])=>({threadId:diagnosticId(id),phase:this.phase(state),projectKey:state.diagnosticProjectKey??(state.cwd?createHash('sha256').update(process.platform==='win32'?state.cwd.toLowerCase():state.cwd).digest('hex').slice(0,24):undefined)}))};
+  }
+
   replay(threadId: string, lastId?: string): { reset: boolean; events: any[] } {
     this.requireString(threadId, 'threadId');
     if (!lastId) return { reset: true, events: [] };
@@ -904,7 +914,7 @@ export class Runtime extends EventEmitter {
     this.sequence = 0;
     this.events = [];
     this.eventBytes = 0;
-    const server = new AppServer({ executable: this.options.executable, cwd: this.options.cwd, args: this.options.args });
+    const server = new AppServer({ executable: this.options.executable, cwd: this.options.cwd, args: this.options.args,diagnostic:this.options.diagnostic });
     this.server = server;
     server.on('notification', (message) => { if (this.server === server) this.onNotification(message); });
     server.on('request', (message) => { if (this.server === server) this.onRequest(message); });
@@ -1165,6 +1175,7 @@ export class Runtime extends EventEmitter {
     signal?.throwIfAborted();
     if (!isObject(result?.thread)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread history is unavailable');
     const thread = structuredClone(result.thread);
+    if(this.options.diagnostic&&typeof thread.cwd==='string')state.diagnosticProjectKey=createHash('sha256').update(process.platform==='win32'?thread.cwd.toLowerCase():thread.cwd).digest('hex').slice(0,24);
     const turns = new Map<string, any>();
     for (const value of Array.isArray(thread.turns) ? thread.turns : []) if (isObject(value) && typeof value.id === 'string') this.mergeNativeTurn(turns, value);
 

@@ -8,6 +8,7 @@ import { buildServer } from './app.ts';
 import { Runtime } from '../codex/runtime.ts';
 import { resolveCodexExecutable } from '../codex/executable.ts';
 import { Projects } from '../projects.ts';
+import {Diagnostics} from './diagnostics.ts';
 
 const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -24,8 +25,12 @@ export async function startServer() {
 
   const workRoot = await realpath(process.env.WORK_ROOT ?? config.workRoot ?? join(homedir(), 'work'));
   const executable = resolveCodexExecutable(config.codexBin);
-  const runtime = new Runtime({ executable, cwd: workRoot });
-  const app = await buildServer({ dataDir, origin, allowedOrigins: config.allowedOrigins, runtime, projects: new Projects(workRoot), distDir: join(projectRoot, 'dist') });
+  const diagnostics=new Diagnostics(dataDir,()=>runtime.diagnosticState());
+  const runtime = new Runtime({ executable, cwd: workRoot,diagnostic:diagnostics.record });
+  let app;
+  try {app = await buildServer({ dataDir, origin, allowedOrigins: config.allowedOrigins, runtime, projects: new Projects(workRoot), distDir: join(projectRoot, 'dist'),diagnostics });}
+  catch(error){await diagnostics.close();throw error;}
+  app.addHook('onClose',async()=>{await diagnostics.close();});
   try {
     await app.listen({ host: '127.0.0.1', port });
     process.stdout.write(`Codex Web listening at ${origin}\n`);

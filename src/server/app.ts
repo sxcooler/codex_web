@@ -11,6 +11,7 @@ import { registerResponseHooks } from './response.ts';
 import { createUploadService, registerUploadRoutes } from './uploads.ts';
 import { createPushService, registerPushRoutes } from './push.ts';
 import { configuredOrigins } from './origins.ts';
+import type {Diagnostics} from './diagnostics.ts';
 
 const CSRF_COOKIE = 'codex_csrf';
 const SESSION_COOKIE = 'codex_session';
@@ -72,7 +73,7 @@ function passwordSchema(properties: Record<string, unknown>) {
 
 const passwordField = { type: 'string', minLength: 12, maxLength: 256 };
 
-export async function buildServer(options: { dataDir: string; origin: string; allowedOrigins?: unknown; runtime?: Runtime; projects?: Projects; distDir?: string }): Promise<FastifyInstance> {
+export async function buildServer(options: { dataDir: string; origin: string; allowedOrigins?: unknown; runtime?: Runtime; projects?: Projects; distDir?: string;diagnostics?:Diagnostics }): Promise<FastifyInstance> {
   const origins = configuredOrigins(options.origin, options.allowedOrigins);
   const originsByHost = new Map(origins.map(origin => [origin.host, origin]));
   const requestOrigins = new WeakMap<FastifyRequest, URL>();
@@ -83,6 +84,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     bodyLimit: 128 * 1024, // 12,000 Unicode characters plus JSON escaping and envelope.
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false } },
   });
+  options.diagnostics?.attach(app);
   registerResponseHooks(app);
   const requestCookies = new WeakMap<FastifyRequest, AuthCookies>();
   const authenticatedTokens = new WeakMap<FastifyRequest, string>();

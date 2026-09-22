@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import {diagnosticCode,diagnosticId,type DiagnosticEvent} from '../server/diagnostics.ts';
 
 type Id = string | number;
-type Options = { executable: string; args?: string[]; cwd?: string; timeoutMs?: number; maxMessageBytes?: number };
-type Pending = { resolve: (result: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+type Options = { executable: string; args?: string[]; cwd?: string; timeoutMs?: number; maxMessageBytes?: number; diagnostic?:(event:DiagnosticEvent)=>void };
+type Pending = { resolve: (result: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; method:string;threadId?:string;started:number };
 const isId = (value: unknown): value is Id => typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value));
 const isObject = (value: unknown): value is Record<string, any> => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -22,9 +23,13 @@ export class AppServer extends EventEmitter {
   private ended: Promise<void>;
   private closePromise?: Promise<void>;
   private initialization?: Promise<unknown>;
+  private diagnostic?:Options['diagnostic'];
+  private receivedBytes=0;
+  private lastReceived=performance.now();
 
   constructor(options: Options) {
     super();
+    this.diagnostic=options.diagnostic;
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.maxMessageBytes = options.maxMessageBytes ?? 16 * 1024 * 1024;
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1 || !Number.isSafeInteger(this.maxMessageBytes) || this.maxMessageBytes < 1) {
@@ -38,8 +43,10 @@ export class AppServer extends EventEmitter {
     this.child = spawn(options.executable, options.args ?? ['app-server'], {
       cwd: options.cwd, env, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
     });
+    this.record({event:'native_start'});
     this.ended = new Promise((resolve) => {
       this.child.once('close', (code, signal) => {
+        this.record({event:'native_exit',exitCode:code,signal,expected:this.closing});
         if (!this.closing) this.fail(new Error(`App-server exited (code ${code}, signal ${signal})`));
         resolve();
       });
@@ -48,7 +55,7 @@ export class AppServer extends EventEmitter {
     this.child.stdin.on('error', (error) => this.fail(error));
     this.child.stdout.on('error', (error) => this.fail(error));
     this.child.stderr.on('error', (error) => this.fail(error));
-    this.child.stdout.on('data', (chunk: Buffer) => this.consume(chunk));
+    this.child.stdout.on('data', (chunk: Buffer) => {this.receivedBytes+=chunk.length;this.lastReceived=performance.now();this.consume(chunk);});
     this.child.stdout.on('end', () => {
       if (this.frameBytes) this.fail(new Error('Incomplete JSONL protocol frame at EOF'));
     });
@@ -66,20 +73,27 @@ export class AppServer extends EventEmitter {
   request<T = unknown>(method: string, params: unknown): Promise<T> {
     if (this.stopped) return Promise.reject(this.stopped);
     const id = this.nextId++;
+    const started=performance.now(),threadId=diagnosticId(isObject(params)?params.threadId:undefined);
+    const finish=(outcome:string,error?:any)=>{const elapsedMs=Math.round(performance.now()-started);if(elapsedMs>=1000||outcome!=='ok')this.record({event:'rpc_end',id,method,threadId,elapsedMs,outcome,errorCode:diagnosticCode(error?.code)});};
+    let timedOut=false;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
+        timedOut=true;
         this.pending.delete(id);
         reject(new Error(`RPC ${method} timed out; outcome is uncertain, do not automatically retry`));
       }, this.timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer,method,threadId,started });
       try { this.send({ id, method, params }); }
       catch (error) {
         clearTimeout(timer);
         this.pending.delete(id);
         reject(error);
       }
-    });
+    }).then(result=>{finish('ok');return result;},error=>{finish(timedOut?'timeout':'error',error);throw error;});
   }
+
+  private record(event:DiagnosticEvent){try{this.diagnostic?.({...event,nativePid:this.child.pid});}catch{/* Diagnostics cannot change RPC outcomes. */}}
+  diagnosticState(){return {nativePid:this.child.pid,pendingCount:this.pending.size,receivedBytes:this.receivedBytes,lastReceivedAgoMs:Math.round(performance.now()-this.lastReceived),pending:[...this.pending.entries()].slice(0,10).map(([id,pending])=>({id,method:pending.method,threadId:pending.threadId,elapsedMs:Math.round(performance.now()-pending.started)}))};}
 
   notify(method: string, params: unknown): void { this.send({ method, params }); }
 
@@ -166,6 +180,7 @@ export class AppServer extends EventEmitter {
 
   private fail(error: Error): void {
     if (this.stopped) return;
+    this.record({event:'native_failure',reason:/frame|JSON|protocol|maxMessageBytes/i.test(error.message)?'protocol':'transport',errorCode:diagnosticCode((error as any).code)});
     this.stop(error);
     this.child.kill();
     this.emit('failure', error);
