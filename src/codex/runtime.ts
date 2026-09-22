@@ -62,7 +62,7 @@ type HistoryWindow = { before?: string; headersOnly?: boolean };
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 function browserMedia(value: any, images: Map<string, string>): any {
   const image = (data: string) => {
-    if (data.length <= Math.ceil(MAX_IMAGE_BYTES / 3) * 4 && /^[a-z0-9+/]*={0,2}$/i.test(data)) images.set(createHash('sha256').update(data).digest('hex'), data);
+    if (data.length && data.length <= Math.ceil(MAX_IMAGE_BYTES / 3) * 4 && /^[a-z0-9+/]*={0,2}$/i.test(data)) images.set(createHash('sha256').update(data).digest('hex'), data);
     return '[图片单独加载]';
   };
   if (typeof value === 'string') {
@@ -73,7 +73,8 @@ function browserMedia(value: any, images: Map<string, string>): any {
   if (Array.isArray(value)) return value.map(child => browserMedia(child, images));
   if (!isObject(value)) return value;
   return Object.fromEntries(Object.entries(value).map(([key, child]) => [key,
-    key === 'data' && typeof child === 'string' && (value.type === 'image' || /^image\//i.test(value.mimeType ?? ''))
+    key === 'result' && value.type === 'imageGeneration' && typeof child === 'string' && !/^(?:https?:)?\/\/|^data:/i.test(child)
+      ? image(child) : key === 'data' && typeof child === 'string' && (value.type === 'image' || /^image\//i.test(value.mimeType ?? ''))
       ? image(child) : ['text', 'command', 'aggregatedOutput'].includes(key) ? child : browserMedia(child, images),
   ]));
 }

@@ -38,9 +38,20 @@ export const Message=memo(function Message({item,threadId,turnId,attachments=[],
   if(item.type==='agentMessage')return <article className="message"><div className="avatar codex">A</div><div className="message-body"><MessageHeader timestamp={timestamp} timeLabel={timeLabel}/><MarkdownView text={item.text??''} streaming={streaming} linkScope={threadId+'|'+(projectRoot??'')} resolveUrl={projectRoot&&onOpenFile?url=>chatFileUrl(threadId,projectRoot,url):undefined} onLink={url=>{const path=linkedFile(threadId,'',url);if(!path||!onOpenFile)return false;onOpenFile(path);return true;}}/><NativeImages threadId={threadId} turnId={turnId} item={item}/></div></article>;
   if(item.type==='commandExecution')return <Command item={item} threadId={threadId} turnId={turnId} visible={visible}/>;
   if(item.type==='imageView')return <ViewedImage key={threadId+'|'+item.id+'|'+item.path} item={item} threadId={threadId} projectRoot={projectRoot}/>;
+  if(item.type==='imageGeneration')return <GeneratedImage item={item} threadId={threadId} turnId={turnId}/>;
   if(Object.hasOwn(stepLabels,item.type))return <Step item={item} threadId={threadId} turnId={turnId}/>;
   return <details className="tool"><summary><span>{item.type}</span><code>{item.command??item.changes?.map((change:Json)=>change.path).join(', ')??''}</code><span className="muted">{statusLabel(item)}</span></summary><pre>{pretty(item)}</pre></details>;
 });
+
+function GeneratedImage({item,threadId,turnId}:{item:Json;threadId:string;turnId?:string}){
+  const remote=typeof item.result==='string'&&/^(?:https?:)?\/\//i.test(item.result),available=!!turnId&&!!item.imagePreviews?.length;
+  const failed=item.status==='failed'||!!item.failure,finished=['completed','failed','interrupted','declined'].includes(item.status);
+  return <section className="execution-step generated-image"><div className="step-heading"><strong>生成图片</strong><span className="muted step-status">{statusLabel(item)}</span></div>
+    <NativeImages threadId={threadId} turnId={turnId} item={item}/>
+    {remote?<p className="path">{item.result}</p>:!available?<p className={failed?'notice error':'muted small'} role={failed?'alert':'status'}>{item.failure?.type==='usageLimitExceeded'?'图片生成用量已达上限。':failed?'图片生成失败。':finished?'原生记录未提供可预览的图片。':'正在生成图片…'}</p>:null}
+    {item.revisedPrompt?<details><summary>生成提示词</summary><pre>{item.revisedPrompt}</pre></details>:null}
+  </section>;
+}
 
 function ViewedImage({item,threadId,projectRoot}:{item:Json;threadId:string;projectRoot?:string}){
   const [open,setOpen]=useState(false),path=typeof item.path==='string'?item.path:'';

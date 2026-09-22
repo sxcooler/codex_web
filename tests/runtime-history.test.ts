@@ -7,6 +7,8 @@ test('browser history and SSE omit inline image bytes while native history stays
   const items=[
     {id:'user',type:'userMessage',content:[{type:'text',text:'Keep my prompt'},{type:'image',url},{type:'localImage',path:'/uploads/image.png'}]},
     {id:'tool',type:'mcpToolCall',status:'completed',result:{content:[{type:'text',text:'Keep tool text'},{type:'image',mimeType:'image/png',data}],_meta:{'codex/toolSurface':{screenshot:{url}}}}},
+    {id:'generated',type:'imageGeneration',status:'completed',result:data,revisedPrompt:'Draw a diagram',savedPath:'/private/generated.png'},
+    {id:'generated-url',type:'imageGeneration',status:'completed',result:url},
   ];
   const turns=[{id:'first',status:'completed',items},{id:'last',status:'completed',items:[]}];
   t.mock.method(runtime as any,'readThread',async()=>({id:'thread',status:{type:'idle'},turns:structuredClone(turns)}));
@@ -18,6 +20,10 @@ test('browser history and SSE omit inline image bytes while native history stays
   assert.equal(user.imagePreviews.length,1);
   assert.match(user.imagePreviews[0].id,/^[a-f0-9]{64}$/);
   assert.deepEqual(snapshot.thread.turns[0].items[1].imagePreviews,user.imagePreviews,'Duplicate tool screenshot must be deduplicated');
+  for(const generated of snapshot.thread.turns[0].items.slice(2)){
+    assert.deepEqual(generated.imagePreviews,user.imagePreviews);
+    assert.equal(generated.result,'[图片单独加载]');
+  }
   assert.equal(user.content[0].text,'Keep my prompt');
   assert.equal(user.content[2].path,'/uploads/image.png');
   assert.equal(snapshot.thread.turns[0].items[1].result.content[0].text,'Keep tool text');
@@ -198,6 +204,22 @@ test('abandoned snapshot and earlier-history reads stop scheduling native pages'
     assert.equal(runtime.listenerCount('snapshotChange'),0);assert.equal((runtime as any).reads,0);
     assert.equal((runtime as any).state('thread').syncHeader,undefined,'Canceled history must not replace sync state');
   }
+});
+
+test('generated image bytes use the scoped native image lookup without reading savedPath or remote URLs',async t=>{
+  const {runtime}=setup(t),bytes=Buffer.from('generated image'),data=bytes.toString('base64');
+  const item={id:'generated',type:'imageGeneration',status:'completed',result:data,savedPath:'/must/not/read.png'};
+  const items=[item,{...item,id:'empty',result:''},{...item,id:'remote',result:'https://example.invalid/image.png'},{...item,id:'oversize',result:'a'.repeat(14_000_000)}];
+  t.mock.method(runtime as any,'readThread',async()=>({id:'thread',status:{type:'idle'},turns:[{id:'turn',status:'completed',items}]}));
+  const safe=(await runtime.snapshot('thread',{window:true})).thread.turns[0].items;
+  assert.ok(JSON.stringify(safe).length<2000);
+  const imageId=safe[0].imagePreviews[0].id;
+  assert.ok(safe.slice(1).every((entry:any)=>!entry.imagePreviews));
+  assert.equal(safe[2].result,items[2].result);
+  t.mock.method(runtime as any,'readTurnBodies',async(threadId:string,turns:any[],itemId:string)=>{assert.equal(threadId,'thread');assert.equal(turns[0].id,'turn');turns[0].items=items.filter(entry=>entry.id===itemId);});
+  assert.deepEqual(await runtime.image('thread','turn','generated',imageId),bytes);
+  await assert.rejects(runtime.image('thread','turn','remote',imageId),(error:any)=>error.statusCode===404);
+  await assert.rejects(runtime.image('thread','turn','missing',imageId),(error:any)=>error.statusCode===404);
 });
 
 test('small initial window still detects active turns outside its body window', async t => {

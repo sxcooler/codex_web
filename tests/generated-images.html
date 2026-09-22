@@ -1,0 +1,13 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>生成图片回归</title><style>body{padding:16px}#root{max-width:800px;margin:auto}</style><div id="root"></div>
+<script type="module">
+import React from 'react';import{createRoot}from'react-dom/client';import{Message}from'/src/web/Conversation.tsx';import'/src/web/style.css';
+const examples=[
+ {id:'ready',status:'completed',imagePreviews:[{id:'a'.repeat(64)}],result:'[图片单独加载]',revisedPrompt:'请绘制会话页布局原型',savedPath:'C:\\private\\generated.png'},
+ {id:'running',status:'inProgress',result:''},
+ {id:'failed',status:'failed',failure:{type:'usageLimitExceeded'},result:''},
+ {id:'missing',status:'completed',result:'',savedPath:'C:\\private\\missing.png'},
+ {id:'remote',status:'completed',result:'https://example.invalid/generated.png'},
+ {id:'broken',status:'completed',imagePreviews:[{id:'b'.repeat(64)}],result:'[图片单独加载]'}
+];
+createRoot(document.querySelector('#root')).render(React.createElement(React.Fragment,null,...examples.map(item=>React.createElement(Message,{key:item.id,threadId:'generated',turnId:'turn',item:{type:'imageGeneration',...item}}))));
+</script></html>
