@@ -85,13 +85,14 @@
 .attachments>.composer-collapse{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;min-width:44px;min-height:44px;font-size:20px;line-height:1;padding:6px}
 .attachments>.attachment-picker{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:44px;min-height:44px}
 .is-collapsed .attachments{flex:0 0 auto;padding:0}
-.is-collapsed .attachments>.attachment-picker{padding:0}
+.is-collapsed .attachments>.attachment-picker{width:36px;min-width:36px;padding:0}
 .composer .attachment-hint{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .composer.is-collapsed{padding:8px 10px}
 .is-collapsed .composer-input-row{display:flex;align-items:center;gap:8px}
-.is-collapsed .composer-input-row textarea{flex:1;min-width:0;height:44px!important;min-height:44px;max-height:44px;resize:none;overflow:auto;padding:8px}
+.is-collapsed .composer-input-row textarea{flex:1;min-width:0;height:44px!important;min-height:44px;max-height:44px;line-height:24px;resize:none;overflow:auto;padding:8px}
 .is-collapsed .composer-actions{gap:6px}
 .is-collapsed .composer-actions button{min-width:44px;min-height:44px;font-size:12px;padding:6px 8px;white-space:nowrap}
+.is-collapsed .composer-actions .composer-expand{display:inline-flex;align-items:center;justify-content:center;width:36px;min-width:36px;padding:0}
 .composer-compact{display:flex;align-items:center;gap:8px;padding-top:4px}
 .composer-compact>.small{flex:1;min-width:0;overflow-wrap:anywhere}
 .composer-compact>button{flex-shrink:0;font-size:12px;min-height:44px;padding:6px 8px}

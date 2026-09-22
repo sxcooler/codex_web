@@ -5,7 +5,7 @@ import {chromium} from 'playwright';
 const server=await createServer({server:{host:'127.0.0.1',port:0,strictPort:true}});await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try{
- for(const width of [1280,390]){
+ for(const width of [390,1280]){
   const page=await browser.newPage({viewport:{width,height:900}}),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/tests/session-toolbar.html`);
@@ -41,10 +41,15 @@ try{
   await collapse.click();
   await expand.waitFor();
   assert.equal(await page.locator('#message').isVisible(),true,'Compact composer must be editable');
+  await page.locator('#message').fill('测试');
+  assert.equal(await page.locator('#message').evaluate(e=>e.scrollHeight>e.clientHeight),false,'Single-line compact input must not have a vertical scrollbar');
+  assert.equal(await expand.textContent(),'','Expand control should use an icon');
+  assert.ok(await page.locator('.attachment-picker').evaluate(e=>e.getBoundingClientRect().width)<=36,'Compact attachment control is too wide');
   assert.equal(await page.locator('.composer-compact').textContent().then(t=>t.includes('上传中')),true);
   assert.equal(await page.getByRole('button',{name:'发送',exact:true}).isDisabled(),true,'Uploading attachment must block compact send');
   await page.locator('#message').fill('紧凑栏输入');await page.locator('#message').press('End');await page.locator('#message').press(width>1000?'Shift+Enter':'Enter');await page.locator('#message').pressSequentially('第二行');
   assert.equal(await page.locator('#message').inputValue(),'紧凑栏输入\n第二行');
+  assert.equal(await page.locator('#message').evaluate(e=>{e.scrollTop=e.scrollHeight;return e.scrollTop>0;}),true,'Multiline compact input must remain scrollable');
   assert.ok(await page.locator('.timeline').evaluate(e=>e.clientHeight)>before+80);
   assert.equal(await page.evaluate(()=>testState.upload.signal.aborted),false);
   await page.evaluate(()=>{const data=new DataTransfer();data.items.add(new File(['mock'],'hidden.png',{type:'image/png'}));document.querySelector('.composer').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true}));document.querySelector('.composer').dispatchEvent(new DragEvent('drop',{dataTransfer:data,bubbles:true}));});
