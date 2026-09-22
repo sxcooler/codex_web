@@ -96,9 +96,14 @@ test('the real server entry writes periodic diagnostics without starting an idle
   const signals={SIGINT:process.listeners('SIGINT'),SIGTERM:process.listeners('SIGTERM')};let app:Awaited<ReturnType<typeof startServer>>|undefined;
   t.after(async()=>{await app?.close();for(const [key,value] of Object.entries(original)){if(value===undefined)delete process.env[key];else process.env[key]=value;}for(const signal of ['SIGINT','SIGTERM'] as const)for(const listener of process.listeners(signal))if(!signals[signal].includes(listener))process.removeListener(signal,listener);await rm(dir,{recursive:true,force:true});});
   Object.assign(process.env,overrides);app=await startServer();
+  await new Promise(resolve=>setTimeout(resolve,50));
+  await assert.rejects(stat(join(dir,'diagnostics.jsonl')), {code:'ENOENT'}, 'normal startup must not create diagnostic logs');
+  await app.close();app=await startServer(true);
   assert.equal((await app.inject({url:'/api/auth/session',headers:{host:`127.0.0.1:${port}`}})).statusCode,200);
   let events:any[]=[];const deadline=Date.now()+13_000;
   while(!events.some(v=>v.event==='sample')&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,100));events=(await readFile(join(dir,'diagnostics.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));}
   assert.ok(events.some(v=>v.event==='sample'&&v.runtime.inFlight===0&&!v.runtime.native));assert.equal(events.filter(v=>v.event==='native_start').length,0);
   await app.close();assert.match(await readFile(join(dir,'diagnostics.jsonl'),'utf8'),/"event":"stop"/);
+  const saved=await readFile(join(dir,'diagnostics.jsonl'),'utf8');app=await startServer();await app.close();
+  assert.equal(await readFile(join(dir,'diagnostics.jsonl'),'utf8'),saved,'normal restart must not inherit diagnostics or erase previous logs');
 });

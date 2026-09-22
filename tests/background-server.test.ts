@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, copyFile, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { launchPreference } from '../scripts/portable.ts';
 
@@ -14,6 +14,28 @@ test('portable remembers explicit launch preference and never changes unattended
   const terminal={question:async()=>answers.shift()!};
   assert.equal(await launchPreference({},terminal),false);
   assert.equal(await launchPreference({background:false},{question:async()=>''},true),true);
+});
+
+test('portable forwards per-run diagnostics without saving the flag',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'codex portable diagnostics '));
+  try {
+    for(const dir of ['scripts','src/server','.local/web'])await mkdir(join(root,dir),{recursive:true});
+    await copyFile(new URL('../scripts/portable.ts',import.meta.url),join(root,'scripts/portable.ts'));
+    await copyFile(new URL('../src/server/origins.ts',import.meta.url),join(root,'src/server/origins.ts'));
+    await writeFile(join(root,'scripts/server-control.ts'),`export async function managedServer(){return process.env.FIXTURE_EXISTING?{diagnosticsEnabled:false}:null;} export async function runServer(...args){console.log('FORWARD:'+JSON.stringify(['foreground',...args]));} export async function startBackground(...args){console.log('FORWARD:'+JSON.stringify(['background',...args]));} export async function stopServer(){throw Error('not used');}`);
+    const codexBin=join(root,process.platform==='win32'?'codex.exe':'codex');await writeFile(codexBin,'fixture');
+    const probe=createServer();await new Promise<void>(resolve=>probe.listen(0,'127.0.0.1',resolve));const port=(probe.address() as any).port;await new Promise<void>(resolve=>probe.close(()=>resolve()));
+    const config=JSON.stringify({port,origin:`http://localhost:${port}`,workRoot:root,codexBin,background:false});
+    await writeFile(join(root,'.local/web/config.json'),config);await writeFile(join(root,'.local/web/auth.json'),'{}');
+    await writeFile(join(root,'run.mjs'),`import childProcess from 'node:child_process';import {fileURLToPath} from 'node:url';childProcess.spawnSync=()=>({status:0,stdout:'codex-cli fixture'});process.argv[1]=fileURLToPath(new URL('./scripts/portable.ts',import.meta.url));await import('./scripts/portable.ts');`);
+    for(const mode of ['foreground','background'])for(const enabled of [false,true]){
+      const result=spawnSync(process.execPath,[join(root,'run.mjs'),'--no-browser','--'+mode,...(enabled?['--diagnostics']:[])],{encoding:'utf8',windowsHide:true,timeout:10000});
+      assert.equal(result.status,0,result.stderr);assert.deepEqual(JSON.parse(result.stdout.match(/FORWARD:(.*)/)![1]),[mode,true,enabled]);
+      assert.equal(await readFile(join(root,'.local/web/config.json'),'utf8'),config);
+    }
+    const existing=spawnSync(process.execPath,[join(root,'run.mjs'),'--no-browser','--diagnostics'],{env:{...process.env,FIXTURE_EXISTING:'1'},encoding:'utf8',windowsHide:true,timeout:10000});
+    assert.notEqual(existing.status,0);assert.doesNotMatch(existing.stdout,/FORWARD:/);
+  } finally {await rm(root,{recursive:true,force:true});}
 });
 
 test('background startup survives launcher exit, authenticates control, reuses and stops only its instance', { timeout: 45000 }, async () => {
@@ -34,7 +56,7 @@ test('background startup survives launcher exit, authenticates control, reuses a
     await mkdir(join(root,'scripts/windows'),{recursive:true});
     await copyFile(new URL('../scripts/windows/background-host.ps1',import.meta.url),join(root,'scripts/windows/background-host.ps1'));
     await writeFile(join(root,'.local/web/config.json'),JSON.stringify({origin:`http://localhost:${port}`}));
-    await writeFile(join(root,'src/server/main.ts'),`import {createServer} from 'node:http'; export async function startServer(){ const app=createServer((req,res)=>res.end('fixture')); await new Promise((resolve,reject)=>{app.once('error',reject);app.listen(${port},'127.0.0.1',resolve)}); return {close:()=>new Promise(resolve=>{app.closeAllConnections();app.close(resolve)})}; }`);
+    await writeFile(join(root,'src/server/main.ts'),`import {createServer} from 'node:http'; export async function startServer(diagnosticsEnabled=false){ const app=createServer((req,res)=>res.end(diagnosticsEnabled?'diagnostics':'fixture')); await new Promise((resolve,reject)=>{app.once('error',reject);app.listen(${port},'127.0.0.1',resolve)}); return {close:()=>new Promise(resolve=>{app.closeAllConnections();app.close(resolve)})}; }`);
     const starts=await Promise.all([run('--background'),run('--background')]);
     for(const start of starts) assert.equal(start.code,0,start.output);
     const state=JSON.parse(await readFile(join(root,'.local/web/server-control.json'),'utf8'));
@@ -50,6 +72,17 @@ test('background startup survives launcher exit, authenticates control, reuses a
     const status=await run('--status'); assert.match(status.output,/Running:/);
     const stop=await run('--stop'); assert.equal(stop.code,0,stop.output);
     await assert.rejects(fetch(`http://127.0.0.1:${port}`));
+    assert.equal((await run('--stop')).code,0);
+    const diagnosing=await run('--background','--diagnostics');assert.equal(diagnosing.code,0,diagnosing.output);
+    const diagnosticState=JSON.parse(await readFile(join(root,'.local/web/server-control.json'),'utf8'));assert.equal(diagnosticState.diagnosticsEnabled,true);
+    assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(),'diagnostics','flag reaches the detached server entry');
+    assert.match((await run('--status')).output,/diagnostics: on/);
+    assert.equal((await run('--stop')).code,0);
+    assert.equal((await run('--background')).code,0);
+    const normalState=JSON.parse(await readFile(join(root,'.local/web/server-control.json'),'utf8'));assert.equal(normalState.diagnosticsEnabled,false);
+    assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(),'fixture');
+    const upgrade=await run('--background','--diagnostics');assert.notEqual(upgrade.code,0);assert.match(upgrade.output,/restart/i);
+    assert.equal(JSON.parse(await readFile(join(root,'.local/web/server-control.json'),'utf8')).pid,normalState.pid,'diagnostics request must not restart existing service');
     assert.equal((await run('--stop')).code,0);
     await new Promise<void>(resolve=>occupied.listen(port,'127.0.0.1',resolve));
     const failed=await run('--background'); assert.notEqual(failed.code,0,failed.output); assert.equal(occupied.listening,true,'unrelated listener preserved');

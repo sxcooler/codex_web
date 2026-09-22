@@ -20,6 +20,23 @@ test('CMD launchers forward paths, arguments and exit codes with PowerShell 7 or
   } finally {await rm(root,{recursive:true,force:true});}
 });
 
+test('Windows launchers forward diagnostics through the real PS1 on PowerShell 7 and 5.1', {skip:process.platform!=='win32'}, async()=>{
+  const root=await mkdtemp(join(tmpdir(),'codex diagnostics entry '));
+  try {
+    for(const dir of ['scripts/windows','.local/web','dist'])await mkdir(join(root,dir),{recursive:true});
+    for(const ext of ['cmd','ps1'])await copyFile(new URL(`../scripts/windows/start-server.${ext}`,import.meta.url),join(root,`scripts/windows/start-server.${ext}`));
+    await writeFile(join(root,'scripts/windows/common.ps1'),`$projectRoot='${root.replaceAll("'","''")}'\n$nodePath='${process.execPath.replaceAll("'","''")}'\n$portableArgs=@()\n`);
+    await writeFile(join(root,'.local/web/auth.json'),'{}');await writeFile(join(root,'dist/index.html'),'fixture');
+    await writeFile(join(root,'scripts/server-control.ts'),`console.log('ARGS:'+JSON.stringify(process.argv.slice(2)));`);
+    for(const path of [process.env.PATH,join(process.env.SystemRoot!,'System32')])for(const flag of ['','--diagnostics','--unknown']){
+      const result=spawnSync(process.env.ComSpec!,['/d','/s','/c',`""${join(root,'scripts/windows/start-server.cmd')}" ${flag}"`],{cwd:tmpdir(),env:{...process.env,PATH:path},windowsVerbatimArguments:true,windowsHide:true,encoding:'utf8',input:'\n',timeout:15000});
+      if(flag==='--unknown'){assert.notEqual(result.status,0);assert.doesNotMatch(result.stdout,/ARGS:/);continue;}
+      assert.equal(result.status,0,result.stdout+result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout.match(/ARGS:(.*)/)![1]),['--background',...(flag?[flag]:[])]);
+    }
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
 test('Windows 5.1 preserves Unicode network config', {skip:process.platform!=='win32'}, async()=>{
   const root=await mkdtemp(join(tmpdir(),'codex ps51 '));
   const legacy=join(process.env.SystemRoot!,'System32/WindowsPowerShell/v1.0/powershell.exe');

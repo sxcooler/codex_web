@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const data = join(root, '.local', 'web');
 const record = join(data, 'server-control.json');
 const windows = process.platform === 'win32';
-type Instance = { token: string; port: number; pid: number; root: string; origin: string };
+type Instance = { token: string; port: number; pid: number; root: string; origin: string; diagnosticsEnabled?: boolean };
 
 // A private local control endpoint proves ownership without trusting a reusable PID.
 export async function managedServer(stop = false): Promise<Instance | null> {
@@ -40,13 +40,13 @@ export async function stopServer() {
   throw new Error('Shutdown is taking longer than expected; inspect server.log. No process was forcibly killed.');
 }
 
-export async function runServer(portable = false) {
+export async function runServer(portable = false, diagnosticsEnabled = false) {
   if (portable) for (const key of ['WEB_ORIGIN', 'PORT', 'WORK_ROOT', 'CODEX_BIN']) delete process.env[key];
   process.env.WEB_DATA_DIR = data;
   await mkdir(data, { recursive: true, mode: 0o700 });
   const config = JSON.parse(await readFile(join(data, 'config.json'), 'utf8').catch((error: any) => { if (error.code === 'ENOENT') return '{}'; throw error; }));
   const { startServer } = await import('../src/server/main.ts');
-  const app = await startServer(); // Returns only after this instance successfully binds its Web port.
+  const app = await startServer(diagnosticsEnabled); // Returns only after this instance successfully binds its Web port.
   const token = randomBytes(32).toString('hex');
   let state: Instance;
   let closing: Promise<void> | undefined;
@@ -67,7 +67,7 @@ export async function runServer(portable = false) {
   try {
     await new Promise<void>((resolve, reject) => { control.once('error', reject); control.listen(0, '127.0.0.1', resolve); });
     const address = control.address(); if (!address || typeof address === 'string') throw new Error('Control address unavailable');
-    state = { token, port: address.port, pid: process.pid, root, origin: process.env.WEB_ORIGIN ?? config.origin ?? 'http://localhost:3000' };
+    state = { token, port: address.port, pid: process.pid, root, origin: process.env.WEB_ORIGIN ?? config.origin ?? 'http://localhost:3000', diagnosticsEnabled };
     const temporary = record + '.' + token;
     await writeFile(temporary, JSON.stringify(state), { mode: 0o600, flag: 'wx' });
     await rename(temporary, record);
@@ -75,19 +75,23 @@ export async function runServer(portable = false) {
   } catch (error) { control.close(); await app.close(); throw error; }
 }
 
-export async function startBackground(portable = false) {
+export async function startBackground(portable = false, diagnosticsEnabled = false) {
   const existing = await managedServer();
-  if (existing) { process.stdout.write(`Already running: ${existing.origin}\n`); return existing; }
+  if (existing) {
+    if (diagnosticsEnabled && !existing.diagnosticsEnabled) throw new Error('Already running without diagnostics; stop and restart with --diagnostics to enable diagnostics.');
+    process.stdout.write(`Already running: ${existing.origin} (diagnostics: ${existing.diagnosticsEnabled?'on':'off'})\n`);
+    return existing;
+  }
   await mkdir(data, { recursive: true, mode: 0o700 });
   const logs = ['server.log', 'server-error.log'].map(name => join(data, name));
   // ponytail: Linux rotates on launch; use logrotate if uninterrupted runs need bounded logs.
   for (const log of logs) if ((await stat(log).catch(() => null))?.size! >= 1048576) await rename(log, log + '.1');
   const entry = fileURLToPath(import.meta.url);
-  const args = [entry, '--worker', ...(portable ? ['--portable'] : [])];
+  const args = [entry, '--worker', ...(portable ? ['--portable'] : []),...(diagnosticsEnabled?['--diagnostics']:[])];
   if (windows) {
     // Use the built-in shell to detach a hidden window; no PowerShell 7 dependency.
     const shell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
-    const result = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root,'scripts/windows/background-host.ps1'), '-NodePath', process.execPath, ...(portable ? ['-Portable'] : [])], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
+    const result = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root,'scripts/windows/background-host.ps1'), '-NodePath', process.execPath, ...(portable ? ['-Portable'] : []),...(diagnosticsEnabled?['-DiagnosticsEnabled']:[])], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
     if (result.error || result.status !== 0) throw new Error(`Background launch failed: ${result.stderr || result.error}`);
   } else {
     const out = await open(logs[0], 'a', 0o600), err = await open(logs[1], 'a', 0o600);
@@ -99,7 +103,11 @@ export async function startBackground(portable = false) {
   }
   for (let attempt = 0; attempt < 100; attempt++) {
     const current = await managedServer();
-    if (current) { process.stdout.write(`Running in background: ${current.origin}\nLogs: ${logs.join(', ')}\n`); return current; }
+    if (current) {
+      if (diagnosticsEnabled && !current.diagnosticsEnabled) throw new Error('Another instance started without diagnostics; stop and restart with --diagnostics.');
+      process.stdout.write(`Running in background: ${current.origin} (diagnostics: ${current.diagnosticsEnabled?'on':'off'})\nLogs: ${logs.join(', ')}\n`);
+      return current;
+    }
     await delay(100);
   }
   throw new Error(`Background server did not become ready. Check ${logs.join(' and ')}. Port may be occupied or configuration invalid.`);
@@ -107,10 +115,10 @@ export async function startBackground(portable = false) {
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.some(arg => !['--worker', '--portable', '--background', '--foreground', '--status', '--stop'].includes(arg))) throw new Error('Unknown server control argument');
+  if (args.some(arg => !['--worker', '--portable', '--background', '--foreground', '--status', '--stop','--diagnostics'].includes(arg))) throw new Error('Unknown server control argument');
   if (args.includes('--stop')) return stopServer();
-  if (args.includes('--status')) { const state = await managedServer(); process.stdout.write(state ? `Running: ${state.origin} (PID ${state.pid})\n` : 'No managed Codex Web server is running.\n'); return; }
-  if (args.includes('--worker') || args.includes('--foreground')) return runServer(args.includes('--portable'));
-  await startBackground(args.includes('--portable'));
+  if (args.includes('--status')) { const state = await managedServer(); process.stdout.write(state ? `Running: ${state.origin} (PID ${state.pid}, diagnostics: ${state.diagnosticsEnabled?'on':'off'})\n` : 'No managed Codex Web server is running.\n'); return; }
+  if (args.includes('--worker') || args.includes('--foreground')) return runServer(args.includes('--portable'),args.includes('--diagnostics'));
+  await startBackground(args.includes('--portable'),args.includes('--diagnostics'));
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(error.message); process.exitCode = 1; });

@@ -146,9 +146,9 @@ export async function launchPreference(config: { background?: boolean }, termina
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.some(arg => !['--no-browser', '--foreground', '--background', '--configure-startup', '--stop', '--status'].includes(arg)) || (args.includes('--foreground') && args.includes('--background')) || (args.includes('--stop') && args.includes('--status'))) throw new Error('支持 --no-browser / --foreground / --background / --configure-startup / --stop / --status。');
+  if (args.some(arg => !['--no-browser', '--foreground', '--background', '--configure-startup', '--stop', '--status', '--diagnostics'].includes(arg)) || (args.includes('--foreground') && args.includes('--background')) || (args.includes('--stop') && args.includes('--status'))) throw new Error('支持 --no-browser / --foreground / --background / --configure-startup / --stop / --status / --diagnostics。');
   if (args.includes('--stop')) return stopServer();
-  if (args.includes('--status')) { const state = await managedServer(); process.stdout.write(state ? `运行中：${state.origin}\n` : '没有由此入口管理的运行实例。\n'); return; }
+  if (args.includes('--status')) { const state = await managedServer(); process.stdout.write(state ? `运行中：${state.origin}（diagnostics: ${state.diagnosticsEnabled?'on':'off'}）\n` : '没有由此入口管理的运行实例。\n'); return; }
   if (args.includes('--configure-startup') && !process.stdin.isTTY) throw new Error('请在交互终端修改启动偏好。');
   const dataDir = join(root, '.local', 'web');
   const config = await loadPortableConfig(dataDir);
@@ -156,6 +156,7 @@ async function main() {
   if (!(await stat(config.workRoot).catch(() => null))?.isDirectory()) throw new Error('工作目录不存在，请检查 .local/web/config.json。');
   if (!(await stat(config.codexBin).catch(() => null))?.isFile()) throw new Error('Codex 路径不存在，请检查 .local/web/config.json。');
   const existing = await managedServer();
+  if (existing && args.includes('--diagnostics') && !existing.diagnosticsEnabled) throw new Error('服务正在运行但未开启诊断；请停止后带 --diagnostics 重新启动。');
   if (!existing && !await portAvailable(port)) throw new Error(`端口 ${port} 已占用，可能已经启动；打开 ${origin.origin}，或修改配置的 port 和 origin。`);
   if (!await exists(join(dataDir, 'auth.json'))) {
     process.stdout.write('请设置本机 Web 管理员密码（输入时不显示）。\n');
@@ -169,8 +170,8 @@ async function main() {
   }
   const background = args.includes('--background') || (!args.includes('--foreground') && await launchPreference(config));
   if (!existing) {
-    if (background) await startBackground(true);
-    else await runServer(true);
+    if (background) await startBackground(true,args.includes('--diagnostics'));
+    else await runServer(true,args.includes('--diagnostics'));
   }
   const url = existing?.origin ?? origin.origin;
   process.stdout.write(existing ? `服务已在运行：${url}\n` : `服务已启动：${url}\n${background?'启动窗口可以关闭；使用 Stop 入口停止。':'保持窗口打开；Ctrl+C 停止。'}\n`);
