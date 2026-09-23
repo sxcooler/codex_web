@@ -28,6 +28,7 @@ type ThreadState = {
   cwd?: string;
   diagnosticProjectKey?:string;
   model?: string;
+  reasoningEffort?: string | null;
   retry?: { turnId: string; message: string };
   releaseRequested?: boolean;
   releasePromise?: Promise<any>;
@@ -191,7 +192,7 @@ export class Runtime extends EventEmitter {
         if(!isObject(resumed?.thread))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread resume was not confirmed');
         if(resumed.thread.status?.type==='active')throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread is active in another client');
         state.loaded=true;state.released=false;state.handoffReady=false;state.externalWriter=false;
-        state.nativeStatus=resumed.thread.status;state.model=resumed.model;
+        state.nativeStatus=resumed.thread.status;state.model=resumed.model;state.reasoningEffort=resumed.reasoningEffort;
         state.permissions=this.verifyPermissions(resumed,policy,state.cwd!);
         state.error=undefined;state.recoverOnIdle=false;
       } catch(error){
@@ -249,6 +250,7 @@ export class Runtime extends EventEmitter {
       thread: window ? { ...mergedThread, turns: window.turns.map(browserTurn) } : mergedThread,
       ...(window ? { history: { nextCursor: window.nextCursor } } : {}),
       model: state.model ?? mergedThread.model ?? null,
+      reasoningEffort: state.reasoningEffort !== undefined ? state.reasoningEffort : mergedThread.reasoningEffort ?? null,
       phase: this.phase(state),
       activeTurnId: state.activeTurnId,
       pending: [...state.pending.values()].map(({ requestId, method, params }) => ({ requestId, method, params: structuredClone(params) })),
@@ -445,6 +447,7 @@ export class Runtime extends EventEmitter {
         state.selectedPermissionMode = input.permissionMode;
         state.cwd = input.cwd;
         state.model = result.model;
+        state.reasoningEffort = result.reasoningEffort;
         this.change(threadId, 'thread', { thread: this.threadHeader(result.thread) });
         await this.validateTurnOptions(input, input.cwd, state.model);
         if (!input.prompt && !input.nativeInput?.length) return { threadId, status: 'idle' };
@@ -498,6 +501,7 @@ export class Runtime extends EventEmitter {
           const resumed = await this.mutation<any>('thread/resume', { threadId, excludeTurns: true, ...(policy ? threadPermissionOptions(policy) : {}) });
           state.permissions = this.verifyPermissions(resumed, policy, state.cwd!);
           state.model = resumed.model;
+          state.reasoningEffort = resumed.reasoningEffort;
           if (resumed?.thread?.status?.type === 'active') throw runtimeError(409, 'RUNTIME_THREAD_CONFLICT', 'Thread is active in another client; release it there before continuing');
           state.loaded = true;
           state.released = false;
@@ -726,9 +730,11 @@ export class Runtime extends EventEmitter {
     });
     state.permissions = structuredClone(policy);
     if (input.permissionMode !== undefined) state.selectedPermissionMode = input.permissionMode;
-    state.model = input.model ?? state.model;
     const turnId = result?.turn?.id;
     if (typeof turnId !== 'string') throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn start returned an invalid result');
+    // A model-only change does not confirm which effort the new model resolved.
+    if (input.effort !== undefined || (input.model && input.model !== state.model)) state.reasoningEffort = input.effort ?? null;
+    state.model = input.model ?? state.model;
     this.mergeLiveTurn(state, result.turn);
     if (!state.completedTurns.has(turnId) && result.turn.status === 'inProgress') state.activeTurnId ??= turnId;
     state.reserved = false;
@@ -768,12 +774,14 @@ export class Runtime extends EventEmitter {
     this.requireString(cwd, 'cwd');
     const [read, requirements] = await Promise.all([this.call<any>('config/read', { cwd, includeLayers: false }), this.call<any>('configRequirements/read', {})]);
     if (!isObject(read?.config) || !isObject(requirements) || !hasOwn(requirements, 'requirements')) throw runtimeError(503, 'RUNTIME_PERMISSION_UNAVAILABLE', 'Native permission configuration is unavailable');
-    return permissionChoices(cwd, read.config, requirements.requirements, this.initializeInfo?.platformFamily);
+    return { ...permissionChoices(cwd, read.config, requirements.requirements, this.initializeInfo?.platformFamily),
+      model: typeof read.config.model === 'string' ? read.config.model : null,
+      effort: typeof read.config.model_reasoning_effort === 'string' ? read.config.model_reasoning_effort : null };
   }
 
   async permissionModes(cwd: string) {
-    const { modes, current } = await this.permissionCatalog(cwd);
-    return { modes, current };
+    const { modes, current, model, effort } = await this.permissionCatalog(cwd);
+    return { modes, current, model, effort };
   }
 
   private async resolvePermissions(mode: PermissionMode | undefined, cwd: string, previous?: PermissionPolicy): Promise<PermissionPolicy | undefined> {
@@ -1372,7 +1380,7 @@ export class Runtime extends EventEmitter {
     if (state.syncHeader && patch.thread) Object.assign(state.syncHeader, structuredClone(patch.thread));
     if (state.syncTurns && patch.turn?.status) state.syncTurns.set(patch.turn.id, this.turnSignature(patch.turn));
     if (state.syncHeader && state.syncTurns && (patch.thread || patch.turn?.status)) this.cacheSync(threadId, state);
-    const metadata = { phase: this.phase(state), activeTurnId: state.activeTurnId, pending: [...state.pending.values()].map(({requestId, method, params}) => ({requestId, method, params})), error: state.error ?? null, permissions: state.permissions ?? null, retry: state.retry ?? null, release: this.releaseState(state), model: state.model ?? null, unmaterialized: state.emptyThreadEpoch === this.epoch };
+    const metadata = { phase: this.phase(state), activeTurnId: state.activeTurnId, pending: [...state.pending.values()].map(({requestId, method, params}) => ({requestId, method, params})), error: state.error ?? null, permissions: state.permissions ?? null, retry: state.retry ?? null, release: this.releaseState(state), model: state.model ?? null, ...(state.reasoningEffort !== undefined ? {reasoningEffort:state.reasoningEffort} : {}), unmaterialized: state.emptyThreadEpoch === this.epoch };
     let change: Change = structuredClone({ id: `${this.epoch}:${sequence}`, threadId, kind, revision: state.revision, patch: { state: metadata, ...patch } });
     this.emit('snapshotChange', change);
     // Keep authoritative snapshot merges complete; only the browser journal is projected.

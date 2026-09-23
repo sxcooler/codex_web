@@ -628,6 +628,31 @@ test('permission presets and custom explicitly replace previous effective polici
   assert.equal((await runtime.snapshot(threadId)).thread.name, 'Renamed');
 });
 
+test('permission catalog exposes only native model and effort defaults for the requested cwd',async t=>{
+  const runtime=start(t),calls:any[]=[];
+  t.mock.method(runtime as any,'call',async(method:string,params:any)=>{
+    calls.push({method,params});
+    return method==='config/read'?{config:{model:'native-model',model_reasoning_effort:'high',secret:'not-for-browser'}}:{requirements:null};
+  });
+  const result=await runtime.permissionModes(cwd);
+  assert.equal(result.model,'native-model');assert.equal(result.effort,'high');
+  assert.deepEqual(Object.keys(result).sort(),['current','effort','model','modes']);
+  assert.deepEqual(calls,[{method:'config/read',params:{cwd,includeLayers:false}},{method:'configRequirements/read',params:{}}]);
+});
+
+test('confirmed turn options reach snapshots and incremental state even when history headers lag',async t=>{
+  const runtime=start(t),changes:any[]=[];
+  runtime.on('change',event=>changes.push(event));
+  const {threadId}=await runtime.create({cwd,clientRequestId:'remember-create',permissionMode:'ask'});
+  await runtime.send(threadId,{text:'early-complete',clientRequestId:'remember-send',model:'actual-text',effort:'low',permissionMode:'auto-review'});
+  const snapshot=await runtime.snapshot(threadId);
+  assert.equal(snapshot.model,'actual-text');assert.equal(snapshot.reasoningEffort,'low');
+  assert.equal(changes.at(-1).patch.state.reasoningEffort,'low');
+  await runtime.send(threadId,{text:'early-complete',clientRequestId:'remember-model-only',model:'fixture'});
+  assert.equal((await runtime.snapshot(threadId)).reasoningEffort,null,'changing model without effort must not advertise the previous effort as confirmed');
+  assert.equal(changes.at(-1).patch.state.reasoningEffort,null);
+});
+
 test('managed requirements disable incompatible presets and block writes', async (t) => {
   const runtime = start(t, 60_000, 'managed');
   const modes = await runtime.permissionModes(cwd);

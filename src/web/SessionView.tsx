@@ -6,6 +6,7 @@ import {drafts} from './drafts.ts';
 import {cancelReleaseOnReturn} from './handoff.ts';
 import {Attachments,type Attachment} from './Attachments.tsx';
 import {TurnOptions,type TurnSettings} from './TurnOptions.tsx';
+import {rememberTurnSettings} from './turnSettings.ts';
 import {PaneSeparator,PaneToolbar,usePanes} from './PaneLayout.tsx';
 import {Message,Pending,TurnMessages} from './Conversation.tsx';
 import {GitPanel} from './GitPanel.tsx';
@@ -40,7 +41,7 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
   useEffect(()=>{panes.setRightAvailable(!!snapshot?.project);return()=>panes.setRightAvailable(false);},[snapshot?.project?.id,panes.setRightAvailable]);
   useEffect(()=>{
     mounted.current=true;let disposed=false,entryReady=false,inflight=false,paused=false,lastEvent=Date.now(),lastPhase='',baseline:Json|null=null,source:EventSource|undefined,controller:AbortController|undefined,statusController:AbortController|undefined,historyController:AbortController|undefined,timer:ReturnType<typeof setTimeout>|undefined;
-    const accept=(next:Json)=>{baseline=next;setSnapshot(next);updateOutgoing(messages=>reconcileMessages(messages,(next.thread?.turns??[]).flatMap((turn:Json)=>turn.items??[])),false);if(next.phase!==lastPhase&&['IDLE','RELEASED'].includes(next.phase)){setGitTick(n=>n+1);if(lastPhase)void onChanged();}lastPhase=next.phase;};
+    const accept=(next:Json)=>{baseline=next;setSnapshot(next);rememberTurnSettings(next);updateOutgoing(messages=>reconcileMessages(messages,(next.thread?.turns??[]).flatMap((turn:Json)=>turn.items??[])),false);if(next.phase!==lastPhase&&['IDLE','RELEASED'].includes(next.phase)){setGitTick(n=>n+1);if(lastPhase)void onChanged();}lastPhase=next.phase;};
     const disconnect=()=>{source?.close();source=undefined;};
     const schedule=()=>{disconnect();if(!disposed&&!paused&&!timer)timer=setTimeout(()=>{timer=undefined;void load();},200);};
     const connect=()=>{
@@ -154,7 +155,7 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
       {collapsed?<div className="composer-actions">{stopButton}{sendButton}<button ref={expandButton} type="button" className="quiet composer-expand" aria-label="展开输入" title="展开附件和输入设置" aria-expanded={!collapsed} aria-controls={composerId+' '+composerId+'-options'} onClick={()=>setCollapsed(false)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg></button></div>:null}
       </div>
       <div id={composerId+'-options'} hidden={collapsed}>
-      <TurnOptions value={settings} onChange={next=>{setSettings(next);saveDraft(draft,next);}} onError={setOptionsError} projectId={snapshot?.project?.id} permissions={['RELEASED','EXTERNAL','UNKNOWN'].includes(phase)||snapshot?.thread?.status?.type==='notLoaded'?undefined:snapshot?.permissions} effectiveModel={snapshot?.thread?.model??snapshot?.model??null} effectiveEffort={snapshot?.thread?.reasoningEffort??null} disabled={busy||active} hidden={collapsed}/>
+      <TurnOptions value={settings} onChange={next=>{setSettings(next);saveDraft(draft,next);}} onError={setOptionsError} projectId={snapshot?.project?.id} permissions={['RELEASED','EXTERNAL','UNKNOWN'].includes(phase)||snapshot?.thread?.status?.type==='notLoaded'?undefined:snapshot?.permissions} effectiveModel={snapshot?.model??snapshot?.thread?.model??null} effectiveEffort={snapshot?.reasoningEffort!==undefined?snapshot.reasoningEffort:snapshot?.thread?.reasoningEffort??null} disabled={busy||active} hidden={collapsed}/>
       {uncertain&&!outgoing.some(m=>m.status==='unknown')?<div className="notice">提交结果待核实，请先检查历史。<button type="button" onClick={()=>{setUncertain(false);saveDraft(draft,settings,attachments,false);}}>已核对历史，允许再次提交</button></div>:null}
       <div className="composer-bottom"><span className="muted small">{canSteer?(panes.mobile?'回车换行 · 点击插话 · 沿用本轮模型和权限':'Enter 插话 · 沿用本轮模型和权限'):canSend?(panes.mobile?'回车换行 · 点击发送':'Enter 发送 · Shift+Enter 换行'):active?'任务进行中':'正在核对会话状态'}</span><div className="composer-actions">{!collapsed?<>{stopButton}{sendButton}</>:null}</div></div>
       </div>
