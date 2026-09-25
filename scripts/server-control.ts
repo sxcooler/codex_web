@@ -59,7 +59,8 @@ export async function runServer(portable = false, diagnosticsEnabled = false) {
   })();
   const control = createServer((req, res) => {
     if (req.headers.origin || req.headers.authorization !== `Bearer ${token}`) { res.writeHead(403).end(); return; }
-    if (!((req.method === 'GET' && req.url === '/status') || (req.method === 'POST' && req.url === '/stop'))) { res.writeHead(404).end(); return; }
+    if (!((req.method === 'GET' && req.url === '/status') || (req.method === 'POST' && ['/stop','/prepare-update'].includes(req.url??'')))) { res.writeHead(404).end(); return; }
+    if(req.url==='/prepare-update'){try{if(typeof (app as any).prepareUpdate!=='function')throw Error('Update preparation unavailable');(app as any).prepareUpdate();}catch{res.writeHead(409).end();return;}}
     res.setHeader('Content-Type', 'application/json'); res.setHeader('Connection', 'close');
     res.end(JSON.stringify(state));
     if (req.url === '/stop') res.on('finish', () => { void shutdown().catch(error => { console.error(error); process.exitCode = 1; }); });
@@ -115,6 +116,11 @@ export async function startBackground(portable = false, diagnosticsEnabled = fal
 
 async function main() {
   const args = process.argv.slice(2);
+  if(!args.includes('--stop')&&!args.includes('--status')){
+    const lock=await readFile(join(root,'.local/update-lock.json'),'utf8').catch((e:any)=>{if(e.code==='ENOENT')return '';throw e;});
+    const pending=await stat(join(root,'.local/updates/pending.json')).then(()=>true,(e:any)=>{if(e.code==='ENOENT')return false;throw e;});
+    if((lock||pending)&&(!lock||JSON.parse(lock).token!==process.env.CODEX_WEB_UPDATE_TOKEN))throw Error('Application update in progress or interrupted; run Update --recover.');
+  }
   if (args.some(arg => !['--worker', '--portable', '--background', '--foreground', '--status', '--stop','--diagnostics'].includes(arg))) throw new Error('Unknown server control argument');
   if (args.includes('--stop')) return stopServer();
   if (args.includes('--status')) { const state = await managedServer(); process.stdout.write(state ? `Running: ${state.origin} (PID ${state.pid}, diagnostics: ${state.diagnosticsEnabled?'on':'off'})\n` : 'No managed Codex Web server is running.\n'); return; }

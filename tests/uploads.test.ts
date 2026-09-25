@@ -9,6 +9,21 @@ import { createUploadService, registerUploadRoutes } from '../src/server/uploads
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 
+test('default upload limits accept five 15 MiB files and reject larger files or a sixth attachment',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'uploads-defaults-'));
+  const service=await createUploadService({dataDir:dir});
+  try{
+    const data=Buffer.alloc(15*1024*1024,65);
+    const inputs=Array.from({length:5},(_,i)=>({name:`${i}.txt`,mime:'text/plain',data}));
+    await assert.rejects(service.store('owner',{...inputs[0],data:Buffer.alloc(data.length+1,65)}),/15728640 bytes/);
+    await assert.rejects(service.storeMany('owner',[...inputs,inputs[0]]),/5 files/);
+    const uploaded=await service.storeMany('owner',inputs);
+    assert.equal(uploaded.reduce((sum,item)=>sum+item.size,0),75*1024*1024);
+    const claimed=await service.claim('owner',null,'default-limits',uploaded.map(item=>item.uploadId));
+    assert.equal(claimed.inputs.length,5);
+  }finally{service.close();await rm(dir,{recursive:true,force:true});}
+});
+
 test('multipart rejects a truncated file and rolls back the entire batch', async () => {
   const dir=await mkdtemp(join(tmpdir(),'uploads-route-'));
   const service=await createUploadService({dataDir:dir,maxFileBytes:4,quotaBytes:8});

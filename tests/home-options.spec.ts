@@ -21,21 +21,33 @@ test('home reuses confirmed native session options across reload without resumin
   });
   const model=page.getByRole('combobox',{name:'模型',exact:true}),effort=page.getByRole('combobox',{name:'推理强度'});
   await page.goto('/');
+  await expect(page).toHaveTitle('Codex Web');
   await expect(model.locator('option:checked')).toHaveText('model-a（配置）');
   await expect(effort.locator('option:checked')).toHaveText('low（配置）');
   await page.locator('.creation-fields').getByRole('combobox',{name:'项目',exact:true}).selectOption('p');
   await expect(effort.locator('option:checked')).toHaveText('high（配置）');
   expect(opened).toEqual([]);
   await page.getByRole('button',{name:'已有会话',exact:true}).click();
+  await expect(page).toHaveTitle('已有会话 - Codex Web');
+  for(const last of ['👨‍👩‍👧‍👦','e\u0301']){
+    const prefix='一二三四五六七八九十甲'+last;
+    for(const tail of ['','后续内容']){
+      snapshot={...snapshot,thread:{...snapshot.thread,name:prefix+tail}};
+      await page.getByRole('button',{name:'操作',exact:true}).click();
+      await page.getByRole('button',{name:'刷新当前会话'}).click();
+      await expect(page).toHaveTitle(prefix+tail+' - Codex Web');
+    }
+  }
   await expect(model.locator('option:checked')).toHaveText('model-b（当前）');
   await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('codex-web:turn-settings:v1')??'{}'))).toEqual({model:'model-b',effort:'high',permissionMode:'auto-review'});
   // An unsent override must not become the next task's preference.
   await model.selectOption('model-a');
   await page.getByRole('button',{name:'＋ 新任务',exact:true}).click();
+  await expect(page).toHaveTitle('Codex Web');
   await expect(model).toHaveValue('model-b');await expect(effort).toHaveValue('high');
   await expect(page.getByRole('button',{name:/审批方式：帮我批准/})).toBeVisible();
   await page.reload();await expect(model).toHaveValue('model-b');await expect(effort).toHaveValue('high');
-  expect(opened).toEqual(['/api/sessions/old/open']);
+  expect(opened).toEqual(Array(5).fill('/api/sessions/old/open'));
   await page.screenshot({path:'output/playwright/home-options-desktop.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

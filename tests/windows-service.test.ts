@@ -8,14 +8,24 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-test('Windows 5.1 user startup is hidden and migrates or removes only this workspace', {skip:process.platform!=='win32'},async()=>{
+test('Windows startup is branded, forwards launch and migrates only this workspace on PowerShell 5.1 and 7', {skip:process.platform!=='win32'},async()=>{
  const root=await mkdtemp(join(tmpdir(),'codex logon '));
  try {
   await mkdir(join(root,'scripts/windows'),{recursive:true});
   await copyFile(new URL('../scripts/windows/install-startup.ps1',import.meta.url),join(root,'scripts/windows/install-startup.ps1'));
-  await writeFile(join(root,'check.ps1'),"\n$ErrorActionPreference='Stop'\n$state=@{Value=$null;Task=$null;Deleted=$false}\nfunction Get-ItemProperty { [pscustomobject]@{ $name=$state.Value } }\nfunction New-Item { }\nfunction New-ItemProperty { param($LiteralPath,$Name,$Value,$PropertyType,[switch]$Force) $state.Value=$Value }\nfunction Remove-ItemProperty { $state.Value=$null }\nfunction Get-ScheduledTask { $state.Task }\nfunction Unregister-ScheduledTask { param($TaskName,[switch]$Confirm) $state.Deleted=$true; $state.Task=$null }\n$installer=Join-Path $PSScriptRoot 'scripts/windows/install-startup.ps1'\n& $installer\n$expected=$state.Value\nif($expected -notlike '*System32\\WindowsPowerShell\\v1.0\\powershell.exe*' -or $expected -notlike '*-WindowStyle Hidden*-Background') {throw 'Expected hidden built-in shell startup'}\n$script=Join-Path $PSScriptRoot 'scripts/windows/start-server.ps1'\n$state.Task=[pscustomobject]@{Actions=@([pscustomobject]@{Arguments=\"-File `\"$script`\"\"})}\n& $installer\nif(-not $state.Deleted){throw 'Legacy task not migrated'}\n& $installer -Remove\nif($state.Value){throw 'Startup not removed'}\n$state.Value='unrelated command'\n$rejected=$false\ntry{ & $installer }catch{$rejected=$true}\nif(-not $rejected -or $state.Value -ne 'unrelated command'){throw 'Unrelated startup overwritten'}\n$state.Value=$null\n$state.Task=[pscustomobject]@{Actions=@([pscustomobject]@{Arguments='-File unrelated.ps1'})}\n$rejected=$false\ntry{ & $installer }catch{$rejected=$true}\nif(-not $rejected -or $state.Value){throw 'Unrelated task changed'}\n");
-  const result=spawnSync(join(process.env.SystemRoot!,'System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-ExecutionPolicy','Bypass','-File',join(root,'check.ps1')],{encoding:'utf8',windowsHide:true,timeout:15000});
-  assert.equal(result.status,0,result.stdout+result.stderr||String(result.error));
+  for(const name of ['startup-launcher.cs','codex-web.ico'])await copyFile(new URL('../scripts/windows/'+name,import.meta.url),join(root,'scripts/windows',name));
+  await writeFile(join(root,'check.ps1'),"\n$ErrorActionPreference='Stop'\n$state=@{Value=$null;Task=$null;Deleted=$false}\nfunction Get-ItemProperty { [pscustomobject]@{ $name=$state.Value } }\nfunction New-Item { }\nfunction New-ItemProperty { param($LiteralPath,$Name,$Value,$PropertyType,[switch]$Force) $state.Value=$Value }\nfunction Remove-ItemProperty { $state.Value=$null }\nfunction Get-ScheduledTask { $state.Task }\nfunction Unregister-ScheduledTask { param($TaskName,[switch]$Confirm) $state.Deleted=$true; $state.Task=$null }\n$installer=Join-Path $PSScriptRoot 'scripts/windows/install-startup.ps1'\n& $installer\n$expected=$state.Value\nif($expected -notlike '*codex_web.exe*') {throw 'Expected branded startup executable'}\n$script=Join-Path $PSScriptRoot 'scripts/windows/start-server.ps1'\n$state.Task=[pscustomobject]@{Actions=@([pscustomobject]@{Arguments=\"-File `\"$script`\"\"})}\n& $installer\nif(-not $state.Deleted){throw 'Legacy task not migrated'}\n& $installer -Remove\nif($state.Value){throw 'Startup not removed'}\n$state.Value='unrelated command'\n$rejected=$false\ntry{ & $installer }catch{$rejected=$true}\nif(-not $rejected -or $state.Value -ne 'unrelated command'){throw 'Unrelated startup overwritten'}\n$state.Value=$null\n$state.Task=[pscustomobject]@{Actions=@([pscustomobject]@{Arguments='-File unrelated.ps1'})}\n$rejected=$false\ntry{ & $installer }catch{$rejected=$true}\nif(-not $rejected -or $state.Value){throw 'Unrelated task changed'}\n");
+  for(const shell of [join(process.env.SystemRoot!,'System32/WindowsPowerShell/v1.0/powershell.exe'),'pwsh.exe']){
+   const result=spawnSync(shell,['-NoProfile','-ExecutionPolicy','Bypass','-File',join(root,'check.ps1')],{encoding:'utf8',windowsHide:true,timeout:15000});
+   assert.equal(result.status,0,result.stdout+result.stderr||String(result.error));
+  }
+  await writeFile(join(root,'scripts/windows/start-server.ps1'),"param([switch]$Background)\nif(-not $Background){exit 9}\nSet-Content -LiteralPath (Join-Path $PSScriptRoot '../../launched.txt') -Value 'launched'\nexit 23\n");
+  const launcher=join(root,'.local/startup/codex_web.exe');
+  assert.equal(spawnSync(launcher,[],{windowsHide:true,timeout:10000}).status,23);
+  assert.equal((await readFile(join(root,'launched.txt'),'utf8')).trim(),'launched');
+  await writeFile(join(root,'metadata.ps1'),"$path=Join-Path $PSScriptRoot '.local/startup/codex_web.exe'\nif([Diagnostics.FileVersionInfo]::GetVersionInfo($path).FileDescription -ne 'codex_web'){throw 'Missing description'}\nAdd-Type -AssemblyName System.Drawing\n$icon=[Drawing.Icon]::ExtractAssociatedIcon($path)\nif(-not $icon){throw 'Missing icon'}\n$icon.Dispose()\n");
+  const metadata=spawnSync('pwsh.exe',['-NoProfile','-File',join(root,'metadata.ps1')],{encoding:'utf8',windowsHide:true,timeout:10000});
+  assert.equal(metadata.status,0,metadata.stdout+metadata.stderr);
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
@@ -66,7 +76,7 @@ test('Windows stop script never terminates unmanaged servers or unrelated Node p
     const repeated = spawnSync('pwsh.exe', ['-NoProfile', '-File', harness], { encoding: 'utf8', timeout: 10_000, windowsHide: true });
     assert.equal(repeated.status, 0, repeated.stderr);
   } finally {
-    for (const pid of pids) if (alive(pid)) process.kill(pid);
+    for (const pid of pids) try { process.kill(pid); } catch (error:any) { if(error.code!=='ESRCH')throw error; }
     await rm(root, { recursive: true, force: true });
   }
 });

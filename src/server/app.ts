@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import packageInfo from '../../package.json' with { type: 'json' };
 
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
@@ -217,8 +218,8 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     },
   );
 
-  app.get('/api/settings', async request => ({ origin: requestOrigin(request).origin, nodeVersion: process.version,
-    workRoot: options.projects?.root, runtime: options.runtime ? await options.runtime.diagnostics() : undefined }));
+  app.get('/api/settings', async request => ({ origin: requestOrigin(request).origin, appVersion: packageInfo.version, nodeVersion: process.version,
+    workRoot: options.projects?.root, runtime: options.runtime ? await options.runtime.diagnostics() : undefined,modelSource:options.runtime?.modelInfo?.() }));
   try {
   if (options.runtime && options.projects) {
     const uploads = await createUploadService({dataDir:options.dataDir});

@@ -51,6 +51,28 @@ CLI 安装与账户登录分开；安装成功不表示已登录，按官方登�
 
 完整数据备份与迁移见 [部署指南](deployment.md#备份升级与回滚)。分享给别人时发送原始发布压缩包，**不要重新压缩已经使用过的目录**。
 
+**0.1.6 增量包适用范围：仅官方 0.1.5 同平台完整便携包，且 Node / node_modules 未修改。0.1.4 及更早版本不适用，请下载 0.1.6 完整包迁移。开发源码目录、跨平台安装和自建依赖不适用；最终仍以更新器的运行环境指纹及文件校验为准。**
+
+新发布流程额外生成 `codex-web-版本-win-x64-update.zip` / `codex-web-版本-linux-x64-update.zip` 应用更新包。它们不包含 Node、node_modules 和用户数据；下载对应平台的更新包及发布页 SHA256 后，在安装目录运行：
+
+应用更新需要安装目录所在文件系统支持硬链接（如 Windows NTFS、Linux ext4），用于原子创建更新锁。FAT32/exFAT 等不支持时会在修改应用前拒绝，请使用完整包迁移；完整包的启动不受此限制。
+
+```powershell
+.\Update.cmd C:\Downloads\codex-web-版本-win-x64-update.zip 发布页中的64位SHA256
+```
+
+```sh
+bash Update.sh /path/to/codex-web-版本-linux-x64-update.zip 发布页中的64位SHA256
+```
+
+运行环境不兼容或安装文件被修改时拒绝更新，改用完整包迁移。更新前结束活动任务与待处理交互；更新器验证当前实例后正常停止，更新应用文件、清除旧版已淘汰文件并验证启动，保留更新前的运行/停止状态。`.local` 和外部项目不覆盖，自启动根目录不移动。更新备份保留在 `.local/updates/backup-*`；只备份应用文件，不等于完整用户数据备份。
+
+中断后再次启动会提示恢复，执行 `Update.cmd --recover` / `bash Update.sh --recover`。恢复会保留备份；不要手动删除 `pending.json` 或更新锁来跳过恢复。启动失败会尝试恢复旧应用；恢复失败保留记录并报错，不谎报成功。数据格式迁移不兼容的版本应使用完整包和单独备份方案。
+
+若中断同时损坏了 Update 入口或应用脚本，在安装目录执行 `runtime\node.exe .local\updates\recover.mjs`（Windows）或 `runtime/node .local/updates/recover.mjs`（Linux）。该入口和它引用的恢复代码在修改应用前保存在保留区，不依赖正在被替换的脚本。最终更新记录写入失败时也会保留 pending；先执行恢复，再启动服务。
+
+0.1.5 没有 Update 入口：先将应用更新 ZIP 解压到安装目录以外的新目录，用旧包的 `runtime/node.exe`（Linux 为 `runtime/node`）运行其中 `scripts/update-portable.ts 更新ZIP SHA256 --root 旧安装目录`。旧服务不支持安全更新准备接口，需要先确认无活动任务并通过旧 Stop 入口停止。指纹相同时无需重新下载运行环境。不要将更新 ZIP 直接覆盖解压到安装目录。
+
 ## 构建
 
 在对应平台原生构建，不交叉复制依赖。共同需要 Node >=24.20.0、npm 和 Git；Windows 构建需要 PowerShell 7，Linux x64 glibc 构建需要 Bash、curl、tar/xz 和 Python 3（用于通用源码 ZIP）。在普通用户下运行：
@@ -94,3 +116,5 @@ PORTABLE_TEST_DIR=/tmp/fresh-release PORTABLE_TEST_CODEX="$HOME/.local/bin/codex
 ```
 
 Linux 检查直接运行包内 `Start.sh`，验证启动脚本在含空格的解压路径下可用，并在检查结束时停止服务。
+
+设置 `PORTABLE_TEST_UPDATE` 为对应应用更新 ZIP 的绝对路径，可在同一检查中追加已运行实例的升级、重启与配置/认证数据保留验证。

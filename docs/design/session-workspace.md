@@ -305,7 +305,7 @@ Git 仍用参数数组、`--no-ext-diff --no-textconv --no-color -- <path>`，�
 
 输入框附件支持选择、拖放、粘贴图片；附件列表展示缩略图/文件名/大小、上传中/失败/就绪，失败单独重试。所有附件就绪才允许发送。移除仅撤销草稿引用，不删除已经发送的历史资源。
 
-`POST /api/uploads` 使用 multipart，返回 `{uploadId,name,mime,size,kind:'file'|'image'}`；初始限制：每文件 10MiB、每消息最多 5 个、单次合计 25MiB、私有附件总量 1GiB。流式写入临时文件并计算 SHA-256，成功后原子改名；文件名用随机 ID，用户文件名只作显示。验证扩展名、MIME 与 magic bytes；首版图片仅 PNG/JPEG/WebP，拒绝 SVG/HTML/可执行文件与压缩包。图片解码后像素上限 40MP，拒绝解码炸弹。
+`POST /api/uploads` 使用 multipart，返回 `{uploadId,name,mime,size,kind:'file'|'image'}`；限制：每文件 15MiB、每消息最多 5 个、单次合计 75MiB、私有附件总量 1GiB。流式写入临时文件并计算 SHA-256，成功后原子改名；文件名用随机 ID，用户文件名只作显示。验证扩展名、MIME 与 magic bytes；首版图片仅 PNG/JPEG/WebP，拒绝 SVG/HTML/可执行文件与压缩包。图片解码后像素上限 40MP，拒绝解码炸弹。
 
 消息 POST 增加 `attachmentIds:string[]`。后端验证登录所有者/草稿关系、资源存在、限额与模型 inputModalities，不能接受客户端自带磁盘路径。图片转为官方 `localImage`（后端绝对路径）；普通文件在当前 UserInput 没有通用 file 类型，使用文本片段告诉 Codex 原文件名和受控保存路径，让原生工具按任务读取。不能虚构 `type:'file'`，也不自动把二进制嵌进 prompt。
 
@@ -377,9 +377,9 @@ SQLite `uploads(id PRIMARY KEY, original_name, mime, size, sha256, relative_path
 
 当时未重启当前对话/生产服务，未更改全局 Codex 配置、原生历史或他方锁；开发结果合入 develop，master 保留基线，实施提交 squash 为一个中文提交并保留原信息。实际测试数和真实/模拟边界集中见第二阶段验收，不将计划复选框视为设备验收证据。
 
-## 待实施：Codex 提问的可点选回答
+## Codex 提问的可点选回答
 
-2026-09-22 用户反馈：部分 Codex 提问只渲染问题和选项文字，不能点击选项回答。后续核实同步/异步提问通知及原生 pending request 的映射，复用现有交互回答接口，支持选项点选和自由输入、提交中/已回答/过期状态；不能靠解析普通 Markdown 列表伪造可提交的提问。本次只记录需求，尚未实施。
+2026-09-22 用户反馈：部分 Codex 提问只渲染问题和选项文字，不能点击选项回答。2026-09-23 已核实原生异步消息携带 `delivery: async` 和 `questions`，按[提问与更新方案](portable-updates-and-input.md)实施。同步请求仍用原生回答接口；异步问题复用消息/插话，普通 Markdown 列表不伪造可提交的提问。
 
 ## 状态同步的补充边界
 

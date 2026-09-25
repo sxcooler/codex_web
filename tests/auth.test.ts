@@ -189,7 +189,8 @@ test('session bootstrap and login enforce Host, Origin, CSRF, schemas, and stric
 
       const settings = await app.inject({ url: '/api/settings', headers: { host: HOST, cookie: authenticated.authCookie } });
       assert.equal(settings.statusCode, 200);
-      assert.deepEqual(settings.json(), { origin: ORIGIN, nodeVersion: process.version });
+      const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+      assert.deepEqual(settings.json(), { origin: ORIGIN, appVersion: version, nodeVersion: process.version });
       assert.equal(settings.headers['cache-control'], 'no-store');
     } finally {
       await app.close();

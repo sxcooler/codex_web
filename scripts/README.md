@@ -15,6 +15,8 @@ CMD 只负责选择已有 PowerShell 7 或系统内置 5.1、转交参数及显�
 
 Windows 使用 HKCU Run 当前用户启动项，不安装服务、不需要 PowerShell 7；Linux 使用用户级 systemd，也支持前台运行和 `start-server.sh --background`。前置配置、日志、停用自启及升级步骤见 [部署指南](../docs/guides/deployment.md)。旧版 Windows 用户升级后重新运行 `windows/install-startup.ps1`，迁移本项目旧计划任务到用户启动项。
 
+Windows 安装自启时使用系统自带 .NET 编译器生成 `.local/startup/codex_web.exe`，包含应用名称和图标；已有 PowerShell 启动项重新安装即可迁移，保留相同注册表项的启用状态。`update-portable.ts` 与便携包 Update 入口负责应用更新，命令、兼容条件和中断恢复见[便携包指南](../docs/guides/portable.md#数据与升级)。
+
 诊断默认关闭；排查无响应时，在启动命令后加 `--diagnostics`（如 `windows/start-server.cmd --diagnostics` 或 `npm start -- --diagnostics`）。只影响本次启动，不写入启动偏好；现有实例需先停止，再带参数启动。便携包 `Start.cmd` / `Start.sh` 同样支持，详见[无响应诊断](../docs/design/runtime-diagnostics.md)。
 
 根目录的 TypeScript 文件保留为 npm 命令入口，包括密码设置、协议生成、探测和打包工具；不改变现有 npm 命令。`npm run package:portable` 在 Windows x64 / Linux x64 glibc 上分别生成对应平台的便携包，共用 `scripts/portable.ts` 配置流程。详见 [便携包指南](../docs/guides/portable.md)。

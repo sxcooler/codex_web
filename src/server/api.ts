@@ -5,6 +5,7 @@ import type { Projects } from '../projects.ts';
 import { pathKey } from '../projects.ts';
 import { MetadataStore } from './metadata.ts';
 import { AccountUsage } from './account-usage.ts';
+import {AsyncInputs} from './async-input.ts';
 import { parseTestReport } from './test-reports.ts';
 import type { UploadService } from './uploads.ts';
 import {renderNativeImage} from './native-images.ts';
@@ -42,6 +43,8 @@ export function registerApi(app: FastifyInstance, options: {
   });
   const metadata = new MetadataStore(join(options.dataDir, 'metadata.sqlite'));
   const accountUsage=new AccountUsage(runtime,metadata.db);
+  const inputs=new AsyncInputs(metadata.db,runtime);
+  app.post('/api/sessions/:threadId/turns/:turnId/items/:itemId/answer',{schema:body({answers:{type:'array',minItems:1,maxItems:20,items:text},clientRequestId:requestId,expectedTurnId:short},['answers','clientRequestId'])},async request=>{const p=params(request);return inputs.answer(p.threadId,p.turnId,p.itemId,request.body as any);});
   app.get('/api/account/usage',{schema:{querystring:{type:'object',additionalProperties:false,properties:{refresh:{type:'string',enum:['true']}}}}},async request=>accountUsage.read((request.query as any).refresh==='true'));
   app.post('/api/account/usage/reset',{schema:{...body({accountId:{type:'string',pattern:'^[a-f0-9]{64}$'},creditId:{type:'string',minLength:1,maxLength:512},idempotencyKey:{type:'string',format:'uuid'}}),querystring:empty}},async request=>accountUsage.reset(request.body as any));
   const readMeta = (threadId: string) => { try { return metadata.get(threadId); } catch { return null; } };
@@ -65,9 +68,10 @@ export function registerApi(app: FastifyInstance, options: {
 
   async function associated(threadId: string, signal?: AbortSignal) {
     const snapshot = await runtime.snapshot(threadId, { window: true, signal });
+    inputs.reconcile(threadId,snapshot);
     const project = await projectForCwd(snapshot.thread.cwd);
     const warning = saveMeta(threadId, project?.path ?? null, null);
-    return { ...snapshot, project, metadata: readMeta(threadId), warning };
+    return { ...snapshot, project, metadata: readMeta(threadId), inputAnswers:inputs.states(threadId), warning };
   }
 
   const turnFields={model:short,effort:short,permissionMode:{type:'string',enum:['ask','auto-review','full-access','custom']},attachmentIds:{type:'array',maxItems:5,uniqueItems:true,items:{type:'string',pattern:'^[a-f0-9-]{36}$'}}};
@@ -94,7 +98,8 @@ export function registerApi(app: FastifyInstance, options: {
 
   app.get('/api/projects', async () => ({ projects: await projects.list() }));
   app.post('/api/projects/refresh', async () => ({ projects: await projects.refresh() }));
-  app.get('/api/models',async()=>runtime.models());
+  app.get('/api/models',{schema:{querystring:{type:'object',additionalProperties:false,properties:{refresh:{type:'string',enum:['true']}}}}},async request=>({...await runtime.models((request.query as any).refresh==='true',true),source:runtime.modelInfo?.()}));
+  app.post('/api/models/reload',{schema:body({},[])},async()=>({...await runtime.reloadModels(),source:runtime.modelInfo()}));
   app.get('/api/permission-modes',{schema:{querystring:{type:'object',additionalProperties:false,properties:{projectId:short}}}},async request=>runtime.permissionModes((request.query as any).projectId?(await projects.resolve((request.query as any).projectId)).path:projects.root));
   const projectFields = { name: short, folderName: { ...short, maxLength: 80 }, initialPrompt: {...text,minLength:0}, clientRequestId: requestId, ...turnFields };
   for (const clone of [false, true]) {
@@ -132,7 +137,9 @@ export function registerApi(app: FastifyInstance, options: {
   app.get('/api/sessions/:threadId', async (request,reply) => {const id=params(request).threadId;return {...await associated(id,readSignal(reply)),attachmentPreviews:options.uploads&&options.uploadOwner?options.uploads.listForThread(options.uploadOwner(request),id).map(item=>({...item,url:'/api/uploads/'+item.uploadId})):[]};});
   app.get('/api/sessions/:threadId/history', { schema: { querystring: { type: 'object', additionalProperties: false, required: ['before'], properties: { before: { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' } } } } }, async (request,reply) => {
     const id = params(request).threadId;
-    return { ...await runtime.history(id, (request.query as any).before, readSignal(reply)), attachmentPreviews: options.uploads && options.uploadOwner ? options.uploads.listForThread(options.uploadOwner(request), id).map(item => ({ ...item, url: '/api/uploads/' + item.uploadId })) : [] };
+    const page=await runtime.history(id,(request.query as any).before,readSignal(reply));
+    inputs.reconcile(id,{thread:{turns:page.turns}});
+    return { ...page, inputAnswers:inputs.states(id), attachmentPreviews: options.uploads && options.uploadOwner ? options.uploads.listForThread(options.uploadOwner(request), id).map(item => ({ ...item, url: '/api/uploads/' + item.uploadId })) : [] };
   });
   app.get('/api/sessions/:threadId/turns/:turnId/items/:itemId/output', async request => {
     const { threadId, turnId, itemId } = params(request);

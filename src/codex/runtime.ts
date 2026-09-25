@@ -144,6 +144,7 @@ export class Runtime extends EventEmitter {
   private releaseQueued = false;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private closed = false;
+  private updating=false;
   private epoch = randomUUID();
   private sequence = 0;
   private requestSequence = 0;
@@ -179,13 +180,23 @@ export class Runtime extends EventEmitter {
   open(threadId:string):Promise<any>{
     this.requireString(threadId,'threadId');const state=this.state(threadId);
     if(state.openPromise)return state.openPromise;
-    if(state.reserved||state.activeTurnId||state.pending.size||(state.loaded&&!state.released&&!state.error&&!state.externalWriter))return Promise.resolve({phase:this.phase(state)});
+    if(state.reserved||state.activeTurnId||state.pending.size||(state.loaded&&!state.released&&!state.error&&!state.externalWriter&&state.nativeStatus?.type==='idle'))return Promise.resolve({phase:this.phase(state)});
     state.reserved=true;
     const operation=async()=>{
       try {
-        const read=await this.call<any>('thread/read',{threadId,includeTurns:false});
+        const owned=state.loaded&&!state.released&&!state.externalWriter;
+        const read=owned?{thread:await this.readThread(threadId,{headersOnly:true})}:await this.call<any>('thread/read',{threadId,includeTurns:false});
         if(!isObject(read?.thread))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread status is unavailable');
         state.cwd=read.thread.cwd;state.model=read.thread.model;
+        if(owned){
+          this.reconcile(threadId,read.thread);
+          if(state.activeTurnId||state.pending.size)return {phase:this.phase(state)};
+          if(!this.canUnload(state,read.thread))throw runtimeError(409,'RUNTIME_THREAD_BUSY','Native thread activity could not be reconciled');
+          if(read.thread.status?.type!=='notLoaded'){
+            state.error=undefined;state.recoverOnIdle=false;
+            return {phase:'IDLE'};
+          }
+        }
         if(read.thread.status?.type==='active')throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread is active in another client');
         const policy=await this.resolvePermissions(state.selectedPermissionMode,state.cwd!);
         const resumed=await this.mutation<any>('thread/resume',{threadId,excludeTurns:true,...(policy?threadPermissionOptions(policy):{})});
@@ -293,6 +304,13 @@ export class Runtime extends EventEmitter {
     const bytes = Buffer.from(data, 'base64');
     if (bytes.length > MAX_IMAGE_BYTES) throw runtimeError(413, 'RUNTIME_INVALID_INPUT', 'Image exceeds 10 MiB');
     return bytes;
+  }
+
+  async question(threadId:string,turnId:string,itemId:string):Promise<any>{
+    const live=this.states.get(threadId)?.liveTurns.get(turnId)?.items?.find((item:any)=>item.id===itemId);
+    const item=live??await this.readItem(threadId,turnId,itemId);
+    if(item.type!=='agentMessage'||item.delivery!=='async'||!Array.isArray(item.questions)||!item.questions.length||item.questions.some((q:any)=>typeof q.title!=='string'))throw runtimeError(409,'RUNTIME_STALE_REQUEST','没有可回答的原生提问');
+    return structuredClone(item);
   }
 
   private async readItem(threadId: string, turnId: string, itemId: string): Promise<any> {
@@ -549,7 +567,7 @@ export class Runtime extends EventEmitter {
         if (!state.released) {
           const thread = await this.readThread(threadId, { headersOnly: true });
           this.reconcile(threadId, thread);
-          if (!['idle', 'notLoaded'].includes(thread.status?.type) || state.activeTurnId || state.pending.size || thread.turns.some((t: any) => t.status === 'inProgress')) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Native thread must be idle before release');
+          if (!this.canUnload(state, thread)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Native thread must be idle or finished before release');
           const result = await this.mutation<any>('thread/unsubscribe', { threadId });
           if (!['unsubscribed', 'notSubscribed', 'notLoaded'].includes(result?.status)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native release was not confirmed');
           state.nativeReleaseStatus = result.status;
@@ -606,6 +624,12 @@ export class Runtime extends EventEmitter {
     return { requested: !!state.releaseRequested, inProgress: !!state.releasePromise, handoffReady: !!state.handoffReady, ...(state.releaseError ? { error: state.releaseError } : {}) };
   }
 
+  private canUnload(state: ThreadState, thread: any): boolean {
+    if(state.activeTurnId||state.pending.size||thread.turns.some((turn:any)=>turn.status==='inProgress'))return false;
+    if(['idle','notLoaded'].includes(thread.status?.type))return true;
+    return thread.status?.type==='systemError'&&state.loaded&&!state.released&&!state.externalWriter&&thread.turns.length>0&&thread.turns.every((turn:any)=>['completed','interrupted','failed'].includes(turn.status));
+  }
+
   private reconcile(threadId: string, thread: any): void {
     const state = this.state(threadId);
     state.nativeStatus = thread.status;
@@ -621,6 +645,13 @@ export class Runtime extends EventEmitter {
       }
       for (const pending of [...state.pending.values()]) if (pending.turnId === turn.id) this.clearPending(pending, 'request');
     }
+    if(state.loaded&&!state.released&&!state.externalWriter&&!state.activeTurnId&&thread.status?.type==='active'){
+      const active=thread.turns.filter((turn:any)=>turn.status==='inProgress'&&!state.completedTurns.has(turn.id));
+      if(active.length===1)state.activeTurnId=active[0].id;
+    }
+    // Native systemError is an idle error flag cleared by the next turn, not a writer lock.
+    // Keep the raw thread status/error in the snapshot; only reconcile our operation state.
+    if(thread.status?.type==='systemError'&&this.canUnload(state,thread))state.nativeStatus={type:'idle'};
   }
 
   async respond(threadId: string, requestId: string, answer: any): Promise<any> {
@@ -742,10 +773,23 @@ export class Runtime extends EventEmitter {
     return { threadId, turnId, status: state.completedTurns.has(turnId) ? 'completed' : result.turn.status };
   }
 
-  async models(): Promise<{ data: any[]; nextCursor: null }> {
+  modelInfo(){return {executable:this.options.executable,version:this.initializeInfo?.userAgent??null,readAt:this.modelCatalog?this.modelCatalog.expiresAt-5*60_000:null};}
+
+  prepareUpdate(){
+    if(this.starting||this.stopping||this.inFlight||this.reads||[...this.states.values()].some(s=>s.reserved||s.activeTurnId||s.pending.size||s.recoverOnIdle||s.releasePromise||['active','systemError'].includes(s.nativeStatus?.type)))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务、待处理请求或读取操作，不能更新。');
+    this.updating=true;
+  }
+
+  async reloadModels(){
+    if(this.starting||this.stopping||this.inFlight||this.reads||this.server&&!await this.closeIdleServer())throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务、待处理请求或读取操作，请稍后重载。');
+    return this.models(true);
+  }
+
+  async models(refresh=false,allowStale=false): Promise<{ data: any[]; nextCursor: null; stale?: boolean }> {
+    try{
     await this.getServer();
     const epoch = this.epoch;
-    if (this.modelCatalog?.epoch === epoch && this.modelCatalog.expiresAt > Date.now()) return { data: structuredClone(this.modelCatalog.data), nextCursor: null };
+    if (!refresh && this.modelCatalog?.epoch === epoch && this.modelCatalog.expiresAt > Date.now()) return { data: structuredClone(this.modelCatalog.data), nextCursor: null };
     if (this.modelLoading?.epoch === epoch) return structuredClone(await this.modelLoading.promise);
     const promise = this.loadModels().then(result => {
       if (this.epoch === epoch) this.modelCatalog = { epoch, expiresAt: Date.now() + 5 * 60_000, data: structuredClone(result.data) };
@@ -753,6 +797,10 @@ export class Runtime extends EventEmitter {
     }).finally(() => { if (this.modelLoading?.promise === promise) this.modelLoading = undefined; });
     this.modelLoading = { epoch, promise };
     return structuredClone(await promise);
+    }catch(error){
+      if(allowStale&&!refresh&&this.modelCatalog)return {data:structuredClone(this.modelCatalog.data),nextCursor:null,stale:true};
+      throw error;
+    }
   }
 
   private async loadModels(): Promise<{ data: any[]; nextCursor: null }> {
@@ -815,7 +863,7 @@ export class Runtime extends EventEmitter {
 
   async accountIdentity(): Promise<{identity:string;resetProtocol:boolean}> {
     const result=await this.call<any>('account/read',{refreshToken:false});
-    return {identity:createHash('sha256').update(JSON.stringify(result?.account??null)+'|'+this.epoch).digest('hex'),resetProtocol:result?.account?.type==='chatgpt'&&/^codex_remote_web\/0\.153\.4(?:\s|$)/.test(this.initializeInfo?.userAgent??'')};
+    return {identity:createHash('sha256').update(JSON.stringify(result?.account??null)+'|'+this.epoch).digest('hex'),resetProtocol:result?.account?.type==='chatgpt'};
   }
 
   readAccountUsage():Promise<any>{return this.call('account/rateLimits/read',{});}
@@ -824,11 +872,13 @@ export class Runtime extends EventEmitter {
     this.inFlight++;
     try {
       const server=await this.getServer();
-      if(!/^codex_remote_web\/0\.153\.4(?:\s|$)/.test(this.initializeInfo?.userAgent??''))throw runtimeError(409,'RUNTIME_ACCOUNT_UNSUPPORTED','当前 Codex 版本尚未验证重置接口。');
       const usage=await server.request<any>('account/rateLimits/read',{});
       if(typeof usage?.accountId!=='string'||!usage.accountId||createHash('sha256').update(usage.accountId).digest('hex')!==accountId||server!==this.server)throw runtimeError(409,'RUNTIME_ACCOUNT_CHANGED','账户已变化，请重新读取用量。');
       try {return await server.request('account/rateLimitResetCredit/consume',input);}
-      catch {throw runtimeError(504,'RUNTIME_RESULT_UNKNOWN','重置结果待核实，请使用原操作标识重试。');}
+      catch(error){
+        if(isObject(error)&&error.code===-32601)throw runtimeError(409,'RUNTIME_ACCOUNT_UNSUPPORTED','当前 Codex 未提供重置接口，请升级 CLI 后重试。');
+        throw runtimeError(504,'RUNTIME_RESULT_UNKNOWN','重置结果待核实，请使用原操作标识重试。');
+      }
     } catch(error){throw this.mapError(error);}
     finally {this.inFlight--;this.scheduleIdle();}
   }
@@ -914,6 +964,7 @@ export class Runtime extends EventEmitter {
   }
 
   private getServer(): Promise<AppServer> {
+    if(this.updating)return Promise.reject(runtimeError(503,'RUNTIME_UPDATING','正在更新应用，请稍后重试。'));
     if (this.closed) return Promise.reject(runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Runtime is closed'));
     if (this.stopping) return this.stopping.then(() => this.getServer());
     if (this.starting) return this.starting;
@@ -1359,7 +1410,8 @@ export class Runtime extends EventEmitter {
   private phase(state: ThreadState): string {
     if (state.pending.size) return [...state.pending.values()].some(({ method }) => method === 'item/tool/requestUserInput' || method === 'mcpServer/elicitation/request') ? 'WAITING_INPUT' : 'WAITING_APPROVAL';
     if (state.reserved || state.activeTurnId) return 'RUNNING';
-    if (state.externalWriter || state.nativeStatus?.type === 'active') return 'EXTERNAL';
+    if (state.externalWriter) return 'EXTERNAL';
+    if (state.nativeStatus?.type === 'active') return state.loaded && !state.released ? 'UNKNOWN' : 'EXTERNAL';
     if (state.error || state.nativeStatus?.type === 'systemError') return 'UNKNOWN';
     if (state.released) return 'RELEASED';
     return 'IDLE';

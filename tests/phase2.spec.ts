@@ -121,8 +121,21 @@ test('file diff and an attachment-only task use the selected options',async({pag
   await route.fulfill({json:data});
  });
  await page.goto('/');
+ for(const [sizes,message] of [
+  [[1,1,1,1,1,1],'附件数量超限：每条消息最多 5 个附件。'],
+  [[15*1024*1024+1],'单个文件过大：“file-0.png”超过 15 MiB，请压缩后重试。'],
+ ] as const){
+  await page.locator('input[type=file]').evaluate((input,sizes)=>{const files=new DataTransfer();sizes.forEach((size,i)=>files.items.add(new File([new Uint8Array(size)],`file-${i}.png`,{type:'image/png'})));(input as HTMLInputElement).files=files.files;input.dispatchEvent(new Event('change',{bubbles:true}));},sizes);
+  await expect(page.locator('.attachments [role=alert]')).toHaveText(message);
+  await expect(page.locator('.attachments li')).toHaveCount(0);
+ }
+ await page.locator('input[type=file]').evaluate(input=>{const files=new DataTransfer();for(let i=0;i<5;i++)files.items.add(new File([new Uint8Array(15*1024*1024)],`file-${i}.png`,{type:'image/png'}));(input as HTMLInputElement).files=files.files;input.dispatchEvent(new Event('change',{bubbles:true}));});
+ await expect(page.getByText(/KiB · 就绪/)).toHaveCount(5);
+ await expect(page.locator('.attachments [role=alert]')).toHaveCount(0);
+ for(let i=0;i<5;i++)await page.getByRole('button',{name:'移除附件 note.txt',exact:true}).first().click();
  await page.locator('input[type=file]').setInputFiles({name:'note.txt',mimeType:'text/plain',buffer:Buffer.from('hello')});
  await expect(page.getByText(/KiB · 就绪/)).toBeVisible();
+ await expect(page.locator('.attachments [role=alert]')).toHaveCount(0);
  await page.getByRole('combobox',{name:'模型',exact:true}).selectOption('m');
  await page.getByRole('combobox',{name:'推理强度'}).selectOption('high');
  await page.getByRole('button',{name:'开始任务 →'}).click();

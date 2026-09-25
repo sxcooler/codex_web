@@ -53,5 +53,5 @@ export function prependHistory(snapshot:Json,page:Json,cursor:string):Json {
   const older=page.turns.filter((turn:Json)=>{if(ids.has(turn.id))return false;ids.add(turn.id);return true;});
   const attachments=new Map((snapshot.attachmentPreviews??[]).map((file:Json)=>[file.path,file]));
   for(const file of page.attachmentPreviews??[])if(!attachments.has(file.path))attachments.set(file.path,file);
-  return {...snapshot,history:{nextCursor:page.nextCursor},attachmentPreviews:[...attachments.values()],thread:{...snapshot.thread,turns:[...older,...snapshot.thread.turns]}};
+  return {...snapshot,inputAnswers:{...snapshot.inputAnswers,...page.inputAnswers},history:{nextCursor:page.nextCursor},attachmentPreviews:[...attachments.values()],thread:{...snapshot.thread,turns:[...older,...snapshot.thread.turns]}};
 }

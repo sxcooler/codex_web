@@ -25,4 +25,4 @@
 
 ## Windows / Linux 发布物
 
-在已提交的同一版本上分别原生构建 Windows x64 ZIP 和 Linux x64 glibc tar.gz，选取一份通用源码 ZIP。对全新解压包执行产物检查，确认 `manifest.json` 的 `sourceCommit` 与发布提交一致。核对归档排除项后生成三个压缩包的 `SHA256SUMS.txt`，随版本标签一起上传 GitHub Release；不要上传已启动过的测试目录。
+在已提交的同一版本上分别原生构建 Windows x64 ZIP、Linux x64 glibc tar.gz 和两个平台的应用更新 ZIP，选取一份通用源码 ZIP。对全新解压包执行产物检查并设置 `PORTABLE_TEST_UPDATE` 验证在线升级，确认 `manifest.json` 的 `sourceCommit` 与发布提交一致。核对归档排除项后汇总五个压缩包的 `SHA256SUMS.txt`，随版本标签一起上传 GitHub Release；不要上传已启动过的测试目录。

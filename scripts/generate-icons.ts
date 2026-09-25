@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
@@ -7,6 +7,9 @@ const revision = 1;
 const scale = 0.8; // Original glyph fills 75% of its SVG; mobile glyph fills 60%.
 const publicRoot = new URL('../public/', import.meta.url);
 const source = await readFile(new URL('icon.svg', publicRoot), 'utf8');
+const png=await sharp(Buffer.from(source)).resize(256,256).png().toBuffer();
+const ico=Buffer.alloc(22);ico.writeUInt16LE(1,2);ico.writeUInt16LE(1,4);ico.writeUInt16LE(1,10);ico.writeUInt16LE(32,12);ico.writeUInt32LE(png.length,14);ico.writeUInt32LE(22,18);
+await writeFile(new URL('../scripts/windows/codex-web.ico',publicRoot),Buffer.concat([ico,png]));
 const inset = 192 * (1 - scale) / 2;
 const mobile = source.replace(' rx="40"', '').replace('<g ', `<g transform="translate(${inset} ${inset}) scale(${scale})" `);
 await mkdir(new URL('assets/', publicRoot), { recursive: true });

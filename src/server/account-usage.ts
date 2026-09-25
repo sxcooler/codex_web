@@ -50,7 +50,7 @@ export class AccountUsage {
       const data:Usage={accountId,updatedAt:Date.now(),rateLimits:bucket(raw?.rateLimits),rateLimitsByLimitId:object(raw?.rateLimitsByLimitId)?Object.fromEntries(Object.entries(raw.rateLimitsByLimitId).map(([key,value])=>[key,bucket(value)])):null,
         rateLimitResetCredits:object(credits)?{availableCount:count(credits.availableCount),credits:Array.isArray(credits.credits)?credits.credits.filter(object).map((credit:any)=>({id:text(credit.id),resetType:text(credit.resetType),status:text(credit.status),title:text(credit.title),description:text(credit.description),grantedAt:timestamp(credit.grantedAt),...(credit.expiresAt===null?{expiresAt:null}:timestamp(credit.expiresAt)!==null?{expiresAt:timestamp(credit.expiresAt)}:{})})):null}:null,
         resetSupported:!!accountId&&identity.resetProtocol&&after.resetProtocol,
-        resetUnavailableReason:!accountId?'原生服务未提供可靠账户标识，暂不能使用重置机会。':!identity.resetProtocol||!after.resetProtocol?'当前 Codex 版本尚未验证重置接口，仍可查看用量。':undefined};
+        resetUnavailableReason:!accountId?'原生服务未提供可靠账户标识，暂不能使用重置机会。':!identity.resetProtocol||!after.resetProtocol?'当前账户类型不支持使用重置机会，仍可查看用量。':undefined};
       if(!data.rateLimits&&!data.rateLimitsByLimitId&&!data.rateLimitResetCredits)throw error(503,'ACCOUNT_USAGE_UNAVAILABLE','原生用量接口暂不可用。');
       if(generation===this.generation)this.cache={identity:after.identity,data};
       this.accountUnverified=false;
@@ -94,6 +94,15 @@ export class AccountUsage {
       if(!outcomes.has(result?.outcome))throw error(504,'ACCOUNT_RESET_UNKNOWN','重置结果待核实，请重试本次操作。');
       this.db.prepare('UPDATE account_reset_operations SET outcome=? WHERE idempotency_key=?').run(result.outcome,input.idempotencyKey);
       return {outcome:result.outcome};
-    }catch{throw error(504,'ACCOUNT_RESET_UNKNOWN','重置结果待核实，请使用原操作标识重试；不要另建操作。');}
+    }catch(cause){
+      if(object(cause)&&['RUNTIME_ACCOUNT_CHANGED','RUNTIME_ACCOUNT_UNSUPPORTED'].includes((cause as any).code)){
+        // Only a new attempt is known not to have run; a previous uncertain attempt must retain its key.
+        if(!previous){
+          this.db.prepare('DELETE FROM account_reset_operations WHERE idempotency_key=? AND outcome IS NULL').run(input.idempotencyKey);
+          throw error(409,(cause as any).code==='RUNTIME_ACCOUNT_CHANGED'?'ACCOUNT_CHANGED':'ACCOUNT_RESET_UNSUPPORTED',(cause as Error).message);
+        }
+      }
+      throw error(504,'ACCOUNT_RESET_UNKNOWN','重置结果待核实，请使用原操作标识重试；不要另建操作。');
+    }
   }
 }

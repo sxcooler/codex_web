@@ -24,8 +24,9 @@ test('reasoning parts keep independent offsets, immutable snapshots and terminal
 
 test('history prepend keeps newer live messages, cursor and attachment references authoritative',()=>{
   const before={...baseline(),history:{nextCursor:'old'},syncCursor:'epoch:5',attachmentPreviews:[{path:'image',url:'current'}]};
-  const page={turns:[{id:'older',status:'completed',items:[]},{id:'old',items:[]},{id:'turn',items:[]}],nextCursor:'older',attachmentPreviews:[{path:'image',url:'stale'},{path:'old-image',url:'older'}]};
+  const page={turns:[{id:'older',status:'completed',items:[]},{id:'old',items:[]},{id:'turn',items:[]}],nextCursor:'older',inputAnswers:{'old:question':{status:'accepted'}},attachmentPreviews:[{path:'image',url:'stale'},{path:'old-image',url:'older'}]};
   const next=prependHistory(before,page,'old');assert.deepEqual(next.thread.turns.map((t:any)=>t.id),['older','old','turn']);
+  assert.equal(next.inputAnswers['old:question'].status,'accepted');
   assert.equal(next.thread.turns[2],before.thread.turns[1]);assert.equal(next.syncCursor,before.syncCursor);assert.equal(next.phase,before.phase);assert.equal(next.attachmentPreviews[0].url,'current');assert.equal(next.attachmentPreviews.length,2);
   assert.equal(prependHistory(before,page,'expired'),before);assert.throws(()=>prependHistory(before,{...page,nextCursor:'old'},'old'),/历史分页无效/);
 });

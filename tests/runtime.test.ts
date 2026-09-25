@@ -700,6 +700,58 @@ test('leave reconciles missing terminal events instead of waiting forever', asyn
   assert.equal((await runtime.requestRelease(threadId)).handoffReady, true);
 });
 
+test('refresh reconciles a terminal system error without reloading or interrupting any thread',async t=>{
+  const runtime=start(t);
+  const active=await runtime.create({cwd,clientRequestId:'other',prompt:'hold'});
+  const {threadId}=await runtime.create({cwd,clientRequestId:'failed',prompt:'quota-error'});
+  await (runtime as any).call('fixture/stats',{});
+  assert.equal((runtime as any).phase((runtime as any).states.get(threadId)),'UNKNOWN');
+  assert.equal((await runtime.open(threadId)).phase,'IDLE');
+  const recovered=await runtime.snapshot(threadId);
+  assert.equal(recovered.phase,'IDLE');assert.equal(recovered.thread.status.type,'systemError');
+  assert.equal(recovered.thread.turns.at(-1).error.codexErrorInfo,'usageLimitExceeded');
+  const stats=await (runtime as any).call('fixture/stats',{});
+  assert.equal(stats.unsubscribes,0);assert.equal(stats.resumes,0);assert.equal(stats.interrupts,0);
+  assert.equal((await runtime.snapshot(active.threadId)).activeTurnId,active.turnId);
+  await runtime.send(threadId,{text:'continue',clientRequestId:'after-reset'});
+  assert.equal((await runtime.snapshot(threadId)).phase,'IDLE');
+});
+
+test('a failed terminal thread can be released while active or unresolved native work remains protected',async t=>{
+  const runtime=start(t);
+  const active=await runtime.create({cwd,clientRequestId:'other',prompt:'hold'});
+  const {threadId}=await runtime.create({cwd,clientRequestId:'failed',prompt:'quota-error'});
+  assert.equal((await runtime.release(threadId)).status,'released');
+  assert.equal((await (runtime as any).call('fixture/stats',{})).interrupts,0);
+  await assert.rejects(runtime.release(active.threadId),{code:'RUNTIME_THREAD_BUSY'});
+});
+
+test('refresh recovers a missing local turn id without resuming or claiming an external writer',async t=>{
+  const runtime=start(t);
+  const {threadId,turnId}=await runtime.create({cwd,clientRequestId:'own',prompt:'hold'});
+  const state=(runtime as any).states.get(threadId);state.activeTurnId=null;
+  assert.equal((runtime as any).phase(state),'UNKNOWN');
+  assert.equal((await runtime.open(threadId)).phase,'RUNNING');
+  assert.equal((await runtime.snapshot(threadId)).activeTurnId,turnId);
+  assert.equal((await (runtime as any).call('fixture/stats',{})).resumes,0);
+  state.activeTurnId=null;state.externalWriter=true;
+  assert.equal((await runtime.snapshot(threadId)).phase,'EXTERNAL');
+  assert.equal(state.activeTurnId,null);
+});
+
+test('recovery cannot unload a system error with unfinished or unknown work',async t=>{
+  for(const prompt of [undefined,'hold']){
+    const runtime=start(t,60_000,'system-error');
+    const {threadId}=await runtime.create({cwd,clientRequestId:'blocked',prompt});
+    const state=(runtime as any).states.get(threadId);state.activeTurnId=null;
+    await runtime.snapshot(threadId);
+    await assert.rejects(runtime.open(threadId),{code:'RUNTIME_THREAD_BUSY'});
+    await assert.rejects(runtime.release(threadId),{code:'RUNTIME_THREAD_BUSY'});
+    const stats=await (runtime as any).call('fixture/stats',{});
+    assert.equal(stats.unsubscribes,0);assert.equal(stats.resumes,0);assert.equal(stats.interrupts,0);
+  }
+});
+
 test('release preserves the actual native unsubscribe result', async (t) => {
   const runtime = start(t, 60_000, 'not-subscribed');
   const { threadId } = await runtime.create({ cwd, clientRequestId: 'create' });
@@ -771,15 +823,40 @@ test('model catalog is cached for five minutes per native process epoch', async 
   const runtime = start(t);
   await Promise.all([runtime.models(), runtime.models()]);
   assert.equal((await (runtime as any).call('fixture/stats', {})).modelLists, 1);
+  await runtime.models(true);
+  assert.equal((await (runtime as any).call('fixture/stats', {})).modelLists, 2);
+  assert.ok(runtime.modelInfo().readAt);
   const realNow = Date.now();
   t.mock.method(Date, 'now', () => realNow + 300001);
   await runtime.models();
-  assert.equal((await (runtime as any).call('fixture/stats', {})).modelLists, 2);
+  assert.equal((await (runtime as any).call('fixture/stats', {})).modelLists, 3);
   t.mock.restoreAll();
   const { threadId } = await runtime.create({ cwd, clientRequestId: 'create' });
   await runtime.release(threadId);
   await runtime.models();
   assert.equal((await (runtime as any).call('fixture/stats', {})).modelLists, 1);
+});
+
+test('native async question metadata survives live items and safe reload rejects active work',async t=>{
+  const runtime=start(t);await runtime.open('existing');
+  (runtime as any).onNotification({method:'item/completed',params:{threadId:'existing',turnId:'question-turn',item:{type:'agentMessage',id:'question-item',delivery:'async',text:'Question text',questions:[{title:'Continue?',options:['Yes','No']}]}}});
+  assert.equal((await runtime.question('existing','question-turn','question-item')).questions[0].options[0],'Yes');
+  (runtime as any).states.get('existing').activeTurnId='active';
+  await assert.rejects(runtime.reloadModels(),{code:'RUNTIME_THREAD_BUSY'});
+  assert.throws(()=>runtime.prepareUpdate(),{code:'RUNTIME_THREAD_BUSY'});
+  (runtime as any).states.get('existing').activeTurnId=null;
+  assert.ok((await runtime.reloadModels()).data.length);
+});
+
+test('failed native reload preserves a marked display catalog without weakening turn validation',async t=>{
+  const runtime=start(t),catalog=await runtime.models(),readAt=runtime.modelInfo().readAt;
+  t.mock.method(runtime as any,'loadModels',async()=>{throw Error('model list unavailable');});
+  await assert.rejects(runtime.reloadModels(),/unavailable/);
+  const stale=await runtime.models(false,true);
+  assert.deepEqual(stale.data,catalog.data);assert.equal(stale.stale,true);
+  assert.equal(runtime.modelInfo().readAt,readAt);
+  await assert.rejects(runtime.models(),/unavailable/);
+  await assert.rejects(runtime.models(true,true),/unavailable/);
 });
 
 test('native lifecycle notifications emit small stable Push events without snapshot reads', async (t) => {

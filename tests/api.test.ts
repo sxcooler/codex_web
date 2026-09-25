@@ -42,6 +42,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     const dataDir=join(dir,'data'); await initializeAuth(dataDir,'api-test-password-long');
     app=await buildServer({dataDir,origin:'http://localhost:3000',projects:new Projects(root),runtime});
     assert.equal((await app.inject({url:'/api/projects',headers:{host:'localhost:3000'}})).statusCode,401);
+    assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/turns/turn-1/items/question-1/answer',headers:{host:'localhost:3000'},payload:{answers:['Yes'],clientRequestId:'answer-old-123'}})).statusCode,403);
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png',headers:{host:'localhost:3000'}})).statusCode,401);
     assert.equal((await app.inject({url:'/%61pi/sessions/thread-1/events',headers:{host:'localhost:3000'}})).statusCode,401);
     const csrf=await app.inject({url:'/api/auth/session',headers:{host:'localhost:3000'}});
@@ -117,6 +118,13 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal(created.prompt,chinesePrompt);
     assert.equal((await app.inject({method:'POST',url:'/api/sessions',headers,payload:{projectId,clientRequestId:'oversize-request-1',prompt:'验'.repeat(100_000)}})).statusCode,400);
     allowHistory=true;
+    runtime.question=async()=>({questions:[{title:'Continue?',options:['Yes','No']}]});
+    runtime.send=async()=>{throw Object.assign(new Error('uncertain delivery'),{statusCode:504,code:'RUNTIME_UNCERTAIN'});};
+    assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/turns/turn-1/items/question-1/answer',headers,payload:{answers:['Yes'],clientRequestId:'answer-old-123'}})).statusCode,504);
+    assert.equal((await app.inject({url:'/api/sessions/thread-1',headers})).json().inputAnswers['turn-1:question-1'].status,'unknown');
+    const originalHistory=runtime.history;runtime.history=async()=>({turns:[{id:'older',items:[{type:'userMessage',clientId:'answer-old-123'}]}],nextCursor:null});
+    assert.equal((await app.inject({url:'/api/sessions/thread-1/history?before=old-turn',headers})).json().inputAnswers['turn-1:question-1'].status,'accepted');
+    runtime.history=originalHistory;
     const snapshot=await app.inject({url:'/api/sessions/thread-1',headers});
     assert.equal(snapshot.json().project.id,projectId);
     created.cwd=dir;assert.equal((await app.inject({url:'/api/sessions/thread-1/files/content?path=picture.png',headers})).statusCode,404,'Must not trust stale project metadata');created.cwd=join(root,'test');
@@ -133,7 +141,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
       assert.equal((await app.inject({url:'/api/sessions/thread-1',headers})).json().project,null);
       created.cwd = join(root,'test');
     }
-    assert.deepEqual((await app.inject({url:'/api/sessions/thread-1/history?before=turn-20',headers})).json(),{turns:[{id:'turn-20'}],nextCursor:null,attachmentPreviews:[]});
+    assert.deepEqual((await app.inject({url:'/api/sessions/thread-1/history?before=turn-20',headers})).json(),{turns:[{id:'turn-20'}],nextCursor:null,inputAnswers:{'turn-1:question-1':{status:'accepted'}},attachmentPreviews:[]});
     assert.deepEqual((await app.inject({url:'/api/sessions/thread-1/turns/turn-20/items/command-1/output',headers})).json(),{output:'turn-20:command-1'});
     for(const url of ['/api/sessions/thread-1/history','/api/sessions/thread-1/history?before=','/api/sessions/thread-1/history?before=ok&extra=1','/api/sessions/thread-1/history?before=bad%2Fid','/api/sessions/thread-1/turns/bad%2Fid/items/command/output','/api/sessions/thread-1/turns/turn/items/bad%20id/output','/api/sessions/thread-1/turns/turn/items/command/output?extra=1']) assert.equal((await app.inject({url,headers})).statusCode,400,url);
     const history=await app.inject({url:'/api/sessions/thread-1/git/log',headers});

@@ -13,6 +13,10 @@ import {Diagnostics} from './diagnostics.ts';
 const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 export async function startServer(diagnosticsEnabled = false) {
+  const lockPath=join(projectRoot,'.local/update-lock.json'),pendingPath=join(projectRoot,'.local/updates/pending.json');
+  const readOptional=async(path:string)=>readFile(path,'utf8').catch((e:any)=>{if(e.code==='ENOENT')return '';throw e;});
+  const lock=await readOptional(lockPath),pending=await readOptional(pendingPath);
+  if((lock||pending)&&(!lock||JSON.parse(lock).token!==process.env.CODEX_WEB_UPDATE_TOKEN))throw Error('Application update in progress or interrupted; run Update --recover.');
   const dataDir = process.env.WEB_DATA_DIR ?? join(projectRoot, '.local', 'web');
   let config: any = {};
   try { config = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')); }
@@ -31,6 +35,9 @@ export async function startServer(diagnosticsEnabled = false) {
   try {app = await buildServer({ dataDir, origin, allowedOrigins: config.allowedOrigins, runtime, projects: new Projects(workRoot), distDir: join(projectRoot, 'dist'),diagnostics });}
   catch(error){await diagnostics?.close();throw error;}
   app.addHook('onClose',async()=>{await diagnostics?.close();});
+  app.decorate('prepareUpdate',()=>runtime.prepareUpdate());
+  let updateBoot=!!lock;
+  app.addHook('onRequest',async(request,reply)=>{if(updateBoot){updateBoot=!!await readOptional(lockPath)||!!await readOptional(pendingPath);if(updateBoot&&request.url!=='/api/auth/session')return reply.code(503).send({error:'应用更新验证中，请稍后重试。'});}});
   try {
     await app.listen({ host: '127.0.0.1', port });
     process.stdout.write(`Codex Web listening at ${origin}\n`);

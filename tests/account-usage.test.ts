@@ -130,7 +130,7 @@ test('all four native outcomes are returned, invalidate usage, and replay withou
   }
 });
 
-test('reset requires a reliable account, validated protocol, and account matching the confirmation', async t => {
+test('reset requires a reliable ChatGPT account matching the confirmation', async t => {
   const {runtime, service} = fixture(t);
   runtime.raw.accountId = null;
   assert.equal((await service.read()).resetSupported, false);
@@ -144,6 +144,21 @@ test('reset requires a reliable account, validated protocol, and account matchin
   runtime.identity = 'identity-b'; runtime.raw.accountId = 'native-account-b';
   await assert.rejects(service.reset(operation()), {code: 'ACCOUNT_CHANGED'});
   assert.equal(runtime.calls.length, 0);
+});
+
+test('definite pre-consume rejection clears only a new operation, never an earlier uncertain attempt',async t=>{
+  const {runtime,service}=fixture(t);
+  for(const [nativeCode,code] of [['RUNTIME_ACCOUNT_CHANGED','ACCOUNT_CHANGED'],['RUNTIME_ACCOUNT_UNSUPPORTED','ACCOUNT_RESET_UNSUPPORTED']]){
+    runtime.consumeAccountReset=async()=>{throw Object.assign(Error('未执行'),{code:nativeCode});};
+    await assert.rejects(service.reset(operation()),{code});
+    assert.equal((await service.read()).pendingReset,null);
+  }
+  const input=operation();
+  runtime.consumeAccountReset=async()=>{throw Error('connection lost');};
+  await assert.rejects(service.reset(input),{code:'ACCOUNT_RESET_UNKNOWN'});
+  runtime.consumeAccountReset=async()=>{throw Object.assign(Error('Method not found'),{code:'RUNTIME_ACCOUNT_UNSUPPORTED'});};
+  await assert.rejects(service.reset(input),{code:'ACCOUNT_RESET_UNKNOWN'});
+  assert.deepEqual({...((await service.read()).pendingReset)},input);
 });
 
 test('new operations reject absent, expired, unknown, redeeming, and invalidly dated credits', async t => {

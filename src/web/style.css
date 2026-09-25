@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+.session-empty{display:grid;justify-items:center;gap:12px}.session-empty p{margin:0}.session-empty progress{width:96px;height:4px;accent-color:#82d9b4}
+@media(prefers-reduced-motion:reduce){.session-empty progress{display:none}}
 @import 'streamdown/styles.css';
 @source '../../node_modules/streamdown/dist/*.js';
 @source '../../node_modules/@streamdown/mermaid/dist/*.js';
@@ -98,7 +100,8 @@
 .attachments>.composer-collapse{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;min-width:44px;min-height:44px;font-size:20px;line-height:1;padding:6px}
 .attachments>.attachment-picker{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:44px;min-height:44px}
 .is-collapsed .attachments{flex:0 0 auto;padding:0}
-.is-collapsed .attachments>.attachment-picker{width:36px;min-width:36px;padding:0}
+.is-collapsed .attachments>.attachment-picker{position:relative;width:36px;min-width:36px;padding:0}
+.attachment-count{position:absolute;top:0;right:0;min-width:16px;height:16px;padding:0 3px;border-radius:8px;background:#82d9b4;color:#12251c;font-size:10px;font-weight:650;line-height:16px;pointer-events:none}
 .composer .attachment-hint{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .composer.is-collapsed{padding:8px 10px}
 .is-collapsed .composer-input-row{display:flex;align-items:center;gap:8px}
@@ -215,3 +218,5 @@
 @media(max-width:700px){.panel-section-toggle{min-height:40px}.commit-metadata>button{min-height:32px}.commit-info-close{min-width:40px;min-height:40px}}
 
 .file-change-counts{white-space:nowrap;font-variant-numeric:tabular-nums}.file-change-counts .added{color:#82d9b4}.file-change-counts .deleted{color:#ef969b}
+/* Native question controls stay usable on narrow screens. */
+.question-fields{border:0;padding:0;margin:0 0 1rem;min-width:0}.question-fields legend{font-weight:600;margin-bottom:.6rem;white-space:pre-wrap;overflow-wrap:anywhere}.question-options{display:grid;gap:.5rem;margin-bottom:.7rem}.question-options label{display:flex;align-items:flex-start;gap:.6rem;padding:.6rem;border:1px solid var(--border,#35454c);border-radius:6px;cursor:pointer}.question-options input{width:auto;flex:none;margin-top:.2rem}.question-options small{display:block}.async-questions{margin:.8rem 0}.async-questions input{max-width:100%}

@@ -8,7 +8,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 const IMAGE_MIMES=new Map([['image/png','.png'],['image/jpeg','.jpg'],['image/webp','.webp']]);
 const FILE_MIMES=new Set(['text/plain','text/markdown','text/csv','application/json','application/pdf']);
 const FILE_EXTENSIONS=new Map([['text/plain',new Set(['.txt'])],['text/markdown',new Set(['.md','.markdown'])],['text/csv',new Set(['.csv'])],['application/json',new Set(['.json'])],['application/pdf',new Set(['.pdf'])]]);
-const DEFAULTS={maxFileBytes:10*1024*1024,maxBatchBytes:25*1024*1024,maxFiles:5,quotaBytes:1024**3,draftTtlMs:86400_000};
+const DEFAULTS={maxFileBytes:15*1024*1024,maxBatchBytes:75*1024*1024,maxFiles:5,quotaBytes:1024**3,draftTtlMs:86400_000};
 type StoredUpload={uploadId:string;name:string;mime:string;size:number;kind:'file'|'image'};
 type UploadInput={name:string;mime:string;data:Buffer};
 type UploadStream={name:string;mime:string;data:AsyncIterable<Uint8Array>&{truncated?:boolean}};

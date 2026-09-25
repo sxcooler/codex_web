@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 // Run against a fresh extracted release, never a user's configured installation.
 const root = process.env.PORTABLE_TEST_DIR;
 const windows = process.platform === 'win32';
-test('extracted release runs with bundled Node and isolated data', { skip: !root, timeout: 30_000 }, async () => {
+test('extracted release runs with bundled Node and isolated data', { skip: !root, timeout: 90_000 }, async () => {
   const directory = root!;
   assert.equal(await access(join(directory, '.local')).then(() => true, () => false), false, 'Use a fresh extracted package');
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'));
@@ -93,6 +93,16 @@ test('extracted release runs with bundled Node and isolated data', { skip: !root
     assert.equal(JSON.parse(await readFile(join(data,'server-control.json'),'utf8')).token,state.token);
     const status=spawnSync(start,[...args,'--status'],{cwd:directory,env,encoding:'utf8',windowsHide:true,timeout:10000});
     assert.equal(status.status,0,status.stderr);assert.match(status.stdout,new RegExp(String(port)));
+    const archive=process.env.PORTABLE_TEST_UPDATE;
+    if(archive){
+      const config=await readFile(join(data,'config.json')),auth=await readFile(join(data,'auth.json'));
+      const checksum=createHash('sha256').update(await readFile(archive)).digest('hex');
+      const updated=spawnSync(executable,['scripts/update-portable.ts',archive,checksum],{cwd:directory,env,encoding:'utf8',windowsHide:true,timeout:60000});
+      assert.equal(updated.status,0,updated.stdout+updated.stderr);
+      assert.notEqual(JSON.parse(await readFile(join(data,'server-control.json'),'utf8')).token,state.token);
+      assert.equal((await fetch(url+'/api/auth/session')).status,200);
+      assert.deepEqual(await readFile(join(data,'config.json')),config);assert.deepEqual(await readFile(join(data,'auth.json')),auth);
+    }
   } finally {
     const stop=spawnSync(start,[...args,'--stop'],{cwd:directory,env,encoding:'utf8',windowsHide:true,timeout:20000});
     assert.equal(stop.status,0,stop.stderr);

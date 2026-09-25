@@ -18,6 +18,7 @@ let threadReads = 0;
 let turnLists = 0;
 let fullTurnLists = 0;
 let headerTurnLists = 0;
+let unsubscribes = 0;
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const emptyRolloutError = 'failed to read thread: thread-store internal error: failed to read session metadata /private/rollout.jsonl: rollout at /private/rollout.jsonl is empty';
@@ -38,6 +39,7 @@ const settings = (value, params = {}) => ({ thread: value, model: mode === 'resu
 
 function finish(threadId, activeTurn, status = 'completed') {
   const complete = turn(activeTurn.id, status, activeTurn.items);
+  complete.error = activeTurn.error;
   const value = threads.get(threadId);
   value.turns = [...value.turns.filter(({ id }) => id !== complete.id), complete];
   value.status = { type: 'idle' };
@@ -57,6 +59,14 @@ function startTurn(id, params) {
 
   if (text === 'exit-unknown') return process.exit(9);
   send({ method: 'turn/started', params: { threadId: params.threadId, turn: activeTurn } });
+  if(text==='quota-error'){
+    send({ id, result: { turn: activeTurn } });
+    activeTurn.error={message:'Usage limit exceeded',codexErrorInfo:'usageLimitExceeded'};
+    finish(params.threadId,activeTurn,'failed');
+    value.status={type:'systemError'};
+    send({method:'thread/status/changed',params:{threadId:params.threadId,status:value.status}});
+    return;
+  }
   if (text === 'stale-crash') {
     const item = { type: 'agentMessage', id: `item-${turnId}`, text: '', phase: null, memoryCitation: null, delivery: null, questions: null };
     send({ method: 'item/started', params: { threadId: params.threadId, turnId, item, startedAtMs: Date.now() } });
@@ -298,7 +308,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     send({ id, result: {} });
     return finish(params.threadId, activeTurn, 'interrupted');
   }
-  if (method === 'thread/unsubscribe') return send({ id, result: { status: mode === 'not-subscribed' ? 'notSubscribed' : 'unsubscribed' } });
-  if (method === 'fixture/stats') return send({ id, result: { turnStarts, interrupts, lastTurn, modelLists, lastThread, lastResume, itemLists, threadReads, turnLists, fullTurnLists, headerTurnLists } });
+  if (method === 'thread/unsubscribe') {unsubscribes++;return send({ id, result: { status: mode === 'not-subscribed' ? 'notSubscribed' : 'unsubscribed' } });}
+  if (method === 'fixture/stats') return send({ id, result: { turnStarts, interrupts, lastTurn, modelLists, lastThread, lastResume, itemLists, threadReads, turnLists, fullTurnLists, headerTurnLists, resumes, unsubscribes } });
   send({ id, error: { code: -32601, message: `unknown ${method}` } });
 });

@@ -13,6 +13,7 @@
 
 ## 当前设计
 
+- [便携更新、自启动、提问与模型目录](design/portable-updates-and-input.md)：轻量更新与恢复、品牌启动器、原生异步提问和目录刷新。
 - [多访问地址](design/multiple-origins.md)：localhost 与 HTTPS 白名单、Cookie/CSRF 边界和首次可选域名。
 
 - [当前用户后台运行](design/background-running.md)：源码/便携启停、首次偏好、用户启动项及迁移。
