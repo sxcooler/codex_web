@@ -21,7 +21,7 @@ A lightweight web client for Codex running on your development machine, accessib
 
 **Mobile**
 
-<img src="docs/assets/screenshots/mobile.png" alt="Codex Web mobile: conversation history and message composer" width="360">
+![Codex Web mobile: conversation history and message composer](docs/assets/screenshots/mobile.png)
 
 ## Platforms and prerequisites
 

@@ -23,7 +23,7 @@
 
 **手机端**
 
-<img src="docs/assets/screenshots/mobile.png" alt="Codex Web 手机端：会话历史与消息输入区" width="360">
+![Codex Web 手机端：会话历史与消息输入区](docs/assets/screenshots/mobile.png)
 
 ## 平台与前置条件
 
