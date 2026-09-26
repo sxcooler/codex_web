@@ -61,7 +61,20 @@ Codex 回复支持 Markdown，在生成中、历史回放和重新进入会话�
 
 ## 安全、性能与样式
 
-不解析原始 HTML，不执行脚本或嵌入页面。外链仅允许 http/https，使用新标签及 noopener/noreferrer；危险协议不转成可执行链接，项目内本机路径通过下述文件预览转换。Markdown 图片不自动加载，现有鉴权附件显示保持原样。
+### 仓内图片与 GitHub 兼容（2026-09-26）
+
+- 文档以 GitHub 常用 Markdown 为兼容基线。图片优先用 `![说明](相对路径)`，需要宽高时可用受限 `<img>`；源文件不写 Web API 地址或个人设备地址。GitHub 参考：[路径规则](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#relative-links)、[HTML 清洗流程](https://github.com/github/markup#github-markup)。
+- 图片地址相对当前文档目录解析；`/` 表示项目根目录，`./`、`../` 可在项目内使用。聊天中的相对图片以绑定项目根目录为基准。拒绝外部 URL、网络共享、盘符、`file:`、`data:` 及越界路径；没有项目上下文时不加载。此处“仓内”指绑定项目目录内的可读文件，不要求已被 Git 跟踪。
+- Markdown 图片与受限 `<img>` 共用现有 `/files/image` 鉴权接口；保留真实路径边界、敏感文件保护、10 MiB / 4000 万像素限制，SVG 和动图转成静态 WebP。浏览器懒加载，不增加外部图片代理，不放宽 CSP。
+- 只识别独立的 `<img>` HTML 节点，保留 `src`、`alt`、`title` 与 1–2048 的整数宽高；不透传事件、样式、`srcset`、`id`、`name` 等属性。其他原始 HTML 继续按原有策略处理，不开放脚本、iframe、picture 或任意 HTML。解析后仍执行清洗和加固。
+- 被拒绝的图片明确提示“仅支持项目内图片”；读取失败给出可理解的错误，不再把合法仓内图片标为 `Image blocked`。完整尺寸受容器宽度约束。
+- GitHub 可代理外部图片，本项目不支持；项目文档使用已脱敏的仓内素材。GitHub 与 Web 允许样式差异，不承诺所有 GFM 扩展等价。回归覆盖两种图片写法、嵌套目录与根路径、中文/空格、恶意属性、外部地址、越界、加载失败及手机布局。
+
+验证入口：`node --test tests/file-links.test.ts tests/project-images.test.ts` 和 `node tests/markdown-images.browser.mjs`（本机 Chrome）。后者覆盖实际 README 文件面板、共享聊天渲染、流式输出、失败提示及既有 Markdown 回归，使用模拟 API，不发送模型消息。另用 GitHub Markdown 渲染 API 验证同类标准图片与 HTML 图片：两者保留图片，`width="360"` 保留，输入的事件属性及样式被清除。
+
+文档风险检查：扫描 32 份已跟踪 Markdown 文档的凭据模式、个人路径与会话标识、私网地址、外部图片、危险 HTML 和不安全命令示例；人工查看两张仓内展示截图。命中的本机路径、UUID 和域名均为泛化示例；未发现真实密钥或可读的个人设备信息。文档本地链接检查中的两个候选均是代码片段内的语法示例。此结果仅覆盖当前文档和展示素材，不是整个 Git 历史或所有形式敏感信息的无泄漏证明。
+
+不执行脚本或嵌入页面。外链仅允许 http/https，使用新标签及 noopener/noreferrer；危险协议不转成可执行链接，项目内本机路径通过文件预览转换。现有鉴权附件显示保持原样。
 
 保留库的清洗与加固处理，禁止通过自定义组件绕过链接过滤。高亮资源从本地构建产物加载；消息级错误边界覆盖顶层 Markdown 包及内部高亮子模块，加载或渲染失败时显示可选择复制的原文，不影响其他消息。首版未接 Mermaid，后续按上节增加；仍不支持数学公式或代码运行功能。
 

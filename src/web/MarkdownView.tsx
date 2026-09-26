@@ -1,6 +1,6 @@
 import {Component,lazy,memo,Suspense,type ReactNode} from 'react';
 const MarkdownCore=lazy(()=>import('./Markdown.tsx').then(module=>({default:module.Markdown})));
-type Props={text:string;streaming?:boolean;resolveUrl?:(url:string)=>string;linkScope?:string;onLink?:(url:string)=>boolean};
+type Props={text:string;streaming?:boolean;resolveUrl?:(url:string)=>string;resolveImage?:(url:string)=>string;linkScope?:string;onLink?:(url:string)=>boolean};
 class MarkdownBoundary extends Component<{text:string;children:ReactNode},{failed:boolean}>{
  state={failed:false};
  static getDerivedStateFromError(){return {failed:true};}

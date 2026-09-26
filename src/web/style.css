@@ -220,3 +220,5 @@
 .file-change-counts{white-space:nowrap;font-variant-numeric:tabular-nums}.file-change-counts .added{color:#82d9b4}.file-change-counts .deleted{color:#ef969b}
 /* Native question controls stay usable on narrow screens. */
 .question-fields{border:0;padding:0;margin:0 0 1rem;min-width:0}.question-fields legend{font-weight:600;margin-bottom:.6rem;white-space:pre-wrap;overflow-wrap:anywhere}.question-options{display:grid;gap:.5rem;margin-bottom:.7rem}.question-options label{display:flex;align-items:flex-start;gap:.6rem;padding:.6rem;border:1px solid var(--border,#35454c);border-radius:6px;cursor:pointer}.question-options input{width:auto;flex:none;margin-top:.2rem}.question-options small{display:block}.async-questions{margin:.8rem 0}.async-questions input{max-width:100%}
+
+.markdown-message img.markdown-image{display:block;max-width:100%;object-fit:contain;margin:12px 0}

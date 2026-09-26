@@ -1,0 +1,18 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"><link rel="icon" href="/icon.svg"><title>仓内 Markdown 图片回归</title>
+<style>#root{height:100dvh;min-width:0}#right-sidebar{height:100%;width:100%;max-width:900px}.markdown-message{padding:12px;min-width:0}</style>
+<div id="root"></div>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {MarkdownView} from '/src/web/MarkdownView.tsx';
+import {GitPanel} from '/src/web/GitPanel.tsx';
+import {Message} from '/src/web/Conversation.tsx';
+import {fileImageUrl} from '/src/web/fileLinks.ts';
+import '/src/web/style.css';
+const h=React.createElement,root=createRoot(document.querySelector('#root'));
+const sample='![标准](../assets/图%20片.png)\n\n<img src="/assets/mobile.png" alt="HTML" width="360" height="720" onerror="window.imageExecuted=true" style="position:fixed" srcset="https://example.invalid/tracker.png 2x" id="unsafe" name="unsafe">\n\n![失败](missing.png)\n\n![远程](https://example.invalid/tracker.png)\n\n<img src="//example.invalid/tracker.png" alt="外链">\n\n![越界](../../secret.png)\n\n<img src="data:image/svg+xml,evil" alt="data">\n\n<script>window.imageExecuted=true<\/script>\n\n<iframe src="https://example.invalid"></iframe>\n\n<img src="/assets/huge.png" width="999999" height="-1" alt="超大">';
+const params=new URLSearchParams(location.search);
+if(params.has('panel'))root.render(h(GitPanel,{id:'fixture',projectId:'fixture',tick:0,visible:true,openFile:{path:'README.md'}}));
+else if(params.has('chat'))root.render(h(Message,{item:{type:'agentMessage',text:sample},threadId:'fixture',projectRoot:'/example/project'}));
+else root.render(h(MarkdownView,{text:sample,streaming:params.has('streaming'),linkScope:'fixture|docs/guide.md',resolveImage:params.has('unbound')?undefined:url=>fileImageUrl('fixture','docs/guide.md',url)}));
+</script></html>

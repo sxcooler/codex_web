@@ -13,6 +13,13 @@ export const fileUrl=(id:string,currentPath:string,url:string,origin=location.or
   return relative?origin+'/api/sessions/'+encodeURIComponent(id)+'/files/content?path='+encodeURIComponent(relative):'';
 };
 
+export const fileImageUrl=(id:string,currentPath:string,url:string,origin=location.origin)=>{
+  let path:string;try{path=decodeURIComponent(url.trim().split(/[?#]/,1)[0]);}catch{return '';}
+  if(!path||/[\\:\x00-\x1f\x7f]/.test(path)||path.startsWith('//'))return '';
+  const relative=relativeFile(currentPath,path,true);
+  return relative?origin+'/api/sessions/'+encodeURIComponent(id)+'/files/image?path='+encodeURIComponent(relative):'';
+};
+
 // Local links are translated to the existing authenticated project API, never file:// navigation.
 export function chatFileUrl(id:string,projectRoot:string,url:string,origin=location.origin):string{
   if(/^https?:\/\//i.test(url)||url.startsWith('#'))return fileUrl(id,'',url,origin);
