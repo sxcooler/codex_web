@@ -58,9 +58,69 @@ Git History uses icons and short names for local branches, remote-tracking branc
 
 ## Local and cross-device access
 
-Local use does not require a virtual network. For cross-device access, connect the client and development machine to the same LAN or an authorized virtual network, and keep the machine and service online. **Direct public-internet exposure is not recommended. Prefer a virtual network with authentication, encryption, and access controls; Tailscale is one example.**
+Recommended daily setup: **run Codex Web in the background on a Windows development machine, then continue tasks from your phone over private Tailscale HTTPS**. Code, execution, and Codex credentials stay on the host; the phone needs only Tailscale and a browser. Run the following commands in PowerShell from the project or portable package root.
 
-The service listens only on loopback, so cross-device access also requires a restricted proxy or tunnel. Options include a LAN HTTPS proxy, Tailscale, ZeroTier, NetBird, WireGuard, or SSH forwarding. See the [deployment guide](docs/guides/deployment.md#网络访问方式) for comparisons, official documentation, and a Tailscale HTTPS example.
+### 1. Get local access working first
+
+Use the source setup above or extract a portable package and run `Start.cmd`. Complete native Codex login, work-root setup, and Web password setup. Confirm that you can sign in and finish a task at `http://localhost:3000` (use your actual port if different). Choose background mode for portable packages; source deployments use `scripts/windows/start-server.cmd`.
+
+### 2. Give your phone a private HTTPS address
+
+[Install Tailscale](https://tailscale.com/download) on the host and phone, sign in with the same account to join the same tailnet, and keep both connected. If you customize access policies, allow the phone to reach the host's HTTPS port. On the host, run:
+
+```powershell
+.\scripts\windows\configure-serve.cmd -Port 3000
+```
+
+Match the Web service's port. On first use, follow any Tailscale HTTPS / Serve enablement prompt, then rerun the script. It maps HTTPS to the local loopback service, writes the actual hostname to `.local/web/config.json`, and preserves the previous address for local access. If Serve already has configuration, the script stops for inspection rather than overwriting it; do not clear existing mappings just to bypass this check.
+
+After tasks finish, restart Web (`Stop.cmd` → `Start.cmd` for portable packages, `stop-server.cmd` → `start-server.cmd` for source). On your phone, open the actual HTTPS address printed by the script, shaped like `https://device.tailnet-name.ts.net`, and sign in with your **Web password**. HTTPS and localhost require separate browser logins. Use the browser's “Add to Home Screen” option for convenient access.
+
+[Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve) exposes this endpoint only to authorized tailnet devices; no router port forwarding or public Funnel is needed. The script creates a persistent background mapping that resumes when Tailscale restarts. Web still listens on `127.0.0.1`; entering the host's Tailscale IP alone does not replace this HTTPS endpoint.
+
+### 3. Start at logon and hand off tasks
+
+```powershell
+.\scripts\windows\install-startup.cmd
+```
+
+This starts Web **when the current Windows user logs in**, not before login as a system service. The startup entry uses the Codex Web name and icon; remove it with `uninstall-startup.cmd`. Keep the host powered on, connected, and awake, with Tailscale and any required proxy running. Disconnecting the phone does not itself stop a task; reconnect to check progress. You cannot send messages offline.
+
+When CLI, VS Code, Codex App, and Web share the same host user's native sessions, release a conversation in the previous client before handing it off. Keep one writer per conversation. The phone needs neither Codex installed nor a copy of the host's credentials.
+
+### 4. If outbound access needs a proxy: use it for HTTP and WebSocket
+
+**Tailscale connects the phone to the host; the outbound proxy connects Codex on the host to the model service.** These are separate connections. Skip this section if direct model access already works.
+
+For v2rayN or a similar Windows proxy, enable its system-proxy setting and confirm that Windows points to the actual listener, for example `127.0.0.1:10808` (an example only; use your own port). Running the proxy application alone does not configure the system proxy.
+
+Back up the native Codex user config at `%USERPROFILE%\.codex\config.toml`, then add this setting to the existing `[features]` section. Create the section only if absent; **do not replace the whole file or duplicate the section**:
+
+```toml
+[features]
+respect_system_proxy = true
+```
+
+This is native Codex configuration, not Web's `config.json`. Standalone CLI, the VS Code extension, and Codex App can share it under the same Windows user and `CODEX_HOME`. Custom `CODEX_HOME` values, other OS users, and WSL require checking their own configurations. Check that the CLI you use supports and reads the option:
+
+```powershell
+codex features list | Select-String respect_system_proxy
+```
+
+Expect `true`; use the standalone CLI's actual path if it is not on PATH. Once active tasks finish, restart Web and the native processes for any affected VS Code / Codex App instances, then verify with a short message. The launcher's `-NoProfile` skips the PowerShell profile, not Codex's system-proxy lookup. This setup needs no profile-based proxy variables or changes to Codex filesystem permissions or login mode.
+
+CLI **0.156.1** still marks this feature `under development`. That version and the native **0.155.0-alpha.16.3 / 0.155.0-alpha.16.4** executables bundled with VS Code / Codex App were verified to establish WebSocket connections and receive model responses through the system proxy. This does not establish support for every version or platform; recheck after upgrades. See [Codex 0.156.1 proxy selection](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/http-client/src/outbound_proxy.rs). If it regresses, undo only the added setting and restart affected clients, preserving other configuration and credentials.
+
+### 5. Identify which connection failed
+
+| Symptom | Check first |
+| --- | --- |
+| Local Web access also fails | Service status and port: portable `Status.cmd`, source `scripts/windows/status-server.cmd` |
+| Local access works, phone access fails | Tailscale on both devices, access policy, host sleep, and the HTTPS address / target port in `tailscale serve status` |
+| Web works, but Codex repeats `Reconnecting… 5/5` | Model connection details, proxy availability, and effective native config; existing `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` may also affect routing |
+| Model requests return `401 Unauthorized` | Native account and provider / API key configuration; this is not a normal WebSocket fallback notice and the proxy flag does not fix it |
+
+Exhausted WebSocket retries can fall back to HTTP streaming, explaining a long wait followed by a successful response. This is only one possible cause; `5/5` alone does not diagnose a proxy problem. Local use needs no Tailscale. See the [deployment guide](docs/guides/deployment.md#网络访问方式) for Linux, other networking options, and further troubleshooting.
 
 ## Portable packages
 

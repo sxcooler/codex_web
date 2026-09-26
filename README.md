@@ -60,9 +60,69 @@ Git 日志用图标和简短名称区分本地分支、远程跟踪分支及标�
 
 ## 本地与跨设备访问
 
-本机使用不需要虚拟网络。跨设备访问须保证设备与开发机连接到同一局域网或获准互通的虚拟网络，且开发机和服务在线。**不建议直接将服务暴露到公网；建议使用带身份认证、加密和访问控制的虚拟网络，例如 Tailscale 。**
+推荐的日常用法是：**Windows 开发机后台运行 Codex Web，手机通过 Tailscale 私有 HTTPS 随时接续任务**。代码、执行环境和 Codex 登录都留在开发机，手机只需 Tailscale 和浏览器。以下命令在项目或便携包根目录的 PowerShell 中运行。
 
-服务仅监听回环地址，跨设备还需配置受限的代理或隧道入口。可选局域网 HTTPS 代理、Tailscale、ZeroTier、NetBird、WireGuard 或 SSH 转发；方案比较、官方文档和 Tailscale HTTPS 示例见 [部署指南](docs/guides/deployment.md#网络访问方式)。
+### 1. 先在开发机跑通
+
+按上方步骤源码启动，或按下方说明解压便携包、运行 `Start.cmd`。完成原生 Codex 登录、工作目录和 Web 密码设置，确认 `http://localhost:3000` 能登录并完成一个任务；自定义端口时使用实际端口。便携包选择后台运行，源码版使用 `scripts/windows/start-server.cmd`。
+
+### 2. 给手机一个私有 HTTPS 入口
+
+开发机和手机均[安装 Tailscale](https://tailscale.com/download)，登录同一账号加入同一 tailnet，保持连接；使用自定义访问策略时，允许手机访问开发机的 HTTPS 端口。在开发机运行：
+
+```powershell
+.\scripts\windows\configure-serve.cmd -Port 3000
+```
+
+端口应与 Web 服务一致。首次使用按提示启用 Tailscale HTTPS / Serve；完成后重新运行脚本。脚本建立 HTTPS 到本机回环服务的映射，将实际域名写入 `.local/web/config.json`，并保留原地址供本机访问。已有 Serve 配置时会停止并提示检查，不会覆盖其他服务；不要为此直接清空现有映射。
+
+等任务结束后重启 Web（便携包 `Stop.cmd` → `Start.cmd`，源码版 `stop-server.cmd` → `start-server.cmd`）。手机打开脚本输出的 `https://设备名.tailnet名称.ts.net` 实际地址，用 **Web 密码**登录；HTTPS 与 localhost 各自登录。可在浏览器菜单中“添加到主屏幕”作为日常入口。
+
+这里使用的 [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve) 仅供 tailnet 内获准设备访问，无需路由器端口转发或开启公网 Funnel。脚本使用后台持久配置，Tailscale 重启后会恢复映射。服务仍监听 `127.0.0.1`；只输入开发机的 Tailscale IP 并不能替代这个 HTTPS 入口。
+
+### 3. 登录自启与日常接力
+
+```powershell
+.\scripts\windows\install-startup.cmd
+```
+
+这是**当前 Windows 用户登录后自启**，不是开机未登录就启动的系统服务。启动项使用 Codex Web 名称和图标；`uninstall-startup.cmd` 可移除。开发机须保持开机、联网且不休眠，Tailscale 及所需代理也须运行。手机断开不等于任务停止，重新连接后可查看进展；离线不能发送消息。
+
+CLI、VS Code、Codex App 和 Web 使用同一宿主用户的原生会话时，先在原客户端释放会话再接力，同一会话只保留一个写入客户端。手机无需安装 Codex，也无需复制开发机的凭据。
+
+### 4. 需要出站代理时：让 HTTP 与 WebSocket 使用系统代理
+
+**Tailscale 负责“手机访问开发机”；代理负责“开发机上的 Codex 访问模型服务”**，两者是不同链路。网络本来可直连模型服务时可跳过本节。
+
+Windows 上使用 v2rayN 等代理时，先启用其“系统代理”，确认 Windows 代理指向实际监听地址，例如 `127.0.0.1:10808`（仅为示例，以自己的端口为准）。仅启动代理程序不等于设置了系统代理。
+
+备份原生 Codex 用户配置 `%USERPROFILE%\.codex\config.toml`，在已有 `[features]` 节中加入下面这一项；没有该节时才新建，**不要覆盖整个文件或重复声明该节**：
+
+```toml
+[features]
+respect_system_proxy = true
+```
+
+这是 Codex 原生配置，不是 Web 的 `config.json`。同一 Windows 用户、同一 `CODEX_HOME` 下的独立 CLI、VS Code 扩展和 Codex App 可共用；自定义 `CODEX_HOME`、其他系统用户或 WSL 需检查各自配置。先确认正在使用的 CLI 支持并读到了此选项：
+
+```powershell
+codex features list | Select-String respect_system_proxy
+```
+
+应显示 `true`；找不到命令时使用独立 CLI 的实际路径。等活动任务结束后，重启 Web 和需要生效的 VS Code / Codex App 原生进程，再发一条短消息验证。启动脚本的 `-NoProfile` 只跳过 PowerShell profile，不阻止 Codex 读取系统代理，因此无需依赖 profile 中的代理变量，也无需调整 Codex 文件访问权限或登录方式。
+
+该开关在 CLI **0.156.1** 中仍标为 `under development`。已验证该版本及 VS Code / Codex App 所带 **0.155.0-alpha.16.3 / 0.155.0-alpha.16.4** 原生程序能经系统代理建立 WebSocket 并收到模型回复；这不代表所有版本和平台都支持，升级后应复核。实现依据见 [Codex 0.156.1 的代理选择逻辑](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/http-client/src/outbound_proxy.rs)。如有回归，仅撤销新增设置并重启相关客户端，保留其他配置及登录凭据。
+
+### 5. 遇到问题先区分链路
+
+| 现象 | 先检查 |
+| --- | --- |
+| 本机网页也打不开 | 服务状态与端口；便携包 `Status.cmd`，源码版 `scripts/windows/status-server.cmd` |
+| 本机正常，手机打不开 | 两端 Tailscale、访问策略、开发机是否休眠，以及 `tailscale serve status` 的 HTTPS 地址和目标端口 |
+| 页面可用，但 Codex 反复 `Reconnecting… 5/5` | 模型连接详情、系统代理是否在线、原生配置是否生效；已有 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 也可能影响实际路由 |
+| 模型返回 `401 Unauthorized` | 原生账户及 provider / API key 配置；不是正常的 WebSocket 回退提示，不能靠上述代理开关修复 |
+
+WebSocket 重试耗尽后可能回退到 HTTP 流式响应，造成“等很久又好了”；这只是重连的一种原因，不应仅凭 `5/5` 就判断为代理问题。本机使用不需要 Tailscale；Linux、其他网络方案与详细排查见 [部署指南](docs/guides/deployment.md#网络访问方式)。
 
 ## 便携包
 
