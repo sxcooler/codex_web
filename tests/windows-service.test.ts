@@ -23,7 +23,7 @@ test('Windows startup is branded, forwards launch and migrates only this workspa
   const launcher=join(root,'.local/startup/codex_web.exe');
   assert.equal(spawnSync(launcher,[],{windowsHide:true,timeout:10000}).status,23);
   assert.equal((await readFile(join(root,'launched.txt'),'utf8')).trim(),'launched');
-  await writeFile(join(root,'metadata.ps1'),"$path=Join-Path $PSScriptRoot '.local/startup/codex_web.exe'\nif([Diagnostics.FileVersionInfo]::GetVersionInfo($path).FileDescription -ne 'codex_web'){throw 'Missing description'}\nAdd-Type -AssemblyName System.Drawing\n$icon=[Drawing.Icon]::ExtractAssociatedIcon($path)\nif(-not $icon){throw 'Missing icon'}\n$icon.Dispose()\n");
+  await writeFile(join(root,'metadata.ps1'),"$path=Join-Path $PSScriptRoot '.local/startup/codex_web.exe'\n$info=[Diagnostics.FileVersionInfo]::GetVersionInfo($path)\nif($info.FileDescription -ne 'codex_web' -or $info.ProductName -ne 'codex_web'){throw 'Missing codex_web branding'}\nif($info.CompanyName -ne 'sxcooler'){throw 'Missing sxcooler publisher metadata'}\nAdd-Type -AssemblyName System.Drawing\n$icon=[Drawing.Icon]::ExtractAssociatedIcon($path)\nif(-not $icon){throw 'Missing icon'}\n$icon.Dispose()\n");
   const metadata=spawnSync('pwsh.exe',['-NoProfile','-File',join(root,'metadata.ps1')],{encoding:'utf8',windowsHide:true,timeout:10000});
   assert.equal(metadata.status,0,metadata.stdout+metadata.stderr);
  }finally{await rm(root,{recursive:true,force:true});}

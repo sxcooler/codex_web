@@ -1,17 +1,90 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import {join} from 'node:path';
+import {mkdtemp,mkdir,writeFile,rename,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import test from 'node:test';
 import { Runtime } from '../src/codex/runtime.ts';
 
 const fixture = fileURLToPath(new URL('./fixtures/runtime-server.mjs', import.meta.url));
 const cwd = fileURLToPath(new URL('..', import.meta.url));
 
+test('bounded fork header reads time out shared initialization without sending a late header RPC',async t=>{
+  const runtime=new Runtime({executable:process.execPath,cwd});t.after(()=>runtime.close());
+  let reads=0;const initialized=new Promise(resolve=>setTimeout(()=>resolve({request:async()=>{reads++;return {thread:{id:'fork',source:'vscode'}};}}),100));
+  t.mock.method(runtime as any,'getServer',()=>initialized);
+  await assert.rejects(runtime.threadHeaderRead('fork',40),{code:'RUNTIME_UNAVAILABLE'});
+  await initialized;assert.equal(reads,0,'timed-out supplement must not send a header RPC after initialization');
+  assert.equal((await runtime.threadHeaderRead('fork',100)).id,'fork');assert.equal(reads,1,'the next read can use the same initialized runtime');
+});
+
+test('fork list header reads no turns and fails closed for external archive/delete or unknown paths',async t=>{
+  const home=await mkdtemp(join(tmpdir(),'fork-header-'));t.after(()=>rm(home,{recursive:true,force:true}));
+  await mkdir(join(home,'sessions'));await mkdir(join(home,'archived_sessions'));
+  const path=join(home,'sessions','fork.jsonl');await writeFile(path,'header');
+  const runtime=new Runtime({executable:process.execPath,cwd});t.after(()=>runtime.close());
+  (runtime as any).initializeInfo={codexHome:home};
+  const thread:any={id:'fork',forkedFromId:'source',source:'vscode',preview:'',createdAt:1,updatedAt:2,path};let reads=0;
+  t.mock.method(runtime as any,'call',async(method:string,input:any)=>{assert.equal(method,'thread/read');assert.deepEqual(input,{threadId:'fork',includeTurns:false});reads++;return {thread:{...thread,turns:[]}};});
+  assert.equal((await runtime.forkListHeader('fork'))?.archived,false);
+  (runtime as any).state('fork').releaseRequested=true;
+  assert.equal((await runtime.forkListHeader('fork'))?.thread.release.requested,true);
+  assert.equal((await runtime.forkListHeader('fork'))?.archived,false);assert.equal(reads,1,'reuse only the short-lived native header');
+  const archivePath=join(home,'archived_sessions','fork.jsonl');await rename(path,archivePath);
+  assert.equal(await runtime.forkListHeader('fork'),null,'cached recent path cannot manufacture an externally archived session');
+  thread.path=archivePath;runtime.invalidateForkHeader('fork');assert.equal((await runtime.forkListHeader('fork'))?.archived,true);
+  await rm(archivePath);assert.equal(await runtime.forkListHeader('fork'),null);
+  for(const patch of [{path:null},{path:join(home,'sessions-extra','fork.jsonl')},{preview:'a real message'}]){
+    Object.assign(thread,{id:'fork',source:'vscode',parentThreadId:null,path,preview:''},patch);runtime.invalidateForkHeader('fork');
+    assert.equal(await runtime.forkListHeader('fork'),null);
+  }
+  for(const patch of [{parentThreadId:'parent'},{source:{subAgent:{}}},{id:'wrong'}]){
+    Object.assign(thread,{id:'fork',source:'vscode',parentThreadId:null,path},patch);runtime.invalidateForkHeader('fork');
+    await assert.rejects(runtime.forkListHeader('fork'),{code:patch.id?'RUNTIME_UNAVAILABLE':'RUNTIME_SUBAGENT_THREAD'});
+  }
+});
+
 function start(t: { after: (fn: () => Promise<void>) => void }, idleMs = 60_000, mode = 'normal') {
   const runtime = new Runtime({ executable: process.execPath, args: [fixture, mode], cwd, idleMs, sandbox: 'danger-full-access' });
   t.after(() => runtime.close().catch(() => {}));
   return runtime;
 }
+
+for (const phase of ['starting', 'stopping']) test(`cancelled snapshots release listeners while runtime is ${phase}`, async t => {
+  const runtime = start(t);
+  const gate = Promise.withResolvers<any>();
+  (runtime as any)[phase] = gate.promise;
+  const controller = new AbortController();
+  const pending = runtime.snapshot('waiting-thread', { window: true, signal: controller.signal });
+  const rejection = assert.rejects(pending, { name: 'AbortError' });
+  controller.abort();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([rejection, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('cancelled snapshot remained blocked')), 100); })]);
+    assert.equal(runtime.listenerCount('snapshotChange'), 0);
+    assert.equal(runtime.diagnosticState().reads, 0);
+    assert.strictEqual((runtime as any)[phase], gate.promise, 'cancellation must preserve the shared lifecycle');
+  } finally {
+    clearTimeout(timer);
+    (runtime as any)[phase] = undefined;
+    gate.reject(new Error('fixture cleanup'));
+    await rejection.catch(() => {});
+  }
+});
+
+test('cancelling one initialization waiter preserves concurrent native reads', async t => {
+  const runtime = start(t, 60_000, 'delayed-init');
+  const listing = runtime.list();
+  const controller = new AbortController();
+  const rejection = assert.rejects(runtime.snapshot('waiting-thread', { window: true, signal: controller.signal }), { name: 'AbortError' });
+  controller.abort();
+  await rejection;
+  assert.deepEqual(await listing, { data: [], nextCursor: null });
+  assert.equal(runtime.listenerCount('snapshotChange'), 0);
+  assert.equal(runtime.diagnosticState().reads, 0);
+  assert.equal((await runtime.diagnostics()).available, true);
+});
 
 test('missing CLI reports the executable and configuration remedy', async t => {
   const runtime = new Runtime({ executable: '/missing/codex-web-cli', cwd });
@@ -369,11 +442,14 @@ test('empty metadata retries are bounded and do not mask unrelated reads or repl
   }
 });
 
-test('empty-thread fallback ends before the first turn is submitted', async (t) => {
+test('unsupported turn pagination reads accepted first turn from full native history', async (t) => {
   const runtime = start(t, 60_000, 'unsupported-empty');
   const { threadId } = await runtime.create({ cwd, clientRequestId: 'empty-create' });
   await runtime.send(threadId, { text: 'hold', clientRequestId: 'first-turn' });
-  await assert.rejects(runtime.snapshot(threadId), (error: any) => error.statusCode === 503 && error.code === 'RUNTIME_HISTORY_UNSUPPORTED');
+  const snapshot = await runtime.snapshot(threadId, { window: true });
+  assert.equal(snapshot.thread.turns.length, 1);
+  assert.equal(snapshot.thread.turns[0].items[0].clientId, 'first-turn');
+  assert.deepEqual(await runtime.status(threadId, snapshot.epoch), { resync: false });
   await runtime.abort(threadId);
 });
 
@@ -632,12 +708,13 @@ test('permission catalog exposes only native model and effort defaults for the r
   const runtime=start(t),calls:any[]=[];
   t.mock.method(runtime as any,'call',async(method:string,params:any)=>{
     calls.push({method,params});
-    return method==='config/read'?{config:{model:'native-model',model_reasoning_effort:'high',secret:'not-for-browser'}}:{requirements:null};
+    return method==='config/read'?{config:{model:'native-model',model_reasoning_effort:'high',secret:'not-for-browser'},layers:[{name:{type:'user',file:join(cwd,'config.toml'),profile:null},version:'initial-user-v1',config:{model:'native-model'}}]}:{requirements:null};
   });
   const result=await runtime.permissionModes(cwd);
   assert.equal(result.model,'native-model');assert.equal(result.effort,'high');
-  assert.deepEqual(Object.keys(result).sort(),['current','effort','model','modes']);
-  assert.deepEqual(calls,[{method:'config/read',params:{cwd,includeLayers:false}},{method:'configRequirements/read',params:{}}]);
+  assert.equal(result.userVersion,'initial-user-v1');
+  assert.deepEqual(Object.keys(result).sort(),['current','effort','model','modes','userVersion']);
+  assert.deepEqual(calls,[{method:'config/read',params:{cwd,includeLayers:true}},{method:'configRequirements/read',params:{}}]);
 });
 
 test('confirmed turn options reach snapshots and incremental state even when history headers lag',async t=>{
@@ -715,6 +792,24 @@ test('refresh reconciles a terminal system error without reloading or interrupti
   assert.equal((await runtime.snapshot(active.threadId)).activeTurnId,active.turnId);
   await runtime.send(threadId,{text:'continue',clientRequestId:'after-reset'});
   assert.equal((await runtime.snapshot(threadId)).phase,'IDLE');
+});
+
+test('new task model defaults write only the two validated native user config keys',async t=>{
+  const runtime=start(t),writes:any[]=[];
+  let version='user-v1';
+  const nativeCall=(runtime as any).call.bind(runtime);
+  t.mock.method(runtime as any,'call',async(method:string,params:any)=>{
+    if(method==='config/batchWrite'){writes.push(params);version='user-v2';return {status:'ok',version,filePath:params.filePath};}
+    if(method==='config/read')return {config:{model:'actual-text',model_reasoning_effort:'low'},origins:{},layers:[{name:{type:'user',file:join(cwd,'config.toml'),profile:null},version,config:{model:'actual-text',model_reasoning_effort:'low'}}]};
+    return nativeCall(method,params);
+  });
+  await assert.rejects(runtime.saveModelDefaults(cwd,'actual-text','high'),(error:any)=>error.code==='RUNTIME_INVALID_EFFORT');
+  assert.equal(writes.length,0);
+  await assert.rejects(runtime.saveModelDefaults(cwd,'actual-text'),{statusCode:409,code:'SETTINGS_VERSION_REQUIRED'});
+  const result=await runtime.saveModelDefaults(cwd,'actual-text',undefined,'user-v1');
+  assert.deepEqual(result,{model:'actual-text',effort:'low',effectiveModel:'actual-text',effectiveEffort:'low'});
+  assert.deepEqual(writes[0].edits.map((edit:any)=>[edit.keyPath,edit.value]),[['model','actual-text'],['model_reasoning_effort','low']]);
+  assert.equal(writes[0].expectedVersion,'user-v1');assert.notEqual(writes[0].reloadUserConfig,true);
 });
 
 test('a failed terminal thread can be released while active or unresolved native work remains protected',async t=>{
@@ -844,7 +939,12 @@ test('native async question metadata survives live items and safe reload rejects
   (runtime as any).states.get('existing').activeTurnId='active';
   await assert.rejects(runtime.reloadModels(),{code:'RUNTIME_THREAD_BUSY'});
   assert.throws(()=>runtime.prepareUpdate(),{code:'RUNTIME_THREAD_BUSY'});
+  assert.throws(()=>runtime.assertIdle(),{code:'RUNTIME_THREAD_BUSY'});
   (runtime as any).states.get('existing').activeTurnId=null;
+  (runtime as any).states.get('existing').releasePromise=Promise.resolve();
+  await assert.rejects(runtime.reloadModels(),{code:'RUNTIME_THREAD_BUSY'});
+  (runtime as any).states.get('existing').releasePromise=undefined;
+  assert.doesNotThrow(()=>runtime.assertIdle());
   assert.ok((await runtime.reloadModels()).data.length);
 });
 
@@ -857,6 +957,44 @@ test('failed native reload preserves a marked display catalog without weakening 
   assert.equal(runtime.modelInfo().readAt,readAt);
   await assert.rejects(runtime.models(),/unavailable/);
   await assert.rejects(runtime.models(true,true),/unavailable/);
+});
+
+test('restart checks native loaded threads beyond Web state and refuses active or unverifiable work',async t=>{
+  const runtime=start(t);
+  await runtime.models();
+  const native=(threadId:string,status:any)=>(runtime as any).call('fixture/native-thread',{threadId,status});
+  await native('first',{type:'idle'});
+  await native('background',{type:'active',activeFlags:['waitingOnUserInput']});
+  assert.equal((runtime as any).states.size,0);
+  await assert.rejects(runtime.assertNativeIdle(),{code:'RUNTIME_THREAD_BUSY'});
+  await assert.rejects(runtime.reloadModels(),{code:'RUNTIME_THREAD_BUSY'});
+  await assert.rejects(runtime.prepareRestart(),{code:'RUNTIME_THREAD_BUSY'});
+  await native('background',{type:'active',activeFlags:['waitingOnApproval']});
+  await assert.rejects(runtime.assertNativeIdle(),{code:'RUNTIME_THREAD_BUSY'});
+  await native('background',{type:'unknown'});
+  await assert.rejects(runtime.assertNativeIdle(),{code:'RUNTIME_UNAVAILABLE'});
+  await native('background',{type:'idle'});
+  await runtime.assertNativeIdle();
+  await runtime.prepareRestart();
+  await assert.rejects(runtime.models(),{code:'RUNTIME_UPDATING'});
+});
+
+for(const mode of ['loaded-error','loaded-bad-cursor'])test(`restart fails closed for native activity query ${mode}`,async t=>{
+  const runtime=start(t,60_000,mode);await runtime.models();
+  await assert.rejects(runtime.assertNativeIdle(),{code:'RUNTIME_UNAVAILABLE'});
+});
+
+test('a late native idle result cannot authorize stopping the server',async t=>{
+  const runtime=start(t);await runtime.models();
+  const call=(runtime as any).call.bind(runtime),now=Date.now();
+  t.mock.method(runtime as any,'call',async(method:string,params:any)=>{
+    const result=await call(method,params);
+    if(method==='thread/loaded/list')t.mock.method(Date,'now',()=>now+21_000);
+    return result;
+  });
+  await assert.rejects(runtime.prepareRestart(),{code:'RUNTIME_UNAVAILABLE'});
+  t.mock.restoreAll();
+  assert.ok((await runtime.models()).data.length,'failed check must not lock or stop the runtime');
 });
 
 test('native lifecycle notifications emit small stable Push events without snapshot reads', async (t) => {
@@ -874,6 +1012,47 @@ test('native lifecycle notifications emit small stable Push events without snaps
   await (runtime as any).call('fixture/stats', {});
   assert.equal(events.at(-1).kind, 'approval');
   assert.deepEqual(Object.keys(events[0]).sort(), ['eventKey','kind','threadId']);
+});
+
+test('subagent threads are excluded from lists, direct entry and every notification kind', async t => {
+  const runtime=start(t),internal=runtime as any,events:any[]=[];
+  runtime.on('notification',event=>events.push(event));
+  const variants=[{source:{subAgent:{thread_spawn:{parent_thread_id:'parent',depth:1}}}},
+    {source:{subagent:'review'}},{source:'appServer',parentThreadId:'parent'}];
+  for(const [i,thread] of variants.entries()){
+    const threadId=`child-${i}`;
+    await internal.call('fixture/native-thread',{threadId,status:{type:'idle'},thread});
+    // A child first encountered through an event must be classified without loading history.
+    for(const kind of ['complete','failed','approval','input'])await internal.notification(threadId,kind,kind);
+    await assert.rejects(runtime.open(threadId),{code:'RUNTIME_SUBAGENT_THREAD'});
+    await assert.rejects(runtime.snapshot(threadId),{code:'RUNTIME_SUBAGENT_THREAD'});
+  }
+  assert.deepEqual(events,[]);
+  await internal.call('fixture/native-thread',{threadId:'direct-child',status:{type:'idle'},thread:variants[0]});
+  await assert.rejects(runtime.open('direct-child'),{code:'RUNTIME_SUBAGENT_THREAD'});
+  await assert.rejects(runtime.send('direct-child',{text:'do not send',clientRequestId:'blocked-child'}),{code:'RUNTIME_SUBAGENT_THREAD'});
+  await internal.call('fixture/native-thread',{threadId:'fork',status:{type:'idle'},thread:{forkedFromId:'parent',name:null}});
+  assert.deepEqual((await runtime.list()).data.map(thread=>thread.id),['fork']);
+  await internal.call('thread/archive',{threadId:'child-0'});
+  assert.deepEqual((await runtime.list(undefined,true)).data,[]);
+  await internal.notification('fork','done','complete');
+  assert.equal(events[0].threadId,'fork');
+  const stats=await internal.call('fixture/stats',{});
+  assert.equal(stats.resumes,0);assert.equal(stats.turnLists,0);assert.equal(stats.itemLists,0);
+  // Hiding a child must never exclude its work from restart safety checks.
+  await internal.call('fixture/native-thread',{threadId:'child-active',status:{type:'active',activeFlags:[]},thread:variants[0]});
+  await assert.rejects(runtime.assertNativeIdle(),{code:'RUNTIME_THREAD_BUSY'});
+});
+
+test('thread started metadata filters notifications immediately and unknown sources fail closed',async t=>{
+  const runtime=start(t),internal=runtime as any,events:any[]=[];
+  runtime.on('notification',event=>events.push(event));
+  internal.onNotification({method:'thread/started',params:{thread:{id:'child',source:{subAgent:'review'},parentThreadId:'parent'}}});
+  let reads=0;t.mock.method(internal,'call',async()=>{reads++;throw new Error('metadata unavailable');});
+  await internal.notification('child','done','complete');
+  await internal.notification('unknown','done','complete');
+  assert.deepEqual(events,[]);
+  assert.equal(reads,1,'Started metadata avoids an extra read; unknown sources require verification');
 });
 
 test('unresolved native defaults are delegated on initial start and resume without overrides', async (t) => {
@@ -964,4 +1143,6 @@ test('session listing uses the native state index and preserves cursor/source fi
   const runtime=start(t);let args:any;
   t.mock.method(runtime as any,'call',async(method:string,input:any)=>{assert.equal(method,'thread/list');args=input;return {data:[{id:'listed'}],nextCursor:'next'};});
   const result=await runtime.list('page');assert.equal(args.useStateDbOnly,true);assert.equal(args.cursor,'page');assert.deepEqual(args.sourceKinds,['cli','vscode','appServer','exec']);assert.equal(result.nextCursor,'next');assert.equal(result.data[0].id,'listed');
+  assert.equal(args.sortKey,'updated_at');assert.equal(args.sortDirection,'desc');
+  await runtime.list('next',true,'created_at');assert.equal(args.sortKey,'created_at');assert.equal(args.archived,true);
 });

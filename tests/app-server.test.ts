@@ -74,6 +74,16 @@ test('timeout reports uncertain outcome without retrying and leaves connection u
   await assert.rejects(server.request('rpcError', {}), /denied/);
 });
 
+test('a short read deadline removes the pending request without changing other RPC timeouts',async t=>{
+  const server=start(t);
+  await server.initialize();const started=performance.now();
+  await assert.rejects(server.request('lateRead',{},40),/timed out.*uncertain/i);
+  assert.ok(performance.now()-started<500);assert.equal(server.diagnosticState().pendingCount,0);
+  assert.equal(await server.request('count',{}),1);
+  await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(await server.request('ready',{}),true);assert.equal(server.diagnosticState().pendingCount,0);
+});
+
 test('process exit rejects all pending calls and future calls', async (t) => {
   const server = start(t);
   const failure = once(server, 'failure');
@@ -156,4 +166,18 @@ test('close kills only its unresponsive child after the graceful deadline', { ti
   const server = start(t);
   await server.request('hang', {});
   await assert.rejects(server.close(), /5.*(second|000)|shutdown.*timed out/i);
+});
+
+test('close has a bounded deadline when process close confirmation never arrives', { timeout: 10000 }, async t => {
+  const server = start(t);
+  await server.request('ready', {});
+  const confirmation = Promise.withResolvers<void>();
+  (server as any).ended = confirmation.promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      assert.rejects(server.close(), /shutdown.*timed out/i),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('shutdown deadline did not settle close')), 6500); }),
+    ]);
+  } finally { clearTimeout(timer); confirmation.resolve(); }
 });

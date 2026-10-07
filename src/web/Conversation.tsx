@@ -1,27 +1,32 @@
 import {memo,useEffect,useId,useRef,useState} from 'react';
-import {chatFileUrl,fileImageUrl,linkedFile} from './fileLinks.ts';
+import {chatFileUrl,fileImageUrl,linkedFile,linkFragment} from './fileLinks.ts';
 import {ImagePreview,NativeImages} from './ImagePreview.tsx';
+import {MessageActions} from './MessageActions.tsx';
 import {MarkdownView} from './MarkdownView.tsx';
 import {api,type Json} from './api.ts';
 import {AsyncQuestions,QuestionFields} from './Questions.tsx';
 import {TestReport} from './GitPanel.tsx';
+import {validItemTime} from '../codex/itemTimes.ts';
 const pretty=(value:unknown)=>typeof value==='string'?value:JSON.stringify(value,null,2);
 const stepLabels:Record<string,string>={reasoning:'思考',commandExecution:'命令',fileChange:'文件修改',mcpToolCall:'MCP 工具',dynamicToolCall:'工具调用',webSearch:'搜索',plan:'计划',collabAgentToolCall:'协作',subAgentActivity:'子 Agent',functionCallOutput:'工具输出'};
 const statusLabel=(item:Json)=>item.exitCode!==undefined&&item.exitCode!==null?`exit ${item.exitCode}`:({inProgress:'运行中',completed:'已完成',failed:'失败',declined:'已拒绝',interrupted:'已中止'} as Record<string,string>)[item.status]??item.status??'';
 
-export const TurnMessages=memo(function TurnMessages({turn,threadId,attachments,phase,projectRoot,onOpenFile}:{turn:Json;threadId:string;attachments?:Json[];phase?:string;projectRoot?:string;onOpenFile?:(path:string)=>void}){
+export const TurnMessages=memo(function TurnMessages({turn,threadId,attachments,phase,projectRoot,onOpenFile,onChanged}:{turn:Json;threadId:string;attachments?:Json[];phase?:string;projectRoot?:string;onOpenFile?:(path:string,fragment?:string)=>void;onChanged?:()=>Promise<void>}){
   const blocks:{key:string;items:Json[];process:boolean}[]=[];
   for(const [index,item] of (turn.items??[]).entries()){
     const process=Object.hasOwn(stepLabels,item.type),last=blocks.at(-1);
     if(process&&last?.process)last.items.push(item);else blocks.push({key:turn.id+':'+(item.id??index),items:[item],process});
   }
-  const firstUser=turn.items?.find((item:Json)=>item.type==='userMessage'),lastAgent=turn.items?.filter((item:Json)=>item.type==='agentMessage').at(-1);
-  return <>{blocks.map((block,index)=>block.process?<ExecutionGroup key={block.key} items={block.items} threadId={threadId} turnId={turn.id} status={turn.status} phase={phase} last={index===blocks.length-1}/>:<Message key={block.key} item={block.items[0]} threadId={threadId} turnId={turn.id} attachments={attachments} projectRoot={projectRoot} onOpenFile={onOpenFile} streaming={turn.status==='inProgress'} timestamp={block.items[0]===firstUser?turn.startedAt:block.items[0]===lastAgent&&turn.status!=='inProgress'?turn.completedAt:undefined} timeLabel={block.items[0]===firstUser?'本轮开始':'本轮完成'}/>)}</>;
+  const firstUser=turn.items?.find((item:Json)=>item.type==='userMessage'),lastAgent=turn.items?.filter((item:Json)=>item.type==='agentMessage').at(-1),lastOrdinaryAgent=turn.items?.filter((item:Json)=>item.type==='agentMessage'&&item.delivery!=='async').at(-1);
+  return <>{blocks.map((block,index)=>block.process?<ExecutionGroup key={block.key} items={block.items} threadId={threadId} turnId={turn.id} status={turn.status} phase={phase} last={index===blocks.length-1}/>:<Message key={block.key} item={block.items[0]} threadId={threadId} turnId={turn.id} attachments={attachments} projectRoot={projectRoot} onOpenFile={onOpenFile} streaming={turn.status==='inProgress'} canFork={turn.status==='completed'&&block.items[0]===lastOrdinaryAgent} showCitation={turn.status==='completed'} onChanged={onChanged} timestamp={block.items[0]===firstUser?turn.startedAt:block.items[0]===lastAgent&&turn.status!=='inProgress'?turn.completedAt:undefined} timeLabel={block.items[0]===firstUser?'本轮开始':'本轮完成'}/>)}</>;
 });
 
-function MessageHeader({user=false,timestamp,timeLabel}:{user?:boolean;timestamp?:number;timeLabel?:string}){
-  const date=typeof timestamp==='number'&&timestamp>0?new Date(timestamp*1000):null;
-  return <div className="message-heading"><strong>{user?'用户':'Codex'}</strong>{date&&Number.isFinite(date.getTime())?<time className="muted" dateTime={date.toISOString()} title={timeLabel+' · '+date.toString()}>{date.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})}</time>:null}</div>;
+function MessageHeader({item,user=false,timestamp,timeLabel}:{item:Json;user?:boolean;timestamp?:number;timeLabel?:string}){
+  const field=(user?['startedAtMs','completedAtMs']:['completedAtMs','startedAtMs']).find(field=>validItemTime(item[field]));
+  const milliseconds=field?item[field]:typeof timestamp==='number'&&timestamp>0?timestamp*1000:undefined;
+  const date=validItemTime(milliseconds)?new Date(milliseconds):null;
+  const label=field?(field==='startedAtMs'?'消息开始':'消息完成'):timeLabel;
+  return <div className="message-heading"><strong>{user?'用户':'Codex'}</strong>{date?<time className="muted" dateTime={date.toISOString()} title={label+' · '+date.toString()}>{date.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</time>:null}</div>;
 }
 
 function ExecutionGroup({items,threadId,turnId,status,phase,last}:{items:Json[];threadId:string;turnId:string;status:string;phase?:string;last:boolean}){
@@ -34,9 +39,9 @@ function ExecutionGroup({items,threadId,turnId,status,phase,last}:{items:Json[];
   </details>;
 }
 
-export const Message=memo(function Message({item,threadId,turnId,attachments=[],streaming=false,visible=true,timestamp,timeLabel,projectRoot,onOpenFile}:{item:Json;threadId:string;turnId?:string;attachments?:Json[];streaming?:boolean;visible?:boolean;timestamp?:number;timeLabel?:string;projectRoot?:string;onOpenFile?:(path:string)=>void}) {
-  if(item.type==='userMessage')return <article className="message user"><div className="avatar">U</div><div className="message-body"><MessageHeader user timestamp={timestamp} timeLabel={timeLabel}/><div className="prose">{(item.content??[]).map((c:Json,i:number)=><div key={i}>{c.type==='localImage'&&attachments.some(a=>a.path===c.path)?<a href={attachments.find(a=>a.path===c.path)!.url} target="_blank" rel="noreferrer"><img className="history-image" src={attachments.find(a=>a.path===c.path)!.url} alt={attachments.find(a=>a.path===c.path)!.name}/></a>:c.type==='image'&&item.imagePreviews?.length?null:c.type==='localImage'||c.type==='image'?<span>图片附件（原生历史）</span>:c.text??`[${c.type}]`}</div>)}</div><NativeImages threadId={threadId} turnId={turnId} item={item}/></div></article>;
-  if(item.type==='agentMessage')return <article className="message"><div className="avatar codex">A</div><div className="message-body"><MessageHeader timestamp={timestamp} timeLabel={timeLabel}/>{item.delivery==='async'&&item.questions?.length&&turnId?<AsyncQuestions item={item} threadId={threadId} turnId={turnId}/>:<MarkdownView text={item.text??''} streaming={streaming} linkScope={threadId+'|'+(projectRoot??'')} resolveImage={projectRoot?url=>fileImageUrl(threadId,'',url):undefined} resolveUrl={projectRoot&&onOpenFile?url=>chatFileUrl(threadId,projectRoot,url):undefined} onLink={url=>{const path=linkedFile(threadId,'',url);if(!path||!onOpenFile)return false;onOpenFile(path);return true;}}/>}<NativeImages threadId={threadId} turnId={turnId} item={item}/></div></article>;
+export const Message=memo(function Message({item,threadId,turnId,attachments=[],streaming=false,visible=true,timestamp,timeLabel,projectRoot,onOpenFile,canFork=false,showCitation=false,onChanged}:{item:Json;threadId:string;turnId?:string;attachments?:Json[];streaming?:boolean;visible?:boolean;timestamp?:number;timeLabel?:string;projectRoot?:string;onOpenFile?:(path:string,fragment?:string)=>void;canFork?:boolean;showCitation?:boolean;onChanged?:()=>Promise<void>}) {
+  if(item.type==='userMessage')return <article className="message user"><div className="avatar">U</div><div className="message-body"><MessageHeader item={item} user timestamp={timestamp} timeLabel={timeLabel}/><div className="prose">{(item.content??[]).map((c:Json,i:number)=><div key={i}>{c.type==='localImage'&&attachments.some(a=>a.path===c.path)?<a href={attachments.find(a=>a.path===c.path)!.url} target="_blank" rel="noreferrer"><img className="history-image" src={attachments.find(a=>a.path===c.path)!.url} alt={attachments.find(a=>a.path===c.path)!.name}/></a>:c.type==='image'&&item.imagePreviews?.length?null:c.type==='localImage'||c.type==='image'?<span>图片附件（原生历史）</span>:c.text??`[${c.type}]`}</div>)}</div><NativeImages threadId={threadId} turnId={turnId} item={item}/></div></article>;
+  if(item.type==='agentMessage')return <article className="message"><div className="avatar codex">A</div><div className="message-body"><MessageHeader item={item} timestamp={timestamp} timeLabel={timeLabel}/>{item.delivery==='async'&&item.questions?.length&&turnId?<AsyncQuestions item={item} threadId={threadId} turnId={turnId}/>:<MarkdownView text={item.text??''} actions={item.delivery!=='async'?<MessageActions threadId={threadId} turnId={turnId} canFork={canFork} memoryCitation={showCitation?item.memoryCitation:undefined} onChanged={onChanged}/>:undefined} streaming={streaming} linkScope={threadId+'|'+(projectRoot??'')} resolveImage={projectRoot?url=>fileImageUrl(threadId,'',url,location.origin,projectRoot):undefined} resolveUrl={projectRoot&&onOpenFile?url=>chatFileUrl(threadId,projectRoot,url):undefined} onLink={url=>{const path=linkedFile(threadId,'',url);if(!path||!onOpenFile)return false;onOpenFile(path,linkFragment(url));return true;}}/>}<NativeImages threadId={threadId} turnId={turnId} item={item}/></div></article>;
   if(item.type==='commandExecution')return <Command item={item} threadId={threadId} turnId={turnId} visible={visible}/>;
   if(item.type==='imageView')return <ViewedImage key={threadId+'|'+item.id+'|'+item.path} item={item} threadId={threadId} projectRoot={projectRoot}/>;
   if(item.type==='imageGeneration')return <GeneratedImage item={item} threadId={threadId} turnId={turnId}/>;

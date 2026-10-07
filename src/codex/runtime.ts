@@ -1,9 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { isDeepStrictEqual } from 'node:util';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, resolve, relative, sep } from 'node:path';
+import {realpath,stat} from 'node:fs/promises';
 import { permissionChoices, threadPermissionOptions, type PermissionMode, type PermissionPolicy } from './permissions.ts';
 import { AppServer } from './app-server.ts';
+import {baseUserLayer,readSettings,writeSettings,type SettingsWriteInput} from './settings.ts';
+import {readInstalledPlugins,type InstalledPluginsSnapshot} from './installed-plugins.ts';
+import { itemWithTimes } from './itemTimes.ts';
 import {diagnosticId,type DiagnosticEvent} from '../server/diagnostics.ts';
 
 export type NativeInput = { type: 'text'; text: string; text_elements: [] } | { type: 'localImage'; path: string };
@@ -22,6 +26,7 @@ type Change = { id: string; threadId: string; kind: string; revision: number; pa
 type Waiter = { promise: Promise<'started' | 'completed' | 'failed'>; resolve: (value: 'started' | 'completed' | 'failed') => void };
 type PendingRequest = { requestId: string; nativeId: Id; method: string; params: Record<string, any>; epoch: string; threadId: string; turnId: string; answered: boolean };
 type ThreadState = {
+  subagent?: boolean;
   openPromise?: Promise<any>;
   externalWriter?: boolean;
   activeTurnId: string | null;
@@ -50,6 +55,7 @@ type ThreadState = {
   released: boolean;
   reserved: boolean;
   revision: number;
+  activityRevision: number;
   snapshotSequence: number;
   syncHeader?: any;
   syncTurns?: Map<string, string>;
@@ -106,10 +112,13 @@ function historyWindow(turns: any[], before?: string): { turns: any[]; nextCurso
 const EVENT_BYTES = 64 * 1024;
 const SYNC_CACHE_BYTES = 8 * 1024 * 1024;
 const REQUEST_LIMIT = 1024;
+const UNRECONCILED_ACTIVITY = 'Native thread activity could not be reconciled';
 const SOURCE_KINDS = ['cli', 'vscode', 'appServer', 'exec'];
 const COMMAND_DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 const hasOwn = (value: object, key: string) => Object.hasOwn(value, key);
 const isObject = (value: unknown): value is Record<string, any> => value !== null && typeof value === 'object' && !Array.isArray(value);
+// A human fork has forkedFromId; only native subagent lineage/source hides a thread.
+const isSubagentThread = (thread: any): boolean => Boolean(thread?.parentThreadId || (isObject(thread?.source) && (hasOwn(thread.source,'subAgent') || hasOwn(thread.source,'subagent'))));
 const nativeKey = (id: Id) => `${typeof id}:${id}`;
 
 function runtimeError(statusCode: number, code: string, message: string): Error & { statusCode: number; code: string } {
@@ -162,6 +171,7 @@ export class Runtime extends EventEmitter {
   private initializeInfo?: any;
   private modelCatalog?: { epoch: string; expiresAt: number; data: any[] };
   private modelLoading?: { epoch: string; promise: Promise<{ data: any[]; nextCursor: null }> };
+  private forkHeaders=new Map<string,{thread:any;expiresAt:number}>();
   private notificationKeys = new Set<string>();
 
   constructor(options: Options) {
@@ -172,26 +182,30 @@ export class Runtime extends EventEmitter {
     if (!options.executable || !options.cwd || !Number.isSafeInteger(this.idleMs) || this.idleMs < 1) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'Invalid runtime options');
   }
 
-  async list(cursor?: string, archived = false): Promise<{ data: any[]; nextCursor: string | null }> {
-    const result = await this.call<any>('thread/list', { cursor: cursor ?? null, sourceKinds: SOURCE_KINDS, useStateDbOnly: true, ...(archived?{archived:true}:{}) });
-    return { data: Array.isArray(result?.data) ? result.data.map((thread: any) => ({ ...thread, ...(this.states.has(thread.id) ? { release: this.releaseState(this.states.get(thread.id)!) } : {}) })) : [], nextCursor: typeof result?.nextCursor === 'string' ? result.nextCursor : null };
+  async list(cursor?: string, archived = false, sortKey:'updated_at'|'created_at'='updated_at'): Promise<{ data: any[]; nextCursor: string | null }> {
+    if(!['updated_at','created_at'].includes(sortKey))throw runtimeError(400,'RUNTIME_INVALID_INPUT','Invalid session sort');
+    const result = await this.call<any>('thread/list', { cursor: cursor ?? null, sourceKinds: SOURCE_KINDS, useStateDbOnly: true, sortKey, sortDirection:'desc', ...(archived?{archived:true}:{}) });
+    return { data: Array.isArray(result?.data) ? result.data.filter((thread:any)=>!isSubagentThread(thread)).map((thread: any) => ({ ...thread, ...(this.states.has(thread.id) ? { release: this.releaseState(this.states.get(thread.id)!) } : {}) })) : [], nextCursor: typeof result?.nextCursor === 'string' ? result.nextCursor : null };
   }
 
   open(threadId:string):Promise<any>{
     this.requireString(threadId,'threadId');const state=this.state(threadId);
+    if(state.subagent)return Promise.reject(runtimeError(404,'RUNTIME_SUBAGENT_THREAD','子 Agent 会话不单独展示，请返回主会话。'));
     if(state.openPromise)return state.openPromise;
     if(state.reserved||state.activeTurnId||state.pending.size||(state.loaded&&!state.released&&!state.error&&!state.externalWriter&&state.nativeStatus?.type==='idle'))return Promise.resolve({phase:this.phase(state)});
     state.reserved=true;
     const operation=async()=>{
       try {
         const owned=state.loaded&&!state.released&&!state.externalWriter;
+        const activityRevision=state.activityRevision;
         const read=owned?{thread:await this.readThread(threadId,{headersOnly:true})}:await this.call<any>('thread/read',{threadId,includeTurns:false});
         if(!isObject(read?.thread))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread status is unavailable');
+        this.requireUserThread(read.thread);
         state.cwd=read.thread.cwd;state.model=read.thread.model;
         if(owned){
-          this.reconcile(threadId,read.thread);
+          this.reconcile(threadId,read.thread,activityRevision);
           if(state.activeTurnId||state.pending.size)return {phase:this.phase(state)};
-          if(!this.canUnload(state,read.thread))throw runtimeError(409,'RUNTIME_THREAD_BUSY','Native thread activity could not be reconciled');
+          if(!this.canUnload(state,read.thread))throw runtimeError(409,'RUNTIME_THREAD_BUSY',UNRECONCILED_ACTIVITY);
           if(read.thread.status?.type!=='notLoaded'){
             state.error=undefined;state.recoverOnIdle=false;
             return {phase:'IDLE'};
@@ -221,16 +235,39 @@ export class Runtime extends EventEmitter {
   }
 
   async threadCwd(threadId: string): Promise<string | null> {
+    const thread=await this.threadHeaderRead(threadId);
+    return typeof thread.cwd === 'string' ? thread.cwd : null;
+  }
+
+  async threadHeaderRead(threadId:string,timeoutMs?:number):Promise<any>{
     this.requireString(threadId, 'threadId');
-    const result = await this.call<any>('thread/read', { threadId, includeTurns: false });
-    if (!isObject(result?.thread)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread information is unavailable');
-    return typeof result.thread.cwd === 'string' ? result.thread.cwd : null;
+    const result = await this.call<any>('thread/read', { threadId, includeTurns: false },false,false,timeoutMs);
+    if (!isObject(result?.thread)||result.thread.id!==threadId) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread information is unavailable');
+    this.requireUserThread(result.thread);
+    const {turns,...thread}=result.thread;return thread;
+  }
+
+  invalidateForkHeader(threadId:string){this.forkHeaders.delete(threadId);}
+  async forkListHeader(threadId:string,timeoutMs?:number):Promise<{thread:any;archived:boolean}|null>{
+    const cached=this.forkHeaders.get(threadId);
+    const thread=cached&&cached.expiresAt>Date.now()?cached.thread:await this.threadHeaderRead(threadId,timeoutMs),home=this.initializeInfo?.codexHome;
+    this.requireUserThread(thread);
+    if(typeof thread.forkedFromId!=='string'||!thread.forkedFromId||thread.preview!==''||!SOURCE_KINDS.includes(thread.source)||typeof home!=='string'||!isAbsolute(home)||typeof thread.path!=='string'||!isAbsolute(thread.path))return null;
+    if(thread!==cached?.thread){this.forkHeaders.set(threadId,{thread,expiresAt:Date.now()+30_000});while(this.forkHeaders.size>32)this.forkHeaders.delete(this.forkHeaders.keys().next().value!);}
+    const inside=(root:string,path:string)=>{const child=relative(root,path);return !!child&&!isAbsolute(child)&&child!=='..'&&!child.startsWith('..'+sep);};
+    for(const archived of [false,true]){
+      const root=resolve(home,archived?'archived_sessions':'sessions');
+      if(!inside(root,resolve(thread.path)))continue;
+      try{const [canonicalRoot,path]=await Promise.all([realpath(root),realpath(thread.path)]);if(inside(canonicalRoot,path)&&(await stat(path)).isFile())return {thread:{...thread,...(this.states.has(threadId)?{release:this.releaseState(this.states.get(threadId)!)}:{})},archived};}catch{}
+    }
+    return null;
   }
 
   async snapshot(threadId: string, options?: { window: boolean; signal?: AbortSignal }): Promise<any> {
     this.requireString(threadId, 'threadId');
     const state = this.state(threadId);
     const revision = state.revision;
+    const activityRevision = state.activityRevision;
     const snapshotSequence = ++state.snapshotSequence;
     // Keep content that arrives while native history pages are in flight, including
     // terminal turns that reconcile removes from liveTurns. Offsets handle overlap.
@@ -244,7 +281,12 @@ export class Runtime extends EventEmitter {
     // A read started before a newer operation/notification must not unlock that work.
     if (state.snapshotSequence === snapshotSequence && !state.reserved && (state.revision === revision || (state.activeTurnId && thread.turns.some((turn: any) => turn.id === state.activeTurnId && ['completed', 'interrupted', 'failed'].includes(turn.status))))) {
       const previousPhase = this.phase(state), previousError = state.error;
-      this.reconcile(threadId, thread);
+      this.reconcile(threadId, thread, activityRevision);
+      const recovered = thread.turns.find((turn:any)=>turn.id===state.activeTurnId&&turn.status==='inProgress');
+      if(recovered){
+        const index=mergedThread.turns.findIndex((turn:any)=>turn.id===recovered.id&&turn.status!=='inProgress');
+        if(index>=0)mergedThread.turns[index]=structuredClone(recovered);
+      }
       if (thread.status?.type === 'notLoaded') state.loaded = false;
       if (state.error && state.recoverOnIdle && ['idle', 'notLoaded'].includes(thread.status?.type)
         && !state.activeTurnId && !state.pending.size && !thread.turns.some((turn: any) => turn.status === 'inProgress')) {
@@ -322,7 +364,13 @@ export class Runtime extends EventEmitter {
       await this.getServer();
       const epoch = this.epoch;
       const turn = { id: turnId, items: [] as any[], itemsView: 'notLoaded' };
-      await this.readTurnBodies(threadId, [turn], itemId);
+      try { await this.readTurnBodies(threadId, [turn], itemId); }
+      catch (error) {
+        if (!isObject(error) || error.code !== 'RUNTIME_HISTORY_UNSUPPORTED') throw error;
+        const full = await this.fullThread(threadId);
+        const nativeTurn = full.turns.find((entry: any) => entry?.id === turnId);
+        if (nativeTurn && Array.isArray(nativeTurn.items)) turn.items = nativeTurn.items;
+      }
       if (epoch !== this.epoch) throw runtimeError(503, 'RUNTIME_SYNC_RESTARTED', 'Native runtime changed during item loading; retry');
       const item = turn.items.find(item => item.id === itemId);
       if (!item) throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Item was not found');
@@ -353,6 +401,11 @@ export class Runtime extends EventEmitter {
       try { page = await this.call('thread/turns/list', { threadId, cursor, sortDirection: 'asc', itemsView: 'notLoaded' }); }
       catch (error) {
         if (isObject(error) && error.code === 'RUNTIME_HISTORY_UNSUPPORTED' && state.emptyThreadEpoch === this.epoch && state.syncTurns?.size === 0 && turns.size === 0) break;
+        if (isObject(error) && error.code === 'RUNTIME_HISTORY_UNSUPPORTED') {
+          const full = await this.fullThread(threadId);
+          for (const turn of full.turns) if (typeof turn?.id === 'string') turns.set(turn.id, this.turnSignature(turn));
+          break;
+        }
         throw error;
       }
       if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn history is unavailable');
@@ -441,7 +494,7 @@ export class Runtime extends EventEmitter {
       if (turn.status !== 'inProgress' && !patch.item.completed) return;
       const index = turn.items.findIndex((entry: any) => entry.id === patch.item!.item.id);
       if (index < 0) turn.items.push(structuredClone(patch.item.item));
-      else turn.items[index] = structuredClone(patch.item.item);
+      else turn.items[index] = itemWithTimes(patch.item.item, {}, turn.items[index]);
     }
   }
 
@@ -476,6 +529,53 @@ export class Runtime extends EventEmitter {
     });
   }
 
+  fork(threadId: string, input: { lastTurnId: string; clientRequestId: string }): Promise<{ threadId: string; status: 'idle'; cwd: string;header:any }> {
+    this.requireString(threadId, 'threadId');
+    this.requireString(input?.lastTurnId, 'lastTurnId');
+    this.requireRequestId(input?.clientRequestId);
+    if (!isObject(input) || !exactKeys(input, ['lastTurnId', 'clientRequestId'])) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'Invalid fork input');
+    return this.idempotent(input.clientRequestId, JSON.stringify(['fork', threadId, input.lastTurnId]), async () => {
+      const source = await this.readThread(threadId, { headersOnly: true });
+      if (source.id !== threadId) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native source thread could not be verified');
+      const end = source.turns.findIndex((turn: any) => turn.id === input.lastTurnId);
+      if (end < 0) throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Fork target turn was not found');
+      if (source.turns[end].status !== 'completed') throw runtimeError(409, 'RUNTIME_FORK_TURN_INCOMPLETE', 'Only completed turns can be forked');
+      const result = await this.mutation<any>('thread/fork', { threadId, lastTurnId: input.lastTurnId, excludeTurns: true });
+      const id = result?.thread?.id;
+      const unknown = () => runtimeError(504, 'RUNTIME_RESULT_UNKNOWN', 'Fork could not be verified; check Recent Sessions before retrying');
+      if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,120}$/.test(id) || id === threadId) throw unknown();
+      const state = this.state(id);
+      try {
+        const required = ['thread', 'model', 'modelProvider', 'serviceTier', 'disabledPluginIds', 'cwd', 'instructionSources', 'approvalPolicy', 'approvalsReviewer', 'sandbox', 'reasoningEffort'];
+        if (!required.every(key => hasOwn(result, key)) || !isObject(result.thread) || result.thread.status?.type !== 'idle'
+          || typeof result.cwd !== 'string' || !isAbsolute(result.cwd) || result.cwd !== source.cwd || result.thread.cwd !== result.cwd
+          || typeof result.model !== 'string' || !result.model || typeof result.modelProvider !== 'string' || !result.modelProvider
+          || (result.serviceTier !== null && typeof result.serviceTier !== 'string')
+          || (result.reasoningEffort !== null && typeof result.reasoningEffort !== 'string')
+          || !Array.isArray(result.disabledPluginIds) || !result.disabledPluginIds.every((value: any) => typeof value === 'string')
+          || !Array.isArray(result.instructionSources) || !result.instructionSources.every((value: any) => typeof value === 'string')) throw unknown();
+        this.requireUserThread(result.thread);
+        state.permissions = this.verifyPermissions(result, undefined, result.cwd);
+        state.cwd = result.cwd;
+        state.model = result.model;
+        state.reasoningEffort = result.reasoningEffort;
+        state.nativeStatus = result.thread.status;
+        state.loaded = true;
+        state.released = false;
+        const forked = await this.readThread(id, { headersOnly: true });
+        const headers = (turns: any[]) => turns.map(turn => [turn.id, turn.status]);
+        if (forked.id !== id || forked.cwd !== result.cwd || forked.status?.type !== 'idle'
+          || !isDeepStrictEqual(headers(forked.turns), headers(source.turns.slice(0, end + 1)))) throw unknown();
+        this.change(id, 'thread', { thread: this.threadHeader(forked) });
+        return { threadId: id, status: 'idle', cwd: result.cwd,header:this.threadHeader(forked) };
+      } catch (error) {
+        const mapped = isObject(error) && error.code === 'RUNTIME_PERMISSION_MISMATCH' ? this.mapError(error) : unknown();
+        state.error = mapped.message;
+        throw Object.assign(mapped, { partial: { threadId: id } });
+      } finally { this.scheduleIdle(); }
+    });
+  }
+
   send(threadId: string, input: { text: string; clientRequestId: string; expectedTurnId?: string } & TurnOptions): Promise<any> {
     this.requireString(threadId, 'threadId');
     if (typeof input?.text !== 'string' || (!input.text && !input.nativeInput?.length)) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'text or attachments are required');
@@ -484,6 +584,7 @@ export class Runtime extends EventEmitter {
     if (input.expectedTurnId !== undefined) this.requireString(input.expectedTurnId, 'expectedTurnId');
     return this.idempotent(input.clientRequestId, JSON.stringify(['send', threadId, input.text, input.model ?? null, input.effort ?? null, input.permissionMode ?? null, input.nativeInput ?? null, input.expectedTurnId ?? null]), async () => {
       const state = this.state(threadId);
+      this.requireUserThread({id:threadId});
       if (input.expectedTurnId !== undefined) {
         if (input.model !== undefined || input.effort !== undefined || input.permissionMode !== undefined) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', '插话沿用当前轮次的模型、推理强度和权限');
         await this.validateTurnOptions(input, state.cwd ?? this.options.cwd, state.model);
@@ -511,6 +612,7 @@ export class Runtime extends EventEmitter {
       try {
         if (!state.cwd) {
           const read = await this.call<any>('thread/read', { threadId, includeTurns: false });
+          this.requireUserThread(read.thread);
           state.cwd = read.thread?.cwd ?? this.options.cwd;
           state.model = read.thread?.model;
         }
@@ -565,8 +667,9 @@ export class Runtime extends EventEmitter {
     const operation = async () => {
       try {
         if (!state.released) {
+          const activityRevision = state.activityRevision;
           const thread = await this.readThread(threadId, { headersOnly: true });
-          this.reconcile(threadId, thread);
+          this.reconcile(threadId, thread, activityRevision);
           if (!this.canUnload(state, thread)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Native thread must be idle or finished before release');
           const result = await this.mutation<any>('thread/unsubscribe', { threadId });
           if (!['unsubscribed', 'notSubscribed', 'notLoaded'].includes(result?.status)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native release was not confirmed');
@@ -630,7 +733,7 @@ export class Runtime extends EventEmitter {
     return thread.status?.type==='systemError'&&state.loaded&&!state.released&&!state.externalWriter&&thread.turns.length>0&&thread.turns.every((turn:any)=>['completed','interrupted','failed'].includes(turn.status));
   }
 
-  private reconcile(threadId: string, thread: any): void {
+  private reconcile(threadId: string, thread: any, activityRevision: number): void {
     const state = this.state(threadId);
     state.nativeStatus = thread.status;
     for (const turn of thread.turns) {
@@ -646,8 +749,16 @@ export class Runtime extends EventEmitter {
       for (const pending of [...state.pending.values()]) if (pending.turnId === turn.id) this.clearPending(pending, 'request');
     }
     if(state.loaded&&!state.released&&!state.externalWriter&&!state.activeTurnId&&thread.status?.type==='active'){
-      const active=thread.turns.filter((turn:any)=>turn.status==='inProgress'&&!state.completedTurns.has(turn.id));
-      if(active.length===1)state.activeTurnId=active[0].id;
+      const active=thread.turns.filter((turn:any)=>turn.status==='inProgress');
+      // A fresh native read can correct a terminal cache entry, but cannot override
+      // a start/completion/status notification received while that read was in flight.
+      if(active.length===1&&state.activityRevision===activityRevision){
+        state.completedTurns.delete(active[0].id);
+        const live=state.liveTurns.get(active[0].id);
+        if(live&&live.status!=='inProgress')state.liveTurns.delete(active[0].id);
+        state.activeTurnId=active[0].id;
+        if(state.error===UNRECONCILED_ACTIVITY){state.error=undefined;state.recoverOnIdle=false;}
+      }
     }
     // Native systemError is an idle error flag cleared by the next turn, not a writer lock.
     // Keep the raw thread status/error in the snapshot; only reconcile our operation state.
@@ -672,7 +783,11 @@ export class Runtime extends EventEmitter {
     return { requestId, status: 'accepted' };
   }
 
-  async diagnostics(): Promise<any> {
+  async diagnostics({currentOnly=false}={}): Promise<any> {
+    if(currentOnly)return {available:null,...this.diagnosticState(),permissionModes:null,
+      userAgent:this.initializeInfo?.userAgent??null,codexHome:this.initializeInfo?.codexHome??null,
+      platformFamily:this.initializeInfo?.platformFamily??null,platformOs:this.initializeInfo?.platformOs??null,
+      account:null,requiresOpenaiAuth:null,note:'仅展示当前运行时内存状态；有效权限与账户尚未在此页面读取，请到配置和使用情况中核对。'};
     try {
       await this.getServer();
       const account = await this.call<any>('account/read', { refreshToken: false });
@@ -698,7 +813,7 @@ export class Runtime extends EventEmitter {
   // No RPC or filesystem access: sampling must not wake or wait for the native process.
   diagnosticState(){
     const native=this.server?.diagnosticState(),waiting=new Set(native?.pending.map(request=>request.threadId));
-    return {epoch:this.epoch,inFlight:this.inFlight,reads:this.reads,failures:this.failures,diagnosticsSeen:this.diagnosticsSeen,
+    return {epoch:this.epoch,starting:!!this.starting,stopping:!!this.stopping,inFlight:this.inFlight,reads:this.reads,failures:this.failures,diagnosticsSeen:this.diagnosticsSeen,
       native,threads:[...this.states.entries()].filter(([id,state])=>state.loaded||state.activeTurnId||state.reserved||waiting.has(id)).sort(([left],[right])=>Number(waiting.has(right))-Number(waiting.has(left))).slice(0,20).map(([id,state])=>({threadId:diagnosticId(id),phase:this.phase(state),projectKey:state.diagnosticProjectKey??(state.cwd?createHash('sha256').update(process.platform==='win32'?state.cwd.toLowerCase():state.cwd).digest('hex').slice(0,24):undefined)}))};
   }
 
@@ -726,7 +841,7 @@ export class Runtime extends EventEmitter {
   private state(threadId: string): ThreadState {
     let state = this.states.get(threadId);
     if (!state) {
-      state = { activeTurnId: null, completedTurns: new Set(), completedItems: new Set(), liveTurns: new Map(), loaded: false, pending: new Map(), released: false, reserved: false, revision: 0, snapshotSequence: 0 };
+      state = { activeTurnId: null, completedTurns: new Set(), completedItems: new Set(), liveTurns: new Map(), loaded: false, pending: new Map(), released: false, reserved: false, revision: 0, activityRevision: 0, snapshotSequence: 0 };
       this.states.set(threadId, state);
     }
     return state;
@@ -775,13 +890,55 @@ export class Runtime extends EventEmitter {
 
   modelInfo(){return {executable:this.options.executable,version:this.initializeInfo?.userAgent??null,readAt:this.modelCatalog?this.modelCatalog.expiresAt-5*60_000:null};}
 
+  assertIdle(){
+    if(this.starting||this.stopping||this.inFlight||this.reads||[...this.states.values()].some(s=>s.reserved||s.activeTurnId||s.pending.size||s.recoverOnIdle||s.releasePromise||['active','systemError'].includes(s.nativeStatus?.type)))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动会话、待处理请求或读取操作。请等待所有任务、审批和输入处理完毕后再操作。');
+  }
+
+  async assertNativeIdle(){
+    this.assertIdle();
+    const server=this.server,epoch=this.epoch,deadline=Date.now()+20_000;
+    if(!server)return;
+    this.reads++;
+    try{
+      let cursor:string|null=null;const seen=new Set<string>();
+      do{
+        const page=await this.call<any>('thread/loaded/list',{cursor,limit:100});
+        if(Date.now()>=deadline)throw Error('Activity check timed out');
+        if(!Array.isArray(page?.data)||!page.data.every((id:unknown)=>typeof id==='string'&&id.length>0))throw Error('Invalid native loaded thread list');
+        for(const threadId of page.data){
+          const result=await this.call<any>('thread/read',{threadId,includeTurns:false});
+          if(Date.now()>=deadline)throw Error('Activity check timed out');
+          const status=result?.thread?.status?.type;
+          if(result?.thread?.id!==threadId)throw Error('Invalid native thread status');
+          if(status==='active')throw runtimeError(409,'RUNTIME_THREAD_BUSY','本机 Codex App Server 仍有活动任务（含待审批或待输入），暂不能重启。');
+          if(status!=='idle'&&status!=='notLoaded')throw Error('Unknown native activity');
+        }
+        cursor=page.nextCursor;
+        if(cursor!==null&&(typeof cursor!=='string'||!cursor||seen.has(cursor)))throw Error('Invalid native loaded thread cursor');
+        if(cursor)seen.add(cursor);
+      }while(cursor);
+      if(server!==this.server||epoch!==this.epoch)throw Error('Native runtime changed during activity check');
+    }catch(error:any){
+      if(error.code==='RUNTIME_THREAD_BUSY')throw error;
+      throw runtimeError(503,'RUNTIME_UNAVAILABLE','无法可靠查询本机 Codex App Server 的活动状态，请稍后重试。');
+    }finally{this.reads--;this.scheduleIdle();}
+    this.assertIdle();
+  }
+
+  async prepareRestart(){
+    await this.assertNativeIdle();
+    this.prepareUpdate();
+  }
+
   prepareUpdate(){
-    if(this.starting||this.stopping||this.inFlight||this.reads||[...this.states.values()].some(s=>s.reserved||s.activeTurnId||s.pending.size||s.recoverOnIdle||s.releasePromise||['active','systemError'].includes(s.nativeStatus?.type)))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务、待处理请求或读取操作，不能更新。');
+    this.assertIdle();
     this.updating=true;
   }
 
   async reloadModels(){
-    if(this.starting||this.stopping||this.inFlight||this.reads||this.server&&!await this.closeIdleServer())throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务、待处理请求或读取操作，请稍后重载。');
+    await this.assertNativeIdle();
+    this.assertIdle();
+    if(this.server&&!await this.closeIdleServer())throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务、待处理请求或读取操作，请稍后重启。');
     return this.models(true);
   }
 
@@ -810,7 +967,11 @@ export class Runtime extends EventEmitter {
     do {
       const result: any = await this.call('model/list', { cursor, includeHidden: true });
       if (!Array.isArray(result?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native model catalog is unavailable');
-      data.push(...result.data.map((m: any) => ({ id: m.id, model: m.model, displayName: m.displayName, description: m.description, hidden: m.hidden, supportedReasoningEfforts: m.supportedReasoningEfforts, defaultReasoningEffort: m.defaultReasoningEffort, inputModalities: m.inputModalities, isDefault: m.isDefault })));
+      data.push(...result.data.map((m: any) => {
+        const serviceTiers=Array.isArray(m.serviceTiers)?m.serviceTiers.filter((t:any)=>isObject(t)&&typeof t.id==='string'&&t.id.length>0&&t.id.length<=120&&typeof t.name==='string'&&typeof t.description==='string').map((t:any)=>({id:t.id,name:t.name,description:t.description})):[];
+        const defaultServiceTier=typeof m.defaultServiceTier==='string'&&(m.defaultServiceTier==='default'||serviceTiers.some((t:any)=>t.id===m.defaultServiceTier))?m.defaultServiceTier:null;
+        return { id: m.id, model: m.model, displayName: m.displayName, description: m.description, hidden: m.hidden, supportedReasoningEfforts: m.supportedReasoningEfforts, defaultReasoningEffort: m.defaultReasoningEffort, inputModalities: m.inputModalities, isDefault: m.isDefault,serviceTiers,defaultServiceTier };
+      }));
       cursor = result.nextCursor;
       if (cursor !== null && (typeof cursor !== 'string' || cursors.has(cursor))) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Invalid model pagination');
       if (cursor) cursors.add(cursor);
@@ -818,18 +979,59 @@ export class Runtime extends EventEmitter {
     return { data, nextCursor: null };
   }
 
-  private async permissionCatalog(cwd: string) {
+  private async permissionCatalog(cwd: string,includeLayers=false) {
     this.requireString(cwd, 'cwd');
-    const [read, requirements] = await Promise.all([this.call<any>('config/read', { cwd, includeLayers: false }), this.call<any>('configRequirements/read', {})]);
+    const [read, requirements] = await Promise.all([this.call<any>('config/read', { cwd, includeLayers }), this.call<any>('configRequirements/read', {})]);
     if (!isObject(read?.config) || !isObject(requirements) || !hasOwn(requirements, 'requirements')) throw runtimeError(503, 'RUNTIME_PERMISSION_UNAVAILABLE', 'Native permission configuration is unavailable');
+    const layer=includeLayers?baseUserLayer(read):null;
     return { ...permissionChoices(cwd, read.config, requirements.requirements, this.initializeInfo?.platformFamily),
+      userVersion:layer&&layer.disabledReason==null&&layer.disabled_reason==null&&read.config.profile==null?layer.version:null,
       model: typeof read.config.model === 'string' ? read.config.model : null,
       effort: typeof read.config.model_reasoning_effort === 'string' ? read.config.model_reasoning_effort : null };
   }
 
   async permissionModes(cwd: string) {
-    const { modes, current, model, effort } = await this.permissionCatalog(cwd);
-    return { modes, current, model, effort };
+    const { modes, current, model, effort,userVersion } = await this.permissionCatalog(cwd,true);
+    return { modes, current, model, effort,userVersion };
+  }
+
+  private settingsPeer(){return {request:(method:string,params:any)=>this.call<any>(method,params,false,true),models:()=>this.models(),platform:()=>this.initializeInfo?.platformFamily};}
+
+  async configurationHome():Promise<string|null>{
+    this.reads++;
+    try{
+      const server=await this.getServer();
+      if(this.server!==server||this.closed)throw runtimeError(503,'RUNTIME_UNAVAILABLE','当前原生进程不可用。');
+      const home=this.initializeInfo?.codexHome;
+      return typeof home==='string'&&isAbsolute(home)?resolve(home):null;
+    }finally{this.reads--;this.scheduleIdle();}
+  }
+
+  async readSettings(cwd:string){
+    this.requireString(cwd,'cwd');this.reads++;
+    try{return await readSettings(this.settingsPeer(),cwd);}finally{this.reads--;this.scheduleIdle();}
+  }
+
+  async installedPlugins(cwd?:string):Promise<InstalledPluginsSnapshot>{
+    if(cwd!==undefined)this.requireString(cwd,'cwd');
+    return readInstalledPlugins(this.settingsPeer(),cwd);
+  }
+
+  async writeSettings(cwd:string,input:SettingsWriteInput){
+    this.requireString(cwd,'cwd');this.reads++;
+    try{return await writeSettings(this.settingsPeer(),cwd,input);}finally{this.reads--;this.scheduleIdle();}
+  }
+
+  async saveModelDefaults(cwd: string, selectedModel: string, selectedEffort?: string, expectedVersion?:string) {
+    this.requireString(cwd, 'cwd');
+    this.requireString(selectedModel, 'model');
+    const model = (await this.models()).data.find(entry => entry.model === selectedModel);
+    if (!model) throw runtimeError(400, 'RUNTIME_INVALID_MODEL', 'Selected model is unavailable');
+    const effort = selectedEffort ?? model.defaultReasoningEffort;
+    if (typeof effort !== 'string' || !model.supportedReasoningEfforts?.some((entry: any) => entry.reasoningEffort === effort))
+      throw runtimeError(400, 'RUNTIME_INVALID_EFFORT', 'Reasoning effort is not supported by this model');
+    const result=await this.writeSettings(cwd,{expectedVersion:expectedVersion!,values:{model:selectedModel,model_reasoning_effort:effort}});
+    return { model: selectedModel, effort, effectiveModel: result.snapshot.fields.model.effectiveValue, effectiveEffort: result.snapshot.fields.model_reasoning_effort.effectiveValue };
   }
 
   private async resolvePermissions(mode: PermissionMode | undefined, cwd: string, previous?: PermissionPolicy): Promise<PermissionPolicy | undefined> {
@@ -891,6 +1093,7 @@ export class Runtime extends EventEmitter {
     state.reserved=true;
     try{
       await this.mutation(archived?'thread/archive':'thread/unarchive',{threadId});
+      this.invalidateForkHeader(threadId);
       state.loaded=false;state.released=true;state.handoffReady=true;state.releaseRequested=false;state.releaseError=undefined;state.externalWriter=false;state.error=undefined;state.recoverOnIdle=false;state.nativeStatus={type:'notLoaded'};this.clearLiveState(state);
       return {threadId,archived};
     }finally{state.reserved=false;this.change(threadId,'archive');this.scheduleIdle();}
@@ -935,19 +1138,33 @@ export class Runtime extends EventEmitter {
     return this.call<T>(method, params, true);
   }
 
-  private async call<T = unknown>(method: string, params: unknown, uncertain = false): Promise<T> {
+  private async call<T = unknown>(method: string, params: unknown, uncertain = false, rawErrors = false,timeoutMs?:number): Promise<T> {
+    const deadline=timeoutMs===undefined?undefined:Date.now()+timeoutMs;
     this.inFlight++;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     try {
       let server: AppServer;
-      try { server = await this.getServer(); }
+      try {
+        if(deadline===undefined)server=await this.getServer();
+        else{
+          let timer:ReturnType<typeof setTimeout>|undefined;
+          try{server=await Promise.race([this.getServer(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(runtimeError(503,'RUNTIME_UNAVAILABLE','Native initialization exceeded the bounded header read budget')),Math.max(1,deadline-Date.now()));})]);}
+          finally{clearTimeout(timer);}
+        }
+      }
       catch (error) { throw this.mapError(error); }
       for (let attempt = 0; ; attempt++) {
-        try { return await server.request<T>(method, params); }
+        try {
+          if(deadline!==undefined&&Date.now()>=deadline)throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native header read budget expired');
+          const result=await server.request<T>(method, params,deadline===undefined?undefined:Math.max(1,deadline-Date.now()));
+          if(isObject(result)&&isObject(result.thread))this.rememberThreadSource(result.thread);
+          return result;
+        }
         catch (error) {
+          if(rawErrors)throw error;
           const mapped = this.mapError(error, method, params);
           // thread/start may return before its rollout metadata is flushed. Retry only this read race.
-          if (!uncertain && mapped.code === 'RUNTIME_HISTORY_NOT_READY' && attempt < 4) {
+          if (!uncertain && timeoutMs===undefined && mapped.code === 'RUNTIME_HISTORY_NOT_READY' && attempt < 4) {
             await new Promise(resolve => setTimeout(resolve, 50 * 2 ** attempt));
             continue;
           }
@@ -956,6 +1173,7 @@ export class Runtime extends EventEmitter {
         }
       }
     } catch (error) {
+      if(rawErrors)throw error;
       throw this.mapError(error, method, params);
     } finally {
       this.inFlight--;
@@ -970,6 +1188,7 @@ export class Runtime extends EventEmitter {
     if (this.starting) return this.starting;
     if (this.server) return Promise.resolve(this.server);
     this.epoch = randomUUID();
+    this.forkHeaders.clear();
     this.sequence = 0;
     this.events = [];
     this.eventBytes = 0;
@@ -1015,6 +1234,7 @@ export class Runtime extends EventEmitter {
     const method = message?.method;
     const params = message?.params;
     if (!isObject(params)) return;
+    if(method==='thread/started'&&isObject(params.thread)){this.rememberThreadSource(params.thread);return;}
     if(method==='account/updated'||method==='account/rateLimits/updated')this.emit('accountChanged');
     if (method === 'serverRequest/resolved') {
       const pending = this.nativeRequests.get(nativeKey(params.requestId));
@@ -1023,6 +1243,7 @@ export class Runtime extends EventEmitter {
     }
     if (typeof params.threadId !== 'string') return;
     const state = this.state(params.threadId);
+    if(['thread/status/changed','thread/closed','turn/started','turn/completed'].includes(method))state.activityRevision++;
     if (method === 'thread/status/changed' || method === 'thread/closed') {
       state.nativeStatus = method === 'thread/closed' ? { type: 'notLoaded' } : params.status;
       if (state.nativeStatus?.type === 'notLoaded') state.loaded = false;
@@ -1031,7 +1252,7 @@ export class Runtime extends EventEmitter {
       return;
     }
     if (method === 'turn/started' && isObject(params.turn)) {
-      this.mergeLiveTurn(state, params.turn);
+      const turn = this.mergeLiveTurn(state, params.turn);
       if (state.completedTurns.has(params.turn.id)) return;
       state.activeTurnId = params.turn.id;
       state.nativeStatus = { type: 'active', activeFlags: [] };
@@ -1039,13 +1260,13 @@ export class Runtime extends EventEmitter {
       state.error = undefined;
       state.recoverOnIdle = false;
       state.waiter?.resolve('started');
-      this.change(params.threadId, 'turn', { turn: params.turn, thread: { status: state.nativeStatus } });
+      this.change(params.threadId, 'turn', { turn, thread: { status: state.nativeStatus } });
       return;
     }
     if (method === 'turn/completed' && isObject(params.turn)) {
       this.notification(params.threadId, `turn:${params.turn.id}`, params.turn.status === 'failed' ? 'failed' : 'complete');
       if (state.retry?.turnId === params.turn.id) state.retry = undefined;
-      this.mergeLiveTurn(state, params.turn);
+      const turn = this.mergeLiveTurn(state, params.turn);
       state.completedTurns.add(params.turn.id);
       if (!state.activeTurnId || state.activeTurnId === params.turn.id) {
         state.activeTurnId = null;
@@ -1055,7 +1276,7 @@ export class Runtime extends EventEmitter {
       state.waiter?.resolve('completed');
       state.completion?.resolve();
       for (const pending of [...state.pending.values()]) if (pending.turnId === params.turn.id) this.clearPending(pending, 'request');
-      this.change(params.threadId, 'turn', { turn: params.turn, thread: { status: state.nativeStatus } });
+      this.change(params.threadId, 'turn', { turn, thread: { status: state.nativeStatus } });
       this.scheduleIdle();
       return;
     }
@@ -1065,11 +1286,12 @@ export class Runtime extends EventEmitter {
       if (method === 'item/started' && state.completedItems.has(itemKey)) return;
       const activeTurn = state.liveTurns.get(params.turnId) ?? { id: params.turnId, items: [], itemsView: 'full', status: 'inProgress', error: null, startedAt: null, completedAt: null, durationMs: null };
       const index = activeTurn.items.findIndex((item: any) => item.id === params.item.id);
-      if (index < 0) activeTurn.items.push(structuredClone(params.item));
-      else activeTurn.items[index] = structuredClone(params.item);
+      const item = itemWithTimes(params.item, params, activeTurn.items[index]);
+      if (index < 0) activeTurn.items.push(item);
+      else activeTurn.items[index] = item;
       if (method === 'item/completed') state.completedItems.add(itemKey);
       state.liveTurns.set(params.turnId, activeTurn);
-      this.change(params.threadId, 'item', { item: { turnId: params.turnId, item: params.item, completed: method === 'item/completed' } });
+      this.change(params.threadId, 'item', { item: { turnId: params.turnId, item, completed: method === 'item/completed' } });
       return;
     }
     const summaryPart=method==='item/reasoning/summaryPartAdded',reasoning=summaryPart||method==='item/reasoning/summaryTextDelta'||method==='item/reasoning/textDelta';
@@ -1192,10 +1414,11 @@ export class Runtime extends EventEmitter {
     if (state) this.change(pending.threadId, kind);
   }
 
-  private mergeLiveTurn(state: ThreadState, incoming: any): void {
+  private mergeLiveTurn(state: ThreadState, incoming: any): any {
     const old = state.liveTurns.get(incoming.id);
-    if (!old) { state.liveTurns.set(incoming.id, structuredClone(incoming)); return; }
-    if (state.completedTurns.has(incoming.id) && incoming.status === 'inProgress') return;
+    incoming = { ...incoming, items: (incoming.items ?? []).map((item: any) => itemWithTimes(item, {}, old?.items?.find((entry: any) => entry.id === item.id))) };
+    if (!old) { state.liveTurns.set(incoming.id, structuredClone(incoming)); return incoming; }
+    if (state.completedTurns.has(incoming.id) && incoming.status === 'inProgress') return incoming;
     const items = [...(Array.isArray(old.items) ? old.items : [])];
     for (const item of Array.isArray(incoming.items) ? incoming.items : []) {
       const index = items.findIndex((candidate: any) => candidate.id === item.id);
@@ -1205,13 +1428,23 @@ export class Runtime extends EventEmitter {
     const merged = { ...old, ...structuredClone(incoming), items };
     if (incoming.status === 'inProgress' && old.error && !incoming.error) merged.error = old.error;
     state.liveTurns.set(incoming.id, merged);
+    return incoming;
   }
 
   private async readThread(threadId: string, window?: HistoryWindow, signal?: AbortSignal): Promise<any> {
     this.reads++;
     try {
       signal?.throwIfAborted();
-      await this.getServer();
+      const ready = this.getServer();
+      if (signal) {
+        let abort!: () => void;
+        const cancelled = new Promise<never>((_, reject) => {
+          abort = () => reject(signal.reason);
+          signal.addEventListener('abort', abort, { once: true });
+        });
+        try { await Promise.race([ready, cancelled]); }
+        finally { signal.removeEventListener('abort', abort); }
+      } else await ready;
       signal?.throwIfAborted();
       const epoch=this.epoch,thread=await this.loadThread(threadId, window, signal);
       signal?.throwIfAborted();
@@ -1233,6 +1466,7 @@ export class Runtime extends EventEmitter {
     }
     signal?.throwIfAborted();
     if (!isObject(result?.thread)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread history is unavailable');
+    this.requireUserThread(result.thread);
     const thread = structuredClone(result.thread);
     if(this.options.diagnostic&&typeof thread.cwd==='string')state.diagnosticProjectKey=createHash('sha256').update(process.platform==='win32'?thread.cwd.toLowerCase():thread.cwd).digest('hex').slice(0,24);
     const turns = new Map<string, any>();
@@ -1248,6 +1482,10 @@ export class Runtime extends EventEmitter {
         if (isObject(error) && error.code === 'RUNTIME_HISTORY_UNSUPPORTED' && state.emptyThreadEpoch === this.epoch && turns.size === 0) {
           thread.turns = [];
           return thread;
+        }
+        if (isObject(error) && error.code === 'RUNTIME_HISTORY_UNSUPPORTED') {
+          signal?.throwIfAborted();
+          return this.fullThread(threadId);
         }
         throw error;
       }
@@ -1270,6 +1508,14 @@ export class Runtime extends EventEmitter {
       thread.status = latest.thread.status;
     }
     return thread;
+  }
+
+  private async fullThread(threadId: string): Promise<any> {
+    // ponytail: full-history reads are bounded by the protocol frame; use native pagination when available.
+    const result = await this.call<any>('thread/read', { threadId, includeTurns: true });
+    if (!isObject(result?.thread) || result.thread.id !== threadId || !Array.isArray(result.thread.turns))
+      throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native full thread history is unavailable');
+    return result.thread;
   }
 
   private async readTurnBodies(threadId: string, turns: any[], itemId?: string, seek = false, signal?: AbortSignal): Promise<void> {
@@ -1359,8 +1605,8 @@ export class Runtime extends EventEmitter {
       signal?.throwIfAborted();
       if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native item history is unavailable');
       for (const entry of page.data) if (entry?.turnId === turnId && isObject(entry.item) && typeof entry.item.id === 'string') {
-        if (itemId && entry.item.id === itemId) return [structuredClone(entry.item)];
-        if (!itemId) items.set(entry.item.id, structuredClone(entry.item));
+        if (itemId && entry.item.id === itemId) return [itemWithTimes(entry.item, entry)];
+        if (!itemId) items.set(entry.item.id, itemWithTimes(entry.item, entry));
       }
       if (page.nextCursor === null) return [...items.values()];
       if (typeof page.nextCursor !== 'string' || seen.has(page.nextCursor)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native item pagination is invalid');
@@ -1392,6 +1638,7 @@ export class Runtime extends EventEmitter {
           // Sparse terminal notifications can omit items already streamed. Keep native
           // replacements, while retaining live items absent from that terminal page.
           const items = thread.turns[index].items ??= [];
+          for (let i = 0; i < items.length; i++) items[i] = itemWithTimes(items[i], {}, live.items?.find((item: any) => item.id === items[i].id));
           if (['completed', 'interrupted', 'failed'].includes(live.status)) for (const item of live.items ?? []) if (!items.some((candidate: any) => candidate.id === item.id)) items.push(structuredClone(item));
           continue;
         }
@@ -1399,7 +1646,7 @@ export class Runtime extends EventEmitter {
         for (const item of Array.isArray(live.items) ? live.items : []) {
           const itemIndex = mergedItems.findIndex((candidate: any) => candidate.id === item.id);
           if (itemIndex < 0) mergedItems.push(structuredClone(item));
-          else mergedItems[itemIndex] = structuredClone(item);
+          else mergedItems[itemIndex] = itemWithTimes(item, {}, mergedItems[itemIndex]);
         }
         thread.turns[index] = { ...thread.turns[index], ...structuredClone(live), items: mergedItems };
       }
@@ -1417,11 +1664,29 @@ export class Runtime extends EventEmitter {
     return 'IDLE';
   }
 
-  private notification(threadId: string, eventKey: string, kind: 'complete' | 'failed' | 'approval' | 'input'): void {
+  private rememberThreadSource(thread: any): boolean | undefined {
+    if(typeof thread?.id!=='string')return undefined;
+    const state=this.state(thread.id);
+    if(isSubagentThread(thread))state.subagent=true;
+    else if(thread.source!==undefined&&state.subagent===undefined)state.subagent=false;
+    return state.subagent;
+  }
+
+  private requireUserThread(thread: any): void {
+    if(this.rememberThreadSource(thread))throw runtimeError(404,'RUNTIME_SUBAGENT_THREAD','子 Agent 会话不单独展示，请返回主会话。');
+  }
+
+  private async notification(threadId: string, eventKey: string, kind: 'complete' | 'failed' | 'approval' | 'input'): Promise<void> {
     const key = `${threadId}:${eventKey}`;
     if (this.notificationKeys.has(key)) return;
     this.notificationKeys.add(key);
     if (this.notificationKeys.size > REQUEST_LIMIT) this.notificationKeys.delete(this.notificationKeys.values().next().value!);
+    const state=this.state(threadId);
+    if(state.subagent===undefined){
+      // Completion/request events carry no source. Read metadata only; never resume or load history.
+      try{await this.call('thread/read',{threadId,includeTurns:false});}catch{return;}
+    }
+    if(state.subagent!==false||this.closed)return;
     this.emit('notification', { threadId, eventKey, kind });
   }
 
@@ -1506,6 +1771,7 @@ export class Runtime extends EventEmitter {
       return runtimeError(503, 'RUNTIME_UNAVAILABLE', `无法启动 Codex：${this.options.executable}。请检查文件、执行权限以及 CODEX_BIN 或 codexBin 配置。`);
     }
     const message = error instanceof Error ? error.message : '';
+    if (method === 'thread/fork' && isObject(error) && error.code === -32601) return runtimeError(409, 'RUNTIME_FORK_UNSUPPORTED', 'Native Codex does not support thread fork; upgrade the CLI');
     if (method === 'thread/read' && /^failed to read thread: thread-store internal error: failed to read session metadata .+: rollout at .+ is empty$/.test(message)) {
       return runtimeError(503, 'RUNTIME_HISTORY_NOT_READY', '会话历史暂不可读，原生记录仍为空，请稍后重试');
     }

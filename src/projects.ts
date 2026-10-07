@@ -9,7 +9,7 @@ import sharp from 'sharp';
 const run = promisify(execFile);
 export const pathKey = (path: string, platform: string = process.platform) => platform === 'win32' ? path.toLowerCase() : path;
 const fold = pathKey;
-const sensitivePath = (path: string) => /(?:^|\/)\.git(?:\/|$)/i.test(path) || /(?:^|\/)\.env(?:\.|$)/i.test(path) || /(?:^|\/)(?:credentials?|secrets?)(?:\.|$)/i.test(path) || path === '.codex-uploads' || path.startsWith('.codex-uploads/');
+const sensitivePath = (path: string) => /(?:^|\/)\.git(?:\/|$)/i.test(path) || /(?:^|\/)\.env(?:\.|\/|$)/i.test(path) || /(?:^|\/)(?:credentials?|secrets?)(?:\.|\/|$)/i.test(path) || /(?:^|\/)\.codex-uploads(?:\/|$)/i.test(path);
 const MAX_VIEW_BYTES = 1024 * 1024;
 const MAX_VIEW_LINES = 20_000;
 const MAX_PATCH_BYTES = 5 * 1024 * 1024;
@@ -102,9 +102,14 @@ async function git(cwd: string, args: string[], timeout = 30_000, maxBuffer = 2 
 export class Projects {
   root: string;
   #items = new Map<string, Project>();
+  #allowDirectoryLinks: boolean;
   // One server process owns project refreshes; share work and briefly retain its result.
   #fetches = new Map<string, Promise<{skipped?:string;remotes:{name:string;status:'updated'|'failed'|'timeout';error?:string}[]}>>();
-  constructor(root: string) { this.root = root; }
+  constructor(root: string, allowProjectDirectoryLinks = false) {
+    this.root = root;
+    if(typeof allowProjectDirectoryLinks!=='boolean')throw problem('allowProjectDirectoryLinks must be a boolean');
+    this.#allowDirectoryLinks=allowProjectDirectoryLinks;
+  }
 
   async refresh(): Promise<Project[]> {
     this.root = await realpath(this.root);
@@ -223,15 +228,25 @@ export class Projects {
     return { text, staged, untrackedIncluded: false };
   }
 
-  async #safePath(id: string, value: string, file = false) {
+  async #safePath(id: string, value: string, file: boolean|null = false) {
     const project = await this.resolve(id);
     this.#validateRelative(value);
-    const target = await realpath(value ? join(project.path, value) : project.path).catch(() => { throw problem('File not found', 404); });
+    this.#checkVisible(value.split(sep).join('/'));
+    const requested = value ? join(project.path, value) : project.path;
+    const target = await realpath(requested).catch(() => { throw problem('File not found', 404); });
+    this.#checkVisible(target.split(sep).join('/'));
     const rel = relative(await realpath(project.path), target);
-    if (rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) throw problem('Path escapes project', 403);
+    if (rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) {
+      if(!this.#allowDirectoryLinks)throw problem('Path escapes project',403);
+      if((await lstat(requested)).isSymbolicLink()&&!(await lstat(target)).isDirectory())throw problem('File links outside project are not allowed',403);
+    }
+    if(this.#allowDirectoryLinks){
+      const parts=relative(project.path,requested).split(sep);let prefix=project.path;
+      for(const part of parts){prefix=join(prefix,part);this.#checkVisible((await realpath(prefix)).split(sep).join('/'));}
+    }
     const info = await lstat(target);
-    if (info.isSymbolicLink() || (file ? !info.isFile() : !info.isDirectory())) throw problem(file ? 'Not a regular file' : 'Not a directory', 400);
-    return { project, target, rel: rel.split(sep).join('/') };
+    if (info.isSymbolicLink() || (file===null ? !info.isFile()&&!info.isDirectory() : file ? !info.isFile() : !info.isDirectory())) throw problem(file ? 'Not a regular file' : 'Not a directory', 400);
+    return { project, target, rel: (this.#allowDirectoryLinks?relative(project.path,requested):rel).split(sep).join('/') };
   }
 
   #validateRelative(value: string) {
@@ -245,25 +260,22 @@ export class Projects {
   async #safeGitPath(id:string,value:string){const project=await this.resolve(id);this.#validateRelative(value);const rel=value.split(sep).join('/');const parent=await realpath(dirname(join(project.path,rel))).catch(()=>{throw problem('Parent directory not found',404)});const inside=relative(await realpath(project.path),parent);if(inside.startsWith(`..${sep}`)||inside==='..'||isAbsolute(inside))throw problem('Path escapes project',403);return {project,rel};}
 
   async listFiles(id: string, directory = '') {
-    const { project, target, rel } = await this.#safePath(id, directory, false);
+    const { target, rel } = await this.#safePath(id, directory, false);
     this.#checkVisible(rel);
-    const projectRoot=await realpath(project.path);
     const files: { path: string; type: 'file'|'directory'; size: number }[] = [];
     for (const entry of await readdir(target, { withFileTypes: true })) {
-      if (entry.isSymbolicLink() || entry.name === '.git' || /^\.env(?:\.|$)/i.test(entry.name)
+      if ((!this.#allowDirectoryLinks&&entry.isSymbolicLink()) || entry.name === '.git' || /^\.env(?:\.|$)/i.test(entry.name)
         || /^(?:credentials?|secrets?)(?:\.|$)/i.test(entry.name) || entry.name === '.codex-uploads') continue;
       const path = rel ? `${rel}/${entry.name}` : entry.name;
-      const full = join(target, entry.name);
-      const resolved = await realpath(full).catch(() => null); if (!resolved) continue;
-      const inside = relative(projectRoot, resolved); if (inside.startsWith(`..${sep}`) || isAbsolute(inside)) continue;
-      const info = await lstat(resolved); if (!info.isFile() && !info.isDirectory()) continue;
+      const safe = await this.#safePath(id,path,null).catch(()=>null);if(!safe)continue;
+      const info = await lstat(safe.target);
       files.push({ path, type: info.isDirectory() ? 'directory' : 'file', size: info.isFile() ? info.size : 0 });
     }
     return { files: files.sort((a,b) => a.path.localeCompare(b.path)) };
   }
 
   async readImage(id: string, path: string, revision?: string) {
-    const limit = 10 * 1024 * 1024;
+    const limit = 20 * 1024 * 1024;
     let bytes: Buffer;
     if (revision !== undefined) {
       const project = await this.resolve(id), rel = this.#historyPath(path);
@@ -281,15 +293,15 @@ export class Projects {
       if (!['100644','100755'].includes(mode) || (revision === 'index' ? third !== '0' : second !== 'blob')) throw problem('Not a regular file version',400);
       const object = revision === 'index' ? second : third;
       if (!/^[0-9a-f]{40,64}$/.test(object)) throw problem('Invalid Git object',400);
-      if (Number((await git(project.path,['cat-file','-s',object])).trim()) > limit) throw problem('Image exceeds 10 MiB',413);
+      if (Number((await git(project.path,['cat-file','-s',object])).trim()) > limit) throw problem('Image exceeds 20 MiB',413);
       bytes = await gitBytes(project.path,['cat-file','blob',object],30_000,limit+1);
     } else {
       const { target, rel } = await this.#safePath(id, path, true);
       this.#checkVisible(rel);
-      if ((await lstat(target)).size > limit) throw problem('Image exceeds 10 MiB',413);
+      if ((await lstat(target)).size > limit) throw problem('Image exceeds 20 MiB',413);
       bytes = await this.#readBounded(target, limit);
     }
-    if (bytes.length > limit) throw problem('Image exceeds 10 MiB', 413);
+    if (bytes.length > limit) throw problem('Image exceeds 20 MiB', 413);
     try {
       const image = sharp(bytes, { limitInputPixels:40_000_000, failOn:'error' });
       const metadata = await image.metadata();
@@ -380,7 +392,7 @@ export class Projects {
     if(tips.length>512)throw problem('分支过多，请选择具体分支',409);
     const {refs,branches}=await this.#historyRefs(path);
     if(!tips.length)return {repository:true,commits:[],branches,nextCursor:null};
-    const raw=await git(path,['log','--topo-order',`--max-count=${HISTORY_PAGE_SIZE+1}`,`--skip=${skip}`,'--format=%H%x00%P%x00%s%x00%an%x00%aI%x00',...tips]);
+    const raw=await git(path,['log','--date-order',`--max-count=${HISTORY_PAGE_SIZE+1}`,`--skip=${skip}`,'--format=%H%x00%P%x00%s%x00%an%x00%cI%x00',...tips]);
     const fields=raw.split('\0'); const commits:any[]=[];
     for(let i=0;i+4<fields.length;i+=5){const commitId=fields[i].replace(/^\s+/,'');if(!commitId)continue;commits.push({id:commitId,parents:fields[i+1].trim().split(/\s+/).filter(Boolean),subject:fields[i+2],author:fields[i+3],date:fields[i+4],refs:refs.get(commitId)??[]});}
     const more=commits.length>HISTORY_PAGE_SIZE; if(more)commits.length=HISTORY_PAGE_SIZE;
@@ -388,7 +400,7 @@ export class Projects {
   }
 
   async #commitInfo(projectPath:string,value:string,withRefs=true) {
-    const requested=this.#historyCommit(value);const raw=await git(projectPath,['show','-s','--format=%H%x00%P%x00%s%x00%B%x00%an%x00%aI%x00',`${requested}^{commit}`]).catch(()=>{throw problem('Commit not found',404)});
+    const requested=this.#historyCommit(value);const raw=await git(projectPath,['show','-s','--format=%H%x00%P%x00%s%x00%B%x00%an%x00%cI%x00',`${requested}^{commit}`]).catch(()=>{throw problem('Commit not found',404)});
     const [commitId,parents,subject,message,author,date]=raw.split('\0');const refs=withRefs?(await this.#historyRefs(projectPath,false)).refs:new Map<string,string[]>();
     return {id:commitId,parents:parents.trim().split(/\s+/).filter(Boolean),subject,message:message.replace(/\n$/,''),author,date,refs:refs.get(commitId)??[]};
   }

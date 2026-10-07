@@ -2,7 +2,9 @@
 
 > 公开版本中的用户名、路径、项目名称和会话标识均为示例；历史验收结果仅适用于当时的测试环境。
 
-使用普通宿主用户，在项目目录执行。需要 Node >=24.20.0、npm、官方独立 Codex CLI，以及项目功能所需的 Git。Codex CLI 使用该环境自己的登录与默认 CODEX_HOME，无需另设 API key；Linux/WSL 不复用 Windows 二进制、node_modules 或静默复制 Windows 凭据。
+使用普通宿主用户，在项目目录执行。需要 Node >=24.20.0、npm、官方独立 Codex CLI >=0.160.1，以及项目功能所需的 Git。Codex CLI 使用该环境自己的登录与默认 CODEX_HOME，无需另设 API key；Linux/WSL 不复用 Windows 二进制、node_modules 或静默复制 Windows 凭据。
+
+**Codex Web 0.1.7 要求 Codex CLI >=0.160.1（本版开发／实测基线）**，仅接受可识别的稳定版本。旧 0.1.6 安装须先独立升级 Codex CLI，运行 `codex --version` 核对版本，再执行 0.1.7 应用更新；应用更新不会升级 CLI。版本过旧、预发布或无法识别时，新服务拒绝启动，更新器按既有规则保留或回滚应用。
 
 ```sh
 npm ci
@@ -16,6 +18,12 @@ npm start
 ## Windows 便携包
 
 Windows x64 和 Linux x64 glibc 可使用各自自带 Node 的便携包；首次配置、CLI 手动/辅助安装和构建检查集中见 [便携包指南](portable.md)。包内生产依赖按平台安装，不能互换。
+
+## 设置页重启
+
+“重启Codex”重启 Web 管理的 Codex 后台进程并刷新模型列表，不升级 CLI。“重启 Web 服务”暂时断开所有设备；目前仅支持项目启动脚本管理的 Windows 服务，要求同一用户已登录桌面。
+
+点击按钮后打开页内确认框，自动查询本机 Codex App Server 的全部已加载会话；存在运行任务、待审批、待输入，或活动状态无法核实时，不允许确认重启。历史会话无需删除，也无需逐个检查 Web 客户端。Web 重启复用 `scripts/windows/restart-server.ps1 -RequireIdle`，预检通过后延迟 90 秒执行；执行前会再次查询活动状态。页面提供“检查重启结果”，计划与结果记录位于 `.local/web/restart-latest.json` 及其指向的 `.result.json`、`.log`。
 
 ## 配置与数据
 

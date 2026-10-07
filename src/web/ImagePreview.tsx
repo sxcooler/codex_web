@@ -24,7 +24,7 @@ export function ImagePreview({id,path,version,revision}:{id:string;path:string;v
     {status==='error'?<p className="notice error" role="alert">图片预览不可用，请检查文件是否已变更、损坏或超过限制。</p>:null}
     <img src={src} alt={path} hidden={status==='error'} onLoad={()=>setStatus('ready')} onError={()=>setStatus('error')}/>
     {status==='ready'?<a href={src} target="_blank" rel="noopener noreferrer">在新标签页查看预览</a>:null}
-    <p className="muted small">预览最长边 2048 像素；动图显示首帧。支持 10 MiB / 4000 万像素以内的图片。</p>
+    <p className="muted small">预览最长边 2048 像素；动图显示首帧。支持 20 MiB / 4000 万像素以内的图片。</p>
   </div>;
 }
 export function ImageDiff({id,images,version,split=false}:{id:string;images:Json;version:string;split?:boolean}){

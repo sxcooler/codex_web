@@ -69,6 +69,39 @@ function setup(t: any) {
   return { runtime, turns, output, calls, item };
 }
 
+test('item lifecycle milliseconds survive recent snapshots and older history pages', async t => {
+  const { runtime } = setup(t), call = (runtime as any).call.bind(runtime);
+  const startedAtMs = Date.parse('2026-10-04T00:01:02.123Z'), completedAtMs = startedAtMs + 4567;
+  t.mock.method(runtime as any, 'call', async (method: string, args: any) => {
+    if (method !== 'thread/items/list') return call(method, args);
+    return { data: [
+      { turnId: args.turnId, item: { id: 'message', type: 'agentMessage', text: 'timed history' }, startedAtMs, completedAtMs },
+      { turnId: args.turnId, item: { id: 'unknown', type: 'agentMessage', text: 'older writer' }, startedAtMs: null, completedAtMs: null },
+      { turnId: args.turnId, item: { id: 'invalid', type: 'agentMessage', text: 'invalid metadata' }, startedAtMs: '1790000000000', completedAtMs: -1 },
+    ], nextCursor: null };
+  });
+  const snapshot = await runtime.snapshot('thread', { window: true });
+  const history = await runtime.history('thread', snapshot.history.nextCursor);
+  for (const turn of [...snapshot.thread.turns, ...history.turns]) {
+    assert.equal(turn.items[0].startedAtMs, startedAtMs);
+    assert.equal(turn.items[0].completedAtMs, completedAtMs);
+    for (const item of turn.items.slice(1)) {
+      assert.equal(item.startedAtMs, undefined);
+      assert.equal(item.completedAtMs, undefined);
+    }
+  }
+});
+
+for (const status of ['inProgress', 'completed']) test(`history timing survives sparse live replacements of ${status} turns`, async t => {
+  const { runtime } = setup(t), startedAtMs = 1791065677672, completedAtMs = startedAtMs + 1234;
+  t.mock.method(runtime as any, 'readThread', async () => ({ id: 'thread', status: { type: 'idle' }, turns: [{ id: 'turn', status, items: [{ id: 'message', type: 'agentMessage', text: 'native final', startedAtMs, completedAtMs }] }] }));
+  (runtime as any).state('thread').liveTurns.set('turn', { id: 'turn', status, items: [{ id: 'message', type: 'agentMessage', text: 'live replacement' }] });
+  const item = (await runtime.snapshot('thread', { window: true })).thread.turns[0].items[0];
+  assert.equal(item.text, status === 'completed' ? 'native final' : 'live replacement');
+  assert.equal(item.startedAtMs, startedAtMs);
+  assert.equal(item.completedAtMs, completedAtMs);
+});
+
 test('window history reads only selected bodies and keeps the full lightweight status baseline', async t => {
   const { runtime, turns, output, calls } = setup(t);
   const snapshot = await runtime.snapshot('thread', { window: true });
@@ -148,12 +181,14 @@ test('window snapshots merge in-flight completion without trimming internal stat
 test('project binding reads only native cwd without loading or reconciling history',async t=>{
   const {runtime,calls}=setup(t);
   const state=(runtime as any).state('thread'),before=structuredClone({revision:state.revision,syncHeader:state.syncHeader,syncTurns:state.syncTurns});
-  t.mock.method(runtime as any,'call',async(method:string,args:any)=>{calls.push({method,...args});return {thread:{cwd:process.cwd()}};});
+  t.mock.method(runtime as any,'call',async(method:string,args:any)=>{calls.push({method,...args});return {thread:{id:'thread',cwd:process.cwd()}};});
   assert.equal(await runtime.threadCwd('thread'),process.cwd());
   assert.deepEqual(calls,[{method:'thread/read',threadId:'thread',includeTurns:false}]);
   assert.deepEqual({revision:state.revision,syncHeader:state.syncHeader,syncTurns:state.syncTurns},before);
-  t.mock.method(runtime as any,'call',async()=>({thread:{}}));
+  t.mock.method(runtime as any,'call',async()=>({thread:{id:'thread'}}));
   assert.equal(await runtime.threadCwd('thread'),null);
+  t.mock.method(runtime as any,'call',async()=>({thread:{id:'other-thread',cwd:process.cwd()}}));
+  await assert.rejects(runtime.threadCwd('thread'),{code:'RUNTIME_UNAVAILABLE',statusCode:503});
   t.mock.method(runtime as any,'call',async()=>({}));
   await assert.rejects(runtime.threadCwd('thread'),(e:any)=>e.statusCode===503);
   t.mock.method(runtime as any,'call',async()=>{throw Object.assign(new Error('missing'),{statusCode:404});});

@@ -13,6 +13,10 @@ A lightweight web client for Codex running on your development machine, accessib
 - Private file/image attachments, Web Push, and a PWA that caches only the static shell.
 - Account limits, automatic reset times, and reset credits in the top bar; using a credit requires confirmation, and interrupted operations retain their identity for verification.
 
+- Settings categories cover General, Configuration, Personalization, Usage, Installed Plugins, and Codex Web. Native defaults, speed, permissions, search, and memory use controlled reads/writes; personal/project instructions include diffs, version checks, and unsaved-change protection.
+- Branch a completed answer into a new chat and inspect its supplied memory citations. Installed plugins are read-only native status; enabled does not establish connection or current-session tool availability.
+- Persist browser send shortcuts and session time sorting; improved historical message times, file back/forward navigation, login renewal, and connection recovery.
+
 ## Screenshots
 
 **Desktop**
@@ -31,7 +35,9 @@ A lightweight web client for Codex running on your development machine, accessib
 | Linux | An x64 glibc portable package is available; source execution, live tasks, and sandbox boundaries have been verified as a non-root user on WSL2 Ubuntu 22.04; no claim covers all distributions |
 | macOS | Not adapted or verified in this round |
 
-Running from source requires Node **>=24.20.0**, npm, the official standalone Codex CLI, and Git for project/Git features. `.node-version` declares the baseline; it does not switch Node automatically. Install and sign in using the [official Codex instructions](https://learn.chatgpt.com/docs/codex/cli). Linux/WSL must use the Linux CLI and its own environment's login. Do not rely on binaries inside the VS Code extension's private directory.
+Running from source requires Node **>=24.20.0**, npm, the official standalone Codex CLI **>=0.160.1**, and Git for project/Git features. `.node-version` declares the baseline; it does not switch Node automatically. Install and sign in using the [official Codex instructions](https://learn.chatgpt.com/docs/codex/cli). Linux/WSL must use the Linux CLI and its own environment's login. Do not rely on binaries inside the VS Code extension's private directory.
+
+**Codex Web 0.1.7 requires Codex CLI >=0.160.1 (the development and verified baseline)** and a recognizable stable version. Before updating an existing 0.1.6 installation, upgrade Codex CLI separately and check `codex --version`, then apply the 0.1.7 update. App updates do not upgrade the CLI. Older, prerelease, or unrecognized versions prevent startup; the updater preserves or rolls back the app under its existing rules.
 
 ## Run from source
 
@@ -48,11 +54,13 @@ Skip setup if a password already exists. Set a 12–256-character password in yo
 
 The default work root is the current user's `~/work` (`%USERPROFILE%\work` on Windows); only immediate project directories are discovered. `.local/web/config.json` configures `origin`, `port`, `workRoot`, and `codexBin`. The corresponding `WEB_ORIGIN`, `PORT`, `WORK_ROOT`, and `CODEX_BIN` environment variables take precedence; `WEB_DATA_DIR` changes the data directory. Windows defaults to the official standalone CLI installation location; Linux defaults to `codex` on PATH.
 
+`allowProjectDirectoryLinks` defaults to `false`. To read external directories reached through directory junctions or directory symlinks inside a project, add `"allowProjectDirectoryLinks": true` to the service configuration and restart the service. File browsing, text reads, and image previews share this switch without machine-specific path mappings. Enabling it trusts the project's directory links and their targets; sensitive-file, traversal, size, and image-pixel restrictions remain. Direct external absolute paths and Git writes are not enabled. The previous `projectImageMounts` mapping has been removed; replace it with this switch. See [directory-link rules](docs/design/project-directory-links.md).
+
 Deployment scripts are organized into [`scripts/windows/` and `scripts/linux/`](scripts/README.md). After building and setting a password, Linux users can run `bash scripts/linux/start-server.sh` in the foreground, or install a user systemd service with `bash scripts/linux/install-startup.sh --start`. See the deployment guide for stopping, logs, and Tailscale configuration.
 
 On Windows, double-click `scripts/windows/start-server.cmd` to start a source deployment in the background. Logs are written to `.local/web/server.log`; closing the launcher window does not stop the service. Double-click `stop-server.cmd` to stop it. CMD launchers prefer an existing PowerShell 7 installation and otherwise use built-in Windows PowerShell 5.1; no extra PowerShell installation is required. Matching CMD launchers also configure startup and network access.
 
-The Files, Changes, and Git History tabs preview PNG, JPEG, WebP, GIF, AVIF, and SVG images, scaled to fit the panel. Changes show before/after images from the actual worktree, index, or commit, including additions, deletions, and renames. SVG is rasterized and animations show their first frame. Limits are 10 MiB and 40 megapixels per image, with a preview long edge of at most 2048 pixels. Files also lists and reads files excluded by `.gitignore`; project boundaries, authentication, and sensitive-file protection still apply. The Changes list follows Git tracking rules and clears selections that disappear after a successful refresh.
+The Files, Changes, and Git History tabs preview PNG, JPEG, WebP, GIF, AVIF, and SVG images, scaled to fit the panel. Changes show before/after images from the actual worktree, index, or commit, including additions, deletions, and renames. SVG is rasterized and animations show their first frame. Limits are 20 MiB and 40 megapixels per image, with a preview long edge of at most 2048 pixels. Files also lists and reads files excluded by `.gitignore`; project boundaries, authentication, and sensitive-file protection still apply. The Changes list follows Git tracking rules and clears selections that disappear after a successful refresh.
 
 Git History uses icons and short names for local branches, remote-tracking branches, and tags. You can select branches such as `origin/main`; All branches also includes remote-only history. All three tabs share the Refresh button beside Project: local content reloads immediately while fetch runs in the background, then the graph updates. Browsing and chat remain available; failures retain local content and show a message. Fetch is skipped when no remote exists. Concurrent requests for a project are merged, with results reused for 10 seconds; limits are 30 seconds per remote and 60 seconds overall. Only remote-tracking branches are updated or pruned; local branches, tags, the index, and working files remain unchanged. Automatic refreshes and tab switches do not trigger fetch. See the [workspace design](docs/design/workspace-panels.md).
 
@@ -149,6 +157,8 @@ Opening or manually refreshing a conversation checks native write ownership befo
 A timeout or lost connection can leave a submission's outcome unknown. Check native history before explicitly retrying; refreshing never resends a task. Drafts survive within the current page lifecycle, but a full reload does not guarantee retention. Project context does not replace native Codex permissions. Web file and Git APIs remain restricted to validated project boundaries; there is no arbitrary shell/RPC REST endpoint. See the [session guide](docs/guides/sessions.md).
 
 Web Push requires HTTPS, browser support, and explicit user permission. Physical-phone background delivery and real VS Code handoff for phase-two features still have verification gaps. The PWA does not cache APIs, conversations, or credentials; tasks cannot be submitted offline.
+
+For the 0.1.7 release scope and checks, see the [release record](docs/verification/2026-10-07-release-017.md). Portable updates require matching platform/runtime fingerprints and file checks; see the [portable guide](docs/guides/portable.md#数据与升级).
 
 ## Documentation and verification
 

@@ -25,7 +25,7 @@ export function PaneLayout({children,className}:{children:ReactNode;className:st
     if(!drawer)return()=>cancelAnimationFrame(frame);
     const keyboard=(event:KeyboardEvent)=>{if(event.defaultPrevented||document.querySelector('dialog[open]'))return;if(event.key==='Escape'){event.preventDefault();setDrawer(null);}else if(event.key==='Tab'){
       const panel=root.current?.querySelector(drawer==='left'?'.sidebar':'.git-panel');
-      const nodes=[...root.current?.querySelectorAll<HTMLElement>('.pane-toolbar button:not(:disabled)')??[],...panel?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]')??[]].filter(el=>el.getClientRects().length>0);
+      const nodes=[...root.current?.querySelectorAll<HTMLElement>('.pane-toolbar button:not(:disabled)')??[],...panel?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]')??[],...root.current?.querySelectorAll<HTMLElement>('.app-notifications button:not(:disabled),.app-notifications [tabindex="0"]')??[]].filter(el=>el.getClientRects().length>0);
       const index=nodes.indexOf(document.activeElement as HTMLElement),next=nodes[(index+(event.shiftKey?-1:1)+nodes.length)%nodes.length];if(next){event.preventDefault();next.focus();}
     }};window.addEventListener('keydown',keyboard);return()=>{cancelAnimationFrame(frame);window.removeEventListener('keydown',keyboard);};
   },[drawer]);

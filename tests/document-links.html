@@ -4,7 +4,9 @@
 const options=new URLSearchParams(location.search),linux=options.has('linux'),streaming=options.has('streaming');
 const diagram=options.has('mermaid')?'\n\n```mermaid\nflowchart TD\n A[读取文件] --> B[渲染流程图]\n B --> C[查看细节]\n```':'';
 const id='document-links',requests=[],rootPath=linux?'/home/test/project':'C:\\work\\project';
-let text='已整理成 [感知改进：现状评估与下一阶段方案](C:/work/project/docs/方案.md:12)。\n\n[相对路径](docs/方案.md#L12) · [文件地址](file:///C:/work/project/docs/方案.md) · [缺失文件](docs/missing.md) · [外链](https://example.com)\n\n[项目外](C:/private/secret.md) [危险](javascript:alert%281%29)';
+let text='已整理成 [感知改进：现状评估与下一阶段方案](C:/work/project/docs/方案.md#方案预览)。\n\n[相对路径](docs/方案.md#方案预览) · [文件地址](file:///C:/work/project/docs/方案.md) · [缺失文件](docs/missing.md) · [外链](https://example.com)\n\n[项目外](C:/private/secret.md) [危险](javascript:alert%281%29)';
+const skillPath='C:/Users/example/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.2/skills/brainstorming/SKILL.md';
+text+='\n\n[本机技能]('+skillPath+')';
 if(linux)text=text.replaceAll('C:/work/project','/home/test/project').replace('file:////home','file:///home');
 const snapshot={project:{id:'document-project',path:rootPath},thread:{id,name:'文档链接验收',cwd:rootPath,turns:[{id:'turn',status:streaming?'inProgress':'completed',items:[{type:'agentMessage',id:'answer',text}]}]},phase:'IDLE',pending:[]};
 history.replaceState(null,'','/sessions/'+id);
@@ -17,7 +19,7 @@ window.fetch=async(input)=>{
  if(url.pathname==='/api/sessions')return Response.json({data:[snapshot.thread]});
  if(url.pathname==='/api/sessions/'+id)return Response.json(snapshot);
  if(url.pathname.endsWith('/files'))return Response.json({files:[{path:'docs/方案.md',type:'file'}]});
- if(url.pathname.endsWith('/files/content'))return url.searchParams.get('path')==='docs/missing.md'?Response.json({error:'missing'},{status:404}):Response.json({text:'# 方案预览\n\n文档链接已正常打开。\n\n[同目录文档](next.md)'+diagram});
+ if(url.pathname.endsWith('/files/content'))return url.searchParams.get('path')==='docs/missing.md'?Response.json({error:'missing'},{status:404}):Response.json({text:'# 方案预览\n\n文档链接已正常打开。\n\n[同目录文档](next.md)\n\n[项目外文档](file:///C:/private/secret.md)'+diagram});
  if(url.pathname.endsWith('/git/files'))return Response.json({files:[]});
  if(url.pathname==='/api/models')return Response.json({data:[]});
  if(url.pathname.startsWith('/api/permission-modes'))return Response.json({modes:[]});
@@ -32,6 +34,10 @@ try{
  await until(()=>document.querySelector('.markdown-message'),'消息未渲染');
  await until(()=>link('感知改进：现状评估与下一阶段方案'),'合法文档链接被 blocked');
  check(!link('项目外')&&!link('危险'),'不安全地址变成可点击链接');
+ const rejectedText=document.querySelector('.timeline .markdown-message').textContent;
+ check(rejectedText.includes('项目外')&&rejectedText.includes('C:/private/secret.md'),'被拒绝链接没有保留标题和原始路径');
+ check(rejectedText.includes('javascript:alert%281%29')&&!rejectedText.includes('[blocked]'),'被拒绝链接被替换为 blocked');
+ check(rejectedText.includes(skillPath)&&!link('本机技能'),'长路径未保留原文或变成可点击链接');
  check(link('外链')?.target==='_blank','外链行为改变');
  for(const label of ['感知改进：现状评估与下一阶段方案','相对路径','文件地址']){
   link(label).click();await until(()=>document.querySelector('#right-sidebar:not([hidden]) .preview-content h1')?.textContent==='方案预览','点击未打开预览');
@@ -39,6 +45,7 @@ try{
  }
  link('缺失文件').click();await until(()=>document.querySelector('.file-preview [role=alert]')?.textContent==='文件已不可用。','缺失文件未说明');await close();
  link('相对路径').click();await until(()=>document.querySelector('.preview-content h1'),'再次打开失败');
+ check(document.querySelector('.preview-content').textContent.includes('file:///C:/private/secret.md'),'文件预览未保留被拦截路径');
  document.querySelector('.preview-content a').click();await until(()=>document.querySelector('.file-preview h3')?.textContent==='docs/next.md','文档内相对链接失败');
  await close();link('相对路径').click();await until(()=>document.querySelector('.file-preview h3')?.textContent==='docs/方案.md','重复点击未重新选中文档');
  check(!requests.some(url=>url.includes('secret')),'越界路径发出了请求');

@@ -70,7 +70,8 @@ export class AppServer extends EventEmitter {
     }).then((result) => { this.notify('initialized', {}); return result; });
   }
 
-  request<T = unknown>(method: string, params: unknown): Promise<T> {
+  request<T = unknown>(method: string, params: unknown, timeoutMs=this.timeoutMs): Promise<T> {
+    if(!Number.isSafeInteger(timeoutMs)||timeoutMs<1)return Promise.reject(new Error('timeoutMs must be a positive integer'));
     if (this.stopped) return Promise.reject(this.stopped);
     const id = this.nextId++;
     const started=performance.now(),threadId=diagnosticId(isObject(params)?params.threadId:undefined);
@@ -81,7 +82,7 @@ export class AppServer extends EventEmitter {
         timedOut=true;
         this.pending.delete(id);
         reject(new Error(`RPC ${method} timed out; outcome is uncertain, do not automatically retry`));
-      }, this.timeoutMs);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer,method,threadId,started });
       try { this.send({ id, method, params }); }
       catch (error) {
@@ -194,14 +195,19 @@ export class AppServer extends EventEmitter {
     this.closing = true;
     this.stop(new Error('App-server closed'));
     this.child.stdin.end();
-    let timeoutError: Error | undefined;
-    const timer = setTimeout(() => {
-      timeoutError = new Error('App-server shutdown timed out after 5000 ms; killed owned child');
-      this.child.kill();
-      this.emit('failure', timeoutError);
-    }, 5000);
-    try { await this.ended; }
+    let timer!: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error('App-server shutdown timed out after 5000 ms; attempted to stop owned child');
+        this.child.kill();
+        this.child.stdin.destroy();
+        this.child.stdout.destroy();
+        this.child.stderr.destroy();
+        this.emit('failure', error);
+        reject(error);
+      }, 5000);
+    });
+    try { await Promise.race([this.ended, timeout]); }
     finally { clearTimeout(timer); }
-    if (timeoutError) throw timeoutError;
   }
 }

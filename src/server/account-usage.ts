@@ -11,7 +11,7 @@ const finite=(value:any)=>typeof value==='number'&&Number.isFinite(value)?value:
 const timestamp=(value:any)=>Number.isSafeInteger(value)&&value>=0&&value<=8640000000000?value:null;
 const count=(value:any)=>typeof value==='bigint'&&value>=0n?value.toString():Number.isSafeInteger(value)&&value>=0?String(value):typeof value==='string'&&/^\d+$/.test(value)?BigInt(value).toString():null;
 const window=(value:any)=>object(value)?{usedPercent:finite(value.usedPercent),windowDurationMins:finite(value.windowDurationMins),resetsAt:timestamp(value.resetsAt)}:null;
-const bucket=(value:any)=>object(value)?{limitId:text(value.limitId),limitName:text(value.limitName),primary:window(value.primary),secondary:window(value.secondary)}:null;
+const bucket=(value:any)=>object(value)?{limitId:text(value.limitId),limitName:text(value.limitName),primary:window(value.primary),secondary:window(value.secondary),credits:object(value.credits)?{hasCredits:typeof value.credits.hasCredits==='boolean'?value.credits.hasCredits:null,unlimited:typeof value.credits.unlimited==='boolean'?value.credits.unlimited:null,balance:text(value.credits.balance)}:null}:null;
 const outcomes=new Set(['reset','nothingToReset','noCredit','alreadyRedeemed']);
 
 export class AccountUsage {

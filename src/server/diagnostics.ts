@@ -18,6 +18,7 @@ export class Diagnostics {
   private closed=false;
   private dropped=0;
   private writeFailures=0;
+  private lastWriteAt:number|null=null;
   private loop=monitorEventLoopDelay({resolution:20});
   private cpu=process.cpuUsage();
   private sampledAt=performance.now();
@@ -50,7 +51,7 @@ export class Diagnostics {
       while(this.queue.length){
         const batch=this.queue.join('');batchCount=this.queue.length;this.queue=[];this.queuedBytes=0;const bytes=Buffer.byteLength(batch);
         if(this.size+bytes>FILE_BYTES){await rename(this.file,this.file+'.1');this.size=0;}
-        await appendFile(this.file,batch,{mode:0o600});this.size+=bytes;batchCount=0;
+        await appendFile(this.file,batch,{mode:0o600});this.lastWriteAt=Date.now();this.size+=bytes;batchCount=0;
       }
     } catch {
       this.writeFailures++;this.dropped+=batchCount+this.queue.length;this.queue=[];this.queuedBytes=0;this.size=undefined;
@@ -58,6 +59,7 @@ export class Diagnostics {
     }
   }
   async flush(){while(this.writing)await this.writing;}
+  status(){return {enabled:!this.closed,lastWriteAt:this.lastWriteAt,dropped:this.dropped,writeFailures:this.writeFailures};}
   sample=()=>{
     if(this.closed)return;
     try {

@@ -111,6 +111,21 @@ test('usage preserves separate buckets and serializes bigint without coercing un
   }
 });
 
+test('usage projects credit balance strings without rounding, merging buckets or exposing private fields',async t=>{
+ const {runtime,service}=fixture(t);
+ runtime.raw.rateLimits.credits={hasCredits:true,unlimited:false,balance:'900719925474099312345.000001',secret:'private-credits'};
+ runtime.raw.rateLimitsByLimitId.codex.credits={hasCredits:true,unlimited:false,balance:'0'};
+ runtime.raw.rateLimitsByLimitId.spark.credits={hasCredits:false,unlimited:true,balance:null};
+ const data=await service.read();
+ assert.deepEqual(data.rateLimits.credits,{hasCredits:true,unlimited:false,balance:'900719925474099312345.000001'});
+ assert.deepEqual(data.rateLimitsByLimitId.codex.credits,{hasCredits:true,unlimited:false,balance:'0'});
+ assert.deepEqual(data.rateLimitsByLimitId.spark.credits,{hasCredits:false,unlimited:true,balance:null});assert.equal(JSON.stringify(data).includes('private-credits'),false);
+ for(const raw of [null,undefined,[],42,'62500']){runtime.raw.rateLimits.credits=raw;assert.equal((await service.read(true)).rateLimits.credits,null);}
+ for(const balance of [0,Infinity,'unknown','',{},null]){runtime.raw.rateLimits.credits={hasCredits:'true',unlimited:0,balance};assert.deepEqual((await service.read(true)).rateLimits.credits,{hasCredits:null,unlimited:null,balance:typeof balance==='string'?balance:null});}
+ runtime.identity='identity-b';runtime.raw.accountId='native-account-b';runtime.raw.rateLimits.credits={hasCredits:false,unlimited:false,balance:'0'};
+ assert.deepEqual((await service.read()).rateLimits.credits,{hasCredits:false,unlimited:false,balance:'0'});
+});
+
 test('all four native outcomes are returned, invalidate usage, and replay without another consume', async t => {
   const {runtime, service} = fixture(t);
   for (const outcome of ['reset', 'nothingToReset', 'noCredit', 'alreadyRedeemed']) {

@@ -5,6 +5,7 @@ using System.Reflection;
 [assembly: AssemblyTitle("codex_web")]
 [assembly: AssemblyDescription("codex_web")]
 [assembly: AssemblyProduct("codex_web")]
+[assembly: AssemblyCompany("sxcooler")]
 internal static class StartupLauncher {
     [STAThread]
     private static int Main() {

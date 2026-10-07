@@ -2,21 +2,23 @@ import {useCallback,useEffect,useId,useLayoutEffect,useRef,useState} from 'react
 import {api,type Json} from './api.ts';
 import {ImagePreview,ImageDiff,imagePath} from './ImagePreview.tsx';
 import {GitHistory,DiffView} from './GitHistory.tsx';
-import {fileUrl,fileImageUrl,linkedFile} from './fileLinks.ts';
+import {fileUrl,fileImageUrl,linkedFile,linkFragment} from './fileLinks.ts';
 import {MarkdownView} from './MarkdownView.tsx';
-import {cacheEntry,loadPanelState,savePanelState,type PanelState,type PanelTab,type StorageLike} from './panelState.ts';
+import {cacheEntry,loadPanelState,openPanelFile,savePanelState,type PanelState,type PanelTab,type StorageLike} from './panelState.ts';
 
 const fileNameOrder=new Intl.Collator('zh-CN',{numeric:true,sensitivity:'base'});
+const lineAnchor=(fragment='')=>/^L([1-9]\d*)(?:C\d+)?(?:-L?(\d+)(?:C\d+)?)?$/.exec(fragment);
 const markdownPath=(path:string)=>/\.(md|markdown)$/i.test(path);
 const browserStorage=():StorageLike=>{try{return localStorage;}catch{return {getItem:()=>null,setItem:()=>{}};}};
 
-export function GitPanel({id,projectId,tick,visible,openFile}:{id:string;projectId:string;tick:number;visible:boolean;openFile?:{path:string}}){
+export function GitPanel({id,projectId,projectRoot,tick,visible,openFile}:{id:string;projectId:string;projectRoot?:string;tick:number;visible:boolean;openFile?:{path:string;fragment?:string}}){
   const [state,setViewState]=useState<PanelState>(()=>loadPanelState(browserStorage(),projectId)),stateRef=useRef(state),saveTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const setState=(change:(current:PanelState)=>PanelState)=>setViewState(current=>{if(saveTimer.current){clearTimeout(saveTimer.current);saveTimer.current=undefined;}const next=change(stateRef.current??current);stateRef.current=next;return next;});
   const remember=(change:Partial<PanelState>)=>{stateRef.current={...stateRef.current,...change};if(saveTimer.current)clearTimeout(saveTimer.current);saveTimer.current=setTimeout(()=>{saveTimer.current=undefined;savePanelState(browserStorage(),projectId,stateRef.current);},50);};
   const rememberSection=(tab:'changes'|'files',change:Partial<PanelState[typeof tab]>)=>remember({[tab]:{...stateRef.current[tab],...change}});
   const rememberHistory=(change:Partial<PanelState['history']>)=>remember({history:{...stateRef.current.history,...change}});
   const [lists,setLists]=useState<Record<string,Json[]>>({}),[contents,setContents]=useState<Record<string,Json>>({}),[failures,setFailures]=useState<Record<string,string>>({}),[error,setError]=useState(''),[busy,setBusy]=useState(false),[revision,setRevision]=useState(0);
+  const [anchor,setAnchor]=useState<{path:string;fragment?:string}>();
   const [fetching,setFetching]=useState(false),[fetchResult,setFetchResult]=useState<Json|null>(null),[historyRevision,setHistoryRevision]=useState(0);
   const fetchGeneration=useRef(0),fetchInFlight=useRef(false);
   useEffect(()=>{setFetching(false);setFetchResult(null);fetchInFlight.current=false;return()=>{fetchGeneration.current++;};},[id,projectId]);
@@ -28,25 +30,27 @@ export function GitPanel({id,projectId,tick,visible,openFile}:{id:string;project
     catch {if(generation===fetchGeneration.current)setFetchResult({error:'远程获取未确认，请检查网络与本机 Git 凭据后重试。本地内容仍可查看。'});}
     finally {if(generation===fetchGeneration.current){fetchInFlight.current=false;setFetching(false);setHistoryRevision(n=>n+1);}}
   };
-  const sectionId=useId();
-  const listRef=useRef<HTMLDivElement>(null),previewRef=useRef<HTMLDivElement>(null);
+  const sectionId=useId(),recentId=useId();
+  const listRef=useRef<HTMLDivElement>(null),previewRef=useRef<HTMLDivElement>(null),recentRef=useRef<HTMLDivElement>(null);
   const set=(change:Partial<PanelState>)=>setState(current=>({...current,...change}));
-  const updateSection=(tab:'changes'|'files',change:Partial<PanelState[typeof tab]>)=>setState(current=>({...current,[tab]:{...current[tab],...change}}));
+  const updateSection=(tab:'changes'|'files',change:Partial<PanelState[typeof tab]>)=>{if(change.path!==undefined)setAnchor(undefined);setState(current=>tab==='files'&&change.path?openPanelFile(current,change.path):({...current,[tab]:{...current[tab],...change}}));};
+  const navigateFile=(direction:'back'|'forward')=>{const target=stateRef.current.files[direction].at(-1);if(!target)return;setAnchor(target.fragment?{path:target.path,fragment:target.fragment}:undefined);setState(current=>openPanelFile(current,'','',direction));};
+  useEffect(()=>{recentRef.current?.hidePopover();},[id,visible,state.tab,state.files.path]);
   const section=state.tab==='changes'?state.changes:state.files;
   const listKey=state.tab==='changes'?'changes:'+state.changes.staged:'files:'+state.files.directory;
   const path=state.tab==='changes'?state.changes.path:state.files.path;
   const contentKey=state.tab==='changes'?'changes:'+state.changes.staged+':'+path:'files:'+path;
-  const files=lists[listKey]??[],content=contents[contentKey],failure=failures[contentKey];
+  const files=lists[listKey]??[],content=contents[contentKey],failure=failures[contentKey],previewReady=!!content||(state.tab==='files'&&imagePath(path));
   const resolvePreviewUrl=useCallback((url:string)=>fileUrl(id,path,url),[id,path]);
-  const resolvePreviewImage=useCallback((url:string)=>fileImageUrl(id,path,url),[id,path]);
-  const openPreviewLink=useCallback((url:string)=>{const next=linkedFile(id,path,url);if(!next)return false;setState(current=>({...current,files:{...current.files,path:next,directory:next.split('/').slice(0,-1).join('/'),listScroll:0,previewScroll:0,contentScroll:0}}));return true;},[id,path]);
+  const resolvePreviewImage=useCallback((url:string)=>fileImageUrl(id,path,url,location.origin,projectRoot),[id,path,projectRoot]);
+  const openPreviewLink=useCallback((url:string)=>{const fragment=linkFragment(url);if(url.startsWith('#')&&!lineAnchor(fragment))return false;const next=url.startsWith('#')?path:linkedFile(id,path,url);if(!next)return false;setAnchor({path:next,fragment});setState(current=>openPanelFile(current,next,fragment));return true;},[id,path]);
 
-  useEffect(()=>{if(openFile)setState(current=>({...current,tab:'files',files:{...current.files,path:openFile.path,directory:openFile.path.split('/').slice(0,-1).join('/'),mode:'preview',listScroll:0,previewScroll:0,contentScroll:0}}));},[openFile]);
+  useEffect(()=>{if(openFile){setAnchor(openFile);setState(current=>openPanelFile(current,openFile.path,openFile.fragment));}},[openFile]);
   useEffect(()=>savePanelState(browserStorage(),projectId,state),[projectId,state]);
   useEffect(()=>()=>{if(saveTimer.current){clearTimeout(saveTimer.current);savePanelState(browserStorage(),projectId,stateRef.current);}},[projectId]);
   useEffect(()=>{if(!visible||state.tab==='history'){setBusy(false);return;}const controller=new AbortController();setBusy(true);setError('');const route=state.tab==='changes'?'/git/files?staged='+state.changes.staged:'/files?directory='+encodeURIComponent(state.files.directory);void api('/sessions/'+id+route,undefined,controller.signal).then(result=>{if(!controller.signal.aborted){const nextFiles=result.files??[];if(state.tab==='files')nextFiles.sort((a:Json,b:Json)=>Number(b.type==='directory')-Number(a.type==='directory')||fileNameOrder.compare(a.path,b.path));setLists(old=>cacheEntry(old,listKey,nextFiles));if(state.tab==='changes')setState(current=>current.changes.staged===state.changes.staged&&current.changes.path&&!nextFiles.some((file:Json)=>file.path===current.changes.path)?{...current,changes:{...current.changes,path:'',previewScroll:0,contentScroll:0}}:current);}}).catch(e=>{if(!controller.signal.aborted)setError(e.message);}).finally(()=>{if(!controller.signal.aborted)setBusy(false);});return()=>controller.abort();},[id,tick,visible,state.tab,state.changes.staged,state.files.directory,revision,listKey]);
   useEffect(()=>{if(!visible||state.tab==='history'||!path||(state.tab==='files'&&imagePath(path)))return;const controller=new AbortController();setError('');const route=state.tab==='changes'?'/git/diff?staged='+state.changes.staged+'&path='+encodeURIComponent(path):'/files/content?path='+encodeURIComponent(path);void api('/sessions/'+id+route,undefined,controller.signal).then(result=>{if(controller.signal.aborted)return;setContents(old=>cacheEntry(old,contentKey,result));setFailures(old=>{const next={...old};delete next[contentKey];return next;});}).catch(e=>{if(!controller.signal.aborted)setFailures(old=>cacheEntry(old,contentKey,e.status===404?'文件已不可用。':e.message));});return()=>controller.abort();},[id,tick,visible,state.tab,state.changes.staged,path,revision,contentKey]);
-  useLayoutEffect(()=>{if(!visible||state.tab==='history')return;const latest=stateRef.current[state.tab];if(listRef.current)listRef.current.scrollTop=latest.listScroll;if(previewRef.current)previewRef.current.scrollTop=latest.contentScroll;},[visible,state.tab,listKey,files,contentKey,content,state.files.mode,section.collapsed]);
+  useLayoutEffect(()=>{if(!visible||state.tab==='history')return;const latest=stateRef.current[state.tab];if(listRef.current)listRef.current.scrollTop=latest.listScroll;if(previewRef.current&&previewReady&&!(anchor?.path===path&&anchor.fragment))previewRef.current.scrollTop=latest.contentScroll;},[visible,state.tab,listKey,files,contentKey,content,state.files,section.collapsed]);
 
   const tab=(next:PanelTab)=>{if(next!==state.tab)set({tab:next});};
   return <aside id="right-sidebar" aria-label="项目面板" className="git-panel" hidden={!visible}>
@@ -62,7 +66,12 @@ export function GitPanel({id,projectId,tick,visible,openFile}:{id:string;project
       <div className={state.tab==='files'?'file-list directory-list':'file-list'} ref={listRef} onScroll={event=>visible&&!section.collapsed&&rememberSection(state.tab as 'changes'|'files',{listScroll:event.currentTarget.scrollTop})}>{busy&&!files.length?<p>读取中…</p>:!files.length&&error?null:!files.length?<p className="muted">{state.tab==='changes'?'没有变更':'目录为空'}</p>:files.map(file=><button key={file.path} className={path===file.path?'active':''} title={file.oldPath?file.oldPath+' → '+file.path:file.path} onClick={()=>{if(file.type==='directory')updateSection('files',{directory:file.path,path:''});else updateSection(state.tab as 'changes'|'files',{path:file.path});}}>{state.tab==='files'?<span className="file-name"><span className="file-kind" aria-hidden="true">{file.type==='directory'?'▸':''}</span><span className="file-name-text">{file.path.split('/').pop()}</span></span>:<span>{file.path}</span>}<small>{file.status??''}{file.binary?' 二进制':file.added!==undefined?' +'+file.added+' −'+file.deleted:''}</small></button>)}</div>
       </div>
       </div>
-      {path?<section className="file-preview"><h3>{path}</h3>{state.tab==='files'&&markdownPath(path)?<div className="markdown-file-controls"><button aria-pressed={state.files.mode==='preview'} onClick={()=>updateSection('files',{mode:'preview'})}>预览</button><button aria-pressed={state.files.mode==='source'} onClick={()=>updateSection('files',{mode:'source'})}>源码</button></div>:null}<div className="preview-content" ref={previewRef} tabIndex={0} aria-label="文件内容" onScroll={event=>{if(event.target===event.currentTarget)rememberSection(state.tab as 'changes'|'files',{contentScroll:event.currentTarget.scrollTop});}}>{state.tab==='files'&&imagePath(path)?<ImagePreview key={id+'|'+path+'|'+tick+'|'+revision} id={id} path={path} version={tick+'-'+revision}/>:<>{failure?<p className="notice error" role="alert">{failure}</p>:null}{!content&&!failure?<p className="muted">读取文件…</p>:content?<>{content.images?<ImageDiff id={id} images={content.images} version={tick+'-'+revision} split={state.changes.split}/>:content.binary?<p>二进制文件，仅显示元数据。</p>:state.tab==='changes'?<DiffView content={content} split={state.changes.split}/>:markdownPath(path)&&state.files.mode==='preview'?<MarkdownView text={content.text??''} linkScope={id+'|'+path} resolveUrl={resolvePreviewUrl} resolveImage={resolvePreviewImage} onLink={openPreviewLink}/>:<pre>{content.text}</pre>}{content.truncated?<p className="notice">内容超过显示上限，已截断。</p>:null}{state.tab==='changes'?<a href={'/api/sessions/'+id+'/git/diff/patch?staged='+state.changes.staged+'&path='+encodeURIComponent(path)}>下载 patch</a>:null}</>:null}</>}</div></section>:<p className="muted small">选择文件查看内容。</p>}
+      {path?<section className="file-preview"><div className="file-preview-header"><h3 title={path}>{path}</h3>{state.tab==='files'?<div className="file-preview-navigation" role="group" aria-label="文件导航">
+        <button aria-label="后退" title="后退" disabled={!state.files.back.length} onClick={()=>navigateFile('back')}>←</button>
+        <button aria-label="前进" title="前进" disabled={!state.files.forward.length} onClick={()=>navigateFile('forward')}>→</button>
+        <button className="file-recent-button" aria-label="最近文件" title="最近文件" popoverTarget={recentId}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg></button>
+        <div id={recentId} ref={recentRef} popover="auto" className="recent-files-popover" aria-label="最近打开的文件"><h4>最近文件</h4>{state.files.recent.map(recentPath=><button key={recentPath} title={recentPath} aria-current={recentPath===path?'page':undefined} onClick={()=>{recentRef.current?.hidePopover();updateSection('files',{path:recentPath});}}><span>{recentPath.split('/').pop()}</span><small dir="rtl">{recentPath.split('/').slice(0,-1).join('/')||'/'}</small></button>)}</div>
+      </div>:null}</div>{state.tab==='files'&&markdownPath(path)?<div className="markdown-file-controls"><button aria-pressed={state.files.mode==='preview'} onClick={()=>updateSection('files',{mode:'preview'})}>预览</button><button aria-pressed={state.files.mode==='source'} onClick={()=>updateSection('files',{mode:'source'})}>源码</button></div>:null}<div className="preview-content" ref={previewRef} tabIndex={0} aria-label="文件内容" onScroll={event=>{if(event.target===event.currentTarget&&previewReady)rememberSection(state.tab as 'changes'|'files',{contentScroll:event.currentTarget.scrollTop,...(state.tab==='files'?{fragment:''}:{})});}}>{state.tab==='files'&&imagePath(path)?<ImagePreview key={id+'|'+path+'|'+tick+'|'+revision} id={id} path={path} version={tick+'-'+revision}/>:<>{failure?<p className="notice error" role="alert">{failure}</p>:null}{!content&&!failure?<p className="muted">读取文件…</p>:content?<>{content.images?<ImageDiff id={id} images={content.images} version={tick+'-'+revision} split={state.changes.split}/>:content.binary?<p>二进制文件，仅显示元数据。</p>:state.tab==='changes'?<DiffView content={content} split={state.changes.split}/>:markdownPath(path)&&state.files.mode==='preview'?<MarkdownView text={content.text??''} anchor={anchor?.path===path?anchor:undefined} linkScope={id+'|'+path} resolveUrl={resolvePreviewUrl} resolveImage={resolvePreviewImage} onLink={openPreviewLink}/>:<SourcePreview text={content.text??''} anchor={anchor?.path===path?anchor:undefined}/>}{content.truncated?<p className="notice">内容超过显示上限，已截断。</p>:null}{state.tab==='changes'?<a href={'/api/sessions/'+id+'/git/diff/patch?staged='+state.changes.staged+'&path='+encodeURIComponent(path)}>下载 patch</a>:null}</>:null}</>}</div></section>:<p className="muted small">选择文件查看内容。</p>}
     </div>
   </aside>;
 }
@@ -70,4 +79,13 @@ export function GitPanel({id,projectId,tick,visible,openFile}:{id:string;project
 export function TestReport({threadId,turnId,itemId}:{threadId:string;turnId:string;itemId:string}){
   const [path,setPath]=useState(''),[report,setReport]=useState<Json|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   return <details className="test-report"><summary>测试结果</summary><p className="muted small">导入本次命令生成的 JUnit 报告；不会重新运行测试。</p><form onSubmit={async event=>{event.preventDefault();setBusy(true);setError('');try{setReport(await api('/sessions/'+threadId+'/test-reports',{turnId,commandItemId:itemId,relativePath:path,format:'junit'}));}catch(e:any){setError(e.message);}finally{setBusy(false);}}}><label>项目内报告路径<input required placeholder="test-results/junit.xml" value={path} onChange={e=>setPath(e.target.value)}/></label><button disabled={busy}>{busy?'读取中…':'导入报告'}</button></form>{error?<p className="notice error">{error}</p>:null}{report?<><p>通过 {report.summary.passed} · 失败 {report.summary.failed} · 跳过 {report.summary.skipped} · 错误 {report.summary.errors}</p><p className="path">来源：{report.source?.relativePath??path}</p>{report.source?.stale?<p className="notice">可能是旧报告，请核对来源。</p>:null}{report.truncated?<p>报告已截断。</p>:null}<ul>{report.cases.map((item:Json,index:number)=><li key={index}>{item.status} · {item.suite} / {item.name}{item.message?<pre>{item.message}</pre>:null}</li>)}</ul></>:null}</details>;
+}
+
+function SourcePreview({text,anchor}:{text:string;anchor?:{fragment?:string}}){
+  const target=useRef<HTMLElement>(null),match=lineAnchor(anchor?.fragment);
+  useEffect(()=>{target.current?.scrollIntoView({block:'start'});},[text,anchor]);
+  if(!match)return <pre>{text}</pre>;
+  const lines=text.split('\n'),start=Number(match[1])-1,end=Math.max(start+1,Number(match[2]??match[1]));
+  if(start>=lines.length)return <pre>{text}</pre>;
+  return <pre>{lines.slice(0,start).map(line=>line+'\n').join('')}<mark ref={target}>{lines.slice(start,end).map((line,index)=>line+(start+index<lines.length-1?'\n':'')).join('')}</mark>{lines.slice(end).join('\n')}</pre>;
 }

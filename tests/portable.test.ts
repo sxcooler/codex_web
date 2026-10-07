@@ -33,5 +33,8 @@ test('release exports exclude local state, credentials and history', () => {
   assert.ok(runtimeFiles.every(path => sourceAllowed(path) || path === 'dist'));
   for (const path of ['src/server/debug.log', 'src/codex/.env', 'dist/.local/auth.json']) assert.equal(runtimeAllowed(path), false, path);
   assert.equal(runtimeAllowed('dist/assets/index.js'), true);
+  for (const path of ['scripts/windows/install-startup.ps1', 'scripts/windows/startup-launcher.cs', 'scripts/windows/codex-web.ico']) {
+    assert.ok(runtimeFiles.some(base => path.startsWith(base + '/')) && runtimeAllowed(path), 'Portable package must include startup branding: ' + path);
+  }
   assert.ok(!runtimeFiles.some(path => path.startsWith('.')));
 });

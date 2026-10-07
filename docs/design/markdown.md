@@ -47,7 +47,7 @@ Codex 回复支持 Markdown，在生成中、历史回放和重新进入会话�
 - 根因并非缺少 `theme: dark`，而是服务端 `style-src 'self'` 拦截 Mermaid 动态生成的 SVG `<style>` 和样式属性，导致文字/节点回退成黑色、连线变成实心黑块。此前 Vite 预览及测试页面允许内嵌样式，未覆盖真实服务响应头，原验收对此存在遗漏。
 - 将 CSP 的样式指令调整为 `style-src 'self' 'unsafe-inline'`；这是样式限制的明确放宽，适用于整个页面，不能精确限定到 Mermaid。仅允许 `<style>` 仍会拦截 SVG 布局属性，因此两者均需兼容。`script-src 'self'`、图片/网络来源限制、Markdown HTML 清洗及 Mermaid strict 模式保持不变；不允许内联脚本或 eval，不为文档开放原始 HTML。
 - 新增 `tests/mermaid-production.mjs`：使用实际 Fastify 静态服务及 CSP，隔离鉴权数据、模拟 API，不启动模型任务。构建后运行 `node tests/mermaid-production.mjs [Markdown文件路径]`；可用 `MERMAID_TEST_PORT` 调整默认测试端口 3199。测试断言节点/文字颜色、连线无填充、无 CSP 违规、缩放/全屏和内联脚本继续被阻止，截图仅写入忽略目录 `.local/mermaid-csp/`。
-- 按用户指定，使用 `ai-arpg-agent` 项目的 `docs/superpowers/specs/2026-09-21-pit110-glyph-mvp-product-technical-design.md` 原文验证两张流程图，未复制该文档到本仓库。先确认旧策略下颜色断言失败，再以桌面 1280×900、手机 390×844 验证生产策略修复。
+- 按用户指定，使用 `sample-project` 项目的 `docs/design/example-flow.md` 原文验证两张流程图，未复制该文档到本仓库。先确认旧策略下颜色断言失败，再以桌面 1280×900、手机 390×844 验证生产策略修复。
 - 验证结果：上述两种尺寸、两张图的实际颜色和全屏截图通过检查，渲染无 CSP 违规，内联脚本探针仍被拦截；TypeScript、12 项鉴权测试、桌面/手机各一组 Mermaid 与 Markdown 既有浏览器回归全部通过。使用现有生产前端构建，产品代码仅修改服务端响应头，无前端产物变更。
 - 本次修改位于服务端响应头，当前进程需重启并刷新页面才生效；不能只重新编译前端。不主动停止正在承载会话的服务。
 
@@ -64,10 +64,11 @@ Codex 回复支持 Markdown，在生成中、历史回放和重新进入会话�
 ### 仓内图片与 GitHub 兼容（2026-09-26）
 
 - 文档以 GitHub 常用 Markdown 为兼容基线。图片优先用 `![说明](相对路径)`，需要宽高时可用受限 `<img>`；源文件不写 Web API 地址或个人设备地址。GitHub 参考：[路径规则](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#relative-links)、[HTML 清洗流程](https://github.com/github/markup#github-markup)。
-- 图片地址相对当前文档目录解析；`/` 表示项目根目录，`./`、`../` 可在项目内使用。聊天中的相对图片以绑定项目根目录为基准。拒绝外部 URL、网络共享、盘符、`file:`、`data:` 及越界路径；没有项目上下文时不加载。此处“仓内”指绑定项目目录内的可读文件，不要求已被 Git 跟踪。
-- Markdown 图片与受限 `<img>` 共用现有 `/files/image` 鉴权接口；保留真实路径边界、敏感文件保护、10 MiB / 4000 万像素限制，SVG 和动图转成静态 WebP。浏览器懒加载，不增加外部图片代理，不放宽 CSP。
+- 图片地址相对当前文档目录解析；`/` 表示项目根目录，`./`、`../` 可在项目内使用。聊天中的相对图片以绑定项目根目录为基准。项目内绝对路径转换为相对路径后走同一鉴权接口；拒绝外部 URL、网络共享、`file:`、`data:` 及越界路径，没有项目上下文时不加载。不要求文件已被 Git 跟踪。
+- 项目外目录联接默认拒绝。管理员可在服务配置中设置 `allowProjectDirectoryLinks: true`，统一允许通过项目内的目录联接访问目标目录；文件浏览、文本和图片读取采用同一规则，无需配置设备路径。开启表示信任项目中的目录联接及其目标；请求路径与真实路径仍检查敏感文件和路径穿越。具体规则见 [项目目录联接与被拦截链接](project-directory-links.md)。
+- Markdown 图片与受限 `<img>` 共用现有 `/files/image` 鉴权接口；保留真实路径边界、敏感文件保护、20 MiB / 4000 万像素限制，SVG 和动图转成静态 WebP。浏览器懒加载，不增加外部图片代理，不放宽 CSP。
 - 只识别独立的 `<img>` HTML 节点，保留 `src`、`alt`、`title` 与 1–2048 的整数宽高；不透传事件、样式、`srcset`、`id`、`name` 等属性。其他原始 HTML 继续按原有策略处理，不开放脚本、iframe、picture 或任意 HTML。解析后仍执行清洗和加固。
-- 被拒绝的图片明确提示“仅支持项目内图片”；读取失败给出可理解的错误，不再把合法仓内图片标为 `Image blocked`。完整尺寸受容器宽度约束。
+- 被拒绝的链接显示标题与路径原文，作为不可点击文本，不显示 `[blocked]`；被拒绝的图片显示“仅支持项目内图片”及源路径。读取失败给出可理解的错误，不再把合法仓内图片标为 `Image blocked`。完整尺寸受容器宽度约束。
 - GitHub 可代理外部图片，本项目不支持；项目文档使用已脱敏的仓内素材。GitHub 与 Web 允许样式差异，不承诺所有 GFM 扩展等价。回归覆盖两种图片写法、嵌套目录与根路径、中文/空格、恶意属性、外部地址、越界、加载失败及手机布局。
 
 验证入口：`node --test tests/file-links.test.ts tests/project-images.test.ts` 和 `node tests/markdown-images.browser.mjs`（本机 Chrome）。后者覆盖实际 README 文件面板、共享聊天渲染、流式输出、失败提示及既有 Markdown 回归，使用模拟 API，不发送模型消息。另用 GitHub Markdown 渲染 API 验证同类标准图片与 HTML 图片：两者保留图片，`width="360"` 保留，输入的事件属性及样式被清除。
@@ -108,3 +109,15 @@ Markdown 样式限定在消息正文，适配现有深色配色，覆盖当前�
 - 分别阻断 MarkdownMessage 与内部 highlighted-body 模块请求：该条回复回退原文，用户消息仍在，应用不崩溃。
 - 生产包预览复用了发送回归的模拟 API，验证编译后的主包、Markdown 分包和代码高亮在限制性 CSP 下正常加载，无控制台错误；未调用真实会话接口。
 - 浏览器插件因本机运行器连接超时不可用，采用仓库已安装的 Playwright 与独立无头 Chrome 验证。只读代码复核通过。
+
+
+### 文档锚点与 Codex 文件引用（2026-09-29）
+
+- 支持同文档 `#标题`、跨文档 `guide.md#标题`，保留中文和 URL 编码锚点。聊天里的项目内绝对路径、相对路径与已有文件地址写法也保留锚点，打开右侧预览后定位；手机使用现有抽屉。
+- 标题定位按可见文字生成小写标识，去除标点、符号并将空白转换为短横线；同名标题依次使用 `-1`、`-2`，同时避开已有标识。行内加粗和代码不影响标题文字。每个 Markdown 实例独立匹配，避免聊天和文档的同名标题互相干扰；不修改应用路由 hash。
+- Codex 常见 `文件:行号`、`文件:行号:列号` 和 `#L12` / `#L12-L15` 引用：Markdown 文件始终打开预览，用解析器记录的源行位置定位到对应标题或内容块；没有覆盖该行的块时定位到下一个块，超出范围定位到最后一块，范围/列号按起始行定位。其他文本文件以及手动切换源码时仍可标记源行。链接跳转优先于历史滚动恢复，重复打开已缓存文件也重新定位。
+- 沿用鉴权文件接口、路径校验和 Markdown 清洗，不支持任意原始 HTML 锚点，不增加文件协议导航或新依赖。测试：`node --test tests/file-links.test.ts`、`npx playwright test tests/anchors.spec.ts`；覆盖中文、重复标题、静态/流式消息、跨文件、缓存重开、源码行号及桌面/手机视口。
+
+验证：3 项链接解析测试、4 项锚点/文件预览浏览器测试、桌面 1280px 与手机 390px 的既有 Markdown/图片回归、TypeScript 与生产构建通过。完整 `npm test` 为 260 通过、5 跳过、1 失败：既有 `app-server.test.ts` 的 80ms RPC 超时测试在并发套件中超时，单独复验通过。本次为前端改动，刷新网页加载新构建即可；浏览器测试使用模拟 API，未发送真实模型任务。
+
+2026-09-29 修正：行号不再强制切换 Markdown 源码；利用解析器位置映射到预览标题、正文和代码块。桌面/手机的 4 项锚点回归、既有 Markdown/图片回归及构建通过；完整测试仍为 260 通过、5 跳过和上述既有 RPC 超时测试失败。

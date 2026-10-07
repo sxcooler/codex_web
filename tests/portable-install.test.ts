@@ -24,7 +24,7 @@ async function fixture(t: any) {
   const installed = new Set<string>();
   const installCalls: any[] = [];
   t.mock.method(childProcess, 'spawnSync', (file: string, args: string[], options: any) => {
-    if (args[0] === '--version') return { status: installed.has(file) ? 0 : 1, stdout: installed.has(file) ? 'codex-cli 0.135.0\n' : '', stderr: '' };
+    if (args[0] === '--version') { assert.equal(options.maxBuffer,16_384); return { status: installed.has(file) ? 0 : 1, stdout: installed.has(file) ? 'codex-cli 0.160.1\n' : '', stderr: '' }; }
     installCalls.push({ file, args, options });
     if (installCalls.length > 1) { writeFileSync(bin, 'fake'); installed.add(bin); return { status: 0 }; }
     return { status: 1 };
@@ -40,6 +40,17 @@ async function fixture(t: any) {
   } });
   return { dir, bin, installed, installCalls, terminal, prompts, opens: () => opens };
 }
+
+test('portable rejects old prerelease or unknown CLI versions without installation or config overwrite',async t=>{
+ const f=await fixture(t);await writeFile(f.bin,'fake');const original=JSON.stringify({port:3200,origin:'http://localhost:3200',workRoot:f.dir,codexBin:f.bin,custom:'preserved'});await writeFile(join(f.dir,'config.json'),original);
+ for(const stdout of ['codex-cli 0.160.0\n','codex-cli 0.160.1-alpha.1\n','codex-cli fixture-private-output\n']){
+  t.mock.method(childProcess,'spawnSync',()=>({status:0,stdout,stderr:''}));
+  assert.equal(await portable.discoverPortableCodex(f.bin),undefined);
+  await assert.rejects(portable.loadPortableConfig(f.dir),/Codex CLI >= 0\.160\.1/);
+  await assert.rejects(portable.loadPortableConfig(f.dir,f.terminal(['0'])),/退出/);
+  assert.equal(await readFile(join(f.dir,'config.json'),'utf8'),original);assert.equal(f.installCalls.length,0);
+ }
+});
 
 test('portable asks optional domain after port and preserves localhost and saved configuration',async t=>{
   const f=await fixture(t);await writeFile(f.bin,'fake');f.installed.add(f.bin);

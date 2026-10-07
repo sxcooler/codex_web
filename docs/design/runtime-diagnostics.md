@@ -1,5 +1,7 @@
 # 无响应诊断
 
+2026-10-03：补充 `runtime.starting` / `runtime.stopping` 采样，区分正在等待初始化、关闭与原生 RPC 响应。现场检查和下次启动安排见[双会话读取无响应排查](../verification/2026-10-03-server-unresponsive.md)；本次真实服务仍未开启诊断，未确认卡顿根因。
+
 2026-09-22 用户确认：先加入最小诊断，再复现多个会话同时读取超时。目标是区分 Web 事件循环阻塞、原生 RPC 等待和共享项目访问的相关性，不自动重启、不重发请求、不修改锁策略。
 
 - 默认关闭，启动时显式添加 `--diagnostics` 才启用本次运行的诊断；不保存到配置或登录自启，下次普通启动恢复关闭，也不会清除已有日志。关闭时不注册诊断采样器或 HTTP 诊断钩子。
@@ -25,6 +27,8 @@
 | Linux 便携包 | `bash Start.sh --diagnostics` |
 
 PowerShell 直接调用 `start-server.ps1` 同样支持 `--diagnostics`，后台再加 `-Background`。启动输出会提示诊断已启用，托管实例状态入口显示 `diagnostics: on/off`。出现本次 PID 对应的 `start` 记录且每约 10 秒出现 `sample`，才能确认这份诊断已启用；历史日志存在不代表当前已启用。
+
+Windows 安全重启可用 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/restart-server.ps1 -RequireIdle -Diagnostics` 显式为新实例启用诊断；仍执行桌面会话预检、90 秒延迟及实际执行时的空闲检查。不指定 `-Diagnostics` 时继承当前实例状态。安排成功后立即结束当前回复，稍后核实结果文件为 `success` 以及新实例诊断日志。
 
 再次遇到读取超时，记下时间，尽量先保留 `diagnostics.jsonl` 和 `diagnostics.jsonl.1`，再决定是否重启。这些文件位于忽略的本地数据目录，不上传 GitHub。`start.pid` 是 Web Node 进程；`native_start.nativePid` 是它启动的 Codex 子进程。CPU 字段表示本次采样间隔内累计消耗的毫秒，不是百分比；与 `intervalMs` 对照判断负载。
 

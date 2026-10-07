@@ -1,17 +1,64 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {mkdtemp,readFile,rm,stat,writeFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import Fastify from 'fastify';
 import {get} from 'node:http';
 import {createServer} from 'node:net';
+import childProcess from 'node:child_process';
 import {Diagnostics} from '../src/server/diagnostics.ts';
 import {AppServer} from '../src/codex/app-server.ts';
 import {Runtime} from '../src/codex/runtime.ts';
 import {startServer} from '../src/server/main.ts';
 import {initializeAuth} from '../src/server/auth.ts';
+import {buildServer} from '../src/server/app.ts';
+
+test('diagnostic status records only durable writes and truthful loss totals, including after close',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'codex-diagnostics-')),diagnostics=new Diagnostics(dir);
+  t.after(async()=>{await diagnostics.close();await rm(dir,{recursive:true,force:true});});
+  assert.deepEqual(diagnostics.status(),{enabled:true,lastWriteAt:null,dropped:0,writeFailures:0});
+  await diagnostics.flush();const first=diagnostics.status();assert.ok(first.lastWriteAt!==null);
+  diagnostics.record({event:'oversized',value:'x'.repeat(20*1024)});await diagnostics.flush();
+  assert.deepEqual(diagnostics.status(),{...first,dropped:1});
+  await rm(join(dir,'diagnostics.jsonl'));await mkdir(join(dir,'diagnostics.jsonl'));
+  diagnostics.record({event:'failed'});await diagnostics.flush();
+  assert.deepEqual(diagnostics.status(),{...first,dropped:2,writeFailures:1});
+  await rm(join(dir,'diagnostics.jsonl'),{recursive:true});
+  await new Promise(resolve=>setTimeout(resolve,5));diagnostics.record({event:'recovered'});await diagnostics.flush();
+  assert.ok(diagnostics.status().lastWriteAt!>first.lastWriteAt!);await diagnostics.close();
+  assert.deepEqual(diagnostics.status(),{enabled:false,lastWriteAt:diagnostics.status().lastWriteAt,dropped:2,writeFailures:1});
+});
+
+test('settings reads the current instance without native starts, RPC, or scanning old diagnostic content',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'codex-settings-diagnostics-')),events:any[]=[];
+  const runtime=new Runtime({executable:process.execPath,cwd:dir,args:[fileURLToPath(new URL('./fixtures/runtime-server.mjs',import.meta.url))],diagnostic:event=>events.push(event)});
+  await initializeAuth(dir,'fixture-password-long-enough');
+  const oldLog=join(dir,'diagnostics.jsonl');await writeFile(oldLog,'not-json:private-old-log');
+  let app:Awaited<ReturnType<typeof buildServer>>|undefined,diagnostics:Diagnostics|undefined;
+  t.after(async()=>{await app?.close();await diagnostics?.close();await runtime.close();await rm(dir,{recursive:true,force:true});});
+  const login=async()=>{
+    const csrf=await app!.inject({url:'/api/auth/session',headers:{host:'localhost:3000'}});
+    const headers:any={host:'localhost:3000',origin:'http://localhost:3000','x-csrf-token':csrf.json().csrfToken,cookie:String(csrf.headers['set-cookie']).split(';')[0]};
+    const signed=await app!.inject({method:'POST',url:'/api/auth/login',headers,payload:{password:'fixture-password-long-enough'}});
+    headers.cookie+='; '+String(signed.headers['set-cookie']).split(';')[0];return headers;
+  };
+  app=await buildServer({dataDir:dir,origin:'http://localhost:3000',runtime});
+  const headers=await login();const before=runtime.diagnosticState();
+  let response=await app.inject({url:'/api/settings',headers});assert.equal(response.statusCode,200);
+  assert.deepEqual(runtime.diagnosticState(),before);assert.deepEqual(events,[]);
+  assert.deepEqual(response.json().diagnostics,{enabled:false,lastWriteAt:null,dropped:0,writeFailures:0});
+  for(const field of ['available','epoch','failures','diagnosticsSeen','permissionModes','userAgent','codexHome','platformFamily','platformOs','account','requiresOpenaiAuth'])assert.ok(field in response.json().runtime,field);
+  assert.equal(response.json().runtime.available,null);assert.equal(response.json().runtime.permissionModes,null);assert.equal(await readFile(oldLog,'utf8'),'not-json:private-old-log');
+  await runtime.models();events.length=0;
+  response=await app.inject({url:'/api/settings',headers});assert.equal(response.statusCode,200);assert.deepEqual(events,[],'already running native must not receive RPC');assert.equal(response.json().runtime.available,null);assert.ok(response.json().runtime.native.nativePid>0);assert.ok(response.json().runtime.userAgent);
+  await app.close();diagnostics=new Diagnostics(dir);await diagnostics.flush();
+  app=await buildServer({dataDir:dir,origin:'http://localhost:3000',runtime,diagnostics});
+  response=await app.inject({url:'/api/settings',headers:await login()});assert.deepEqual(response.json().diagnostics,diagnostics.status());
+  await diagnostics.close();response=await app.inject({url:'/api/settings',headers:await login()});assert.equal(response.json().diagnostics.enabled,false);
+  assert.doesNotMatch(JSON.stringify(response.json()),/private-old-log/);
+});
 
 const fixture=fileURLToPath(new URL('./fixtures/rpc-server.mjs',import.meta.url));
 test('diagnostics correlate concurrent RPC waits and timeouts without retaining payloads or retrying',async t=>{
@@ -88,6 +135,7 @@ test('two read-only history requests share a project key without taking ownershi
 });
 
 test('the real server entry writes periodic diagnostics without starting an idle native runtime',async t=>{
+  t.mock.method(childProcess,'spawnSync',(executable:string,args:string[],options:any)=>{assert.match(executable,/must-not-be-spawned$/);assert.deepEqual(args,['--version']);assert.equal(options.shell,false);assert.equal(options.windowsHide,true);assert.equal(options.timeout,10_000);assert.equal(options.maxBuffer,16_384);return {status:0,stdout:'codex-cli 0.160.1\n'};});
   const dir=await mkdtemp(join(tmpdir(),'codex-diagnostics-')),probe=createServer();
   await new Promise<void>(resolve=>probe.listen(0,'127.0.0.1',resolve));const port=(probe.address() as any).port;
   await new Promise<void>(resolve=>probe.close(()=>resolve()));await initializeAuth(dir,'fixture-password-long-enough');

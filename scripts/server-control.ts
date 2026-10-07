@@ -13,12 +13,13 @@ const windows = process.platform === 'win32';
 type Instance = { token: string; port: number; pid: number; root: string; origin: string; diagnosticsEnabled?: boolean };
 
 // A private local control endpoint proves ownership without trusting a reusable PID.
-export async function managedServer(stop = false): Promise<Instance | null> {
+export async function managedServer(stop: boolean | 'idle' | 'prepare' = false): Promise<Instance | null> {
   let state: Instance;
   try { state = JSON.parse(await readFile(record, 'utf8')); } catch (error: any) { if (error.code === 'ENOENT') return null; throw error; }
   if (state.root !== root || !/^[a-f0-9]{64}$/.test(state.token) || !Number.isInteger(state.port) || state.port < 1 || state.port > 65535) throw new Error('Invalid local server record; no process was stopped.');
-  return new Promise(resolve => {
-    const req = request({ hostname: '127.0.0.1', port: state.port, path: stop ? '/stop' : '/status', method: stop ? 'POST' : 'GET', headers: { Authorization: `Bearer ${state.token}`, Connection: 'close' }, timeout: 1000 }, res => {
+  return new Promise((resolve, reject) => {
+    const req = request({ hostname: '127.0.0.1', port: state.port, path: stop === 'idle' ? '/stop-idle' : stop === 'prepare' ? '/prepare-update' : stop ? '/stop' : '/status', method: stop ? 'POST' : 'GET', headers: { Authorization: `Bearer ${state.token}`, Connection: 'close' }, timeout: stop === 'idle' ? 30_000 : 1000 }, res => {
+      if(stop==='idle'&&res.statusCode===404){res.resume();reject(Object.assign(new Error('Legacy control endpoint'),{code:'CONTROL_IDLE_UNSUPPORTED'}));return;}
       let text = '';
       res.on('data', chunk => { text += chunk; if (text.length > 2048) res.destroy(); });
       res.on('error', () => resolve(null));
@@ -28,10 +29,17 @@ export async function managedServer(stop = false): Promise<Instance | null> {
   });
 }
 
-export async function stopServer() {
+export async function stopServer(onlyIfIdle = false) {
   const state = await managedServer();
   if (!state) { process.stdout.write('No managed Codex Web server is running.\n'); return; }
-  if (!await managedServer(true)) throw new Error('Could not confirm shutdown; no other process was stopped.');
+  let stopped: Instance | null;
+  try { stopped=await managedServer(onlyIfIdle ? 'idle' : true); }
+  catch(error:any){
+    // Bootstrap an older server only through its authenticated idle check and admission lock.
+    if(error.code!=='CONTROL_IDLE_UNSUPPORTED'||!await managedServer('prepare'))throw new Error('Legacy idle check refused shutdown; no process was stopped.');
+    stopped=await managedServer(true);
+  }
+  if (!stopped) throw new Error('Shutdown refused or unconfirmed. Check for active sessions; no other process was stopped.');
   for (let attempt = 0; attempt < 150; attempt++) {
     const current = await managedServer();
     if (!current || current.token !== state.token) { process.stdout.write('Codex Web stopped.\n'); return; }
@@ -57,13 +65,13 @@ export async function runServer(portable = false, diagnosticsEnabled = false) {
     const saved = JSON.parse(await readFile(record, 'utf8').catch(() => '{}'));
     if (saved.token === token) await unlink(record).catch(() => {});
   })();
-  const control = createServer((req, res) => {
+  const control = createServer(async (req, res) => {
     if (req.headers.origin || req.headers.authorization !== `Bearer ${token}`) { res.writeHead(403).end(); return; }
-    if (!((req.method === 'GET' && req.url === '/status') || (req.method === 'POST' && ['/stop','/prepare-update'].includes(req.url??'')))) { res.writeHead(404).end(); return; }
-    if(req.url==='/prepare-update'){try{if(typeof (app as any).prepareUpdate!=='function')throw Error('Update preparation unavailable');(app as any).prepareUpdate();}catch{res.writeHead(409).end();return;}}
+    if (!((req.method === 'GET' && req.url === '/status') || (req.method === 'POST' && ['/stop','/stop-idle','/prepare-update'].includes(req.url??'')))) { res.writeHead(404).end(); return; }
+    if(req.url==='/prepare-update'||req.url==='/stop-idle'){try{const prepare=(app as any)[req.url==='/stop-idle'?'prepareRestart':'prepareUpdate'];if(typeof prepare!=='function')throw Error('Idle preparation unavailable');await prepare.call(app);}catch{res.writeHead(409).end();return;}}
     res.setHeader('Content-Type', 'application/json'); res.setHeader('Connection', 'close');
     res.end(JSON.stringify(state));
-    if (req.url === '/stop') res.on('finish', () => { void shutdown().catch(error => { console.error(error); process.exitCode = 1; }); });
+    if (req.url === '/stop' || req.url === '/stop-idle') res.on('finish', () => { void shutdown().catch(error => { console.error(error); process.exitCode = 1; }); });
   });
   try {
     await new Promise<void>((resolve, reject) => { control.once('error', reject); control.listen(0, '127.0.0.1', resolve); });
@@ -116,12 +124,13 @@ export async function startBackground(portable = false, diagnosticsEnabled = fal
 
 async function main() {
   const args = process.argv.slice(2);
-  if(!args.includes('--stop')&&!args.includes('--status')){
+  if(!args.includes('--stop')&&!args.includes('--stop-if-idle')&&!args.includes('--status')){
     const lock=await readFile(join(root,'.local/update-lock.json'),'utf8').catch((e:any)=>{if(e.code==='ENOENT')return '';throw e;});
     const pending=await stat(join(root,'.local/updates/pending.json')).then(()=>true,(e:any)=>{if(e.code==='ENOENT')return false;throw e;});
     if((lock||pending)&&(!lock||JSON.parse(lock).token!==process.env.CODEX_WEB_UPDATE_TOKEN))throw Error('Application update in progress or interrupted; run Update --recover.');
   }
-  if (args.some(arg => !['--worker', '--portable', '--background', '--foreground', '--status', '--stop','--diagnostics'].includes(arg))) throw new Error('Unknown server control argument');
+  if (args.some(arg => !['--worker', '--portable', '--background', '--foreground', '--status', '--stop','--stop-if-idle','--diagnostics'].includes(arg))) throw new Error('Unknown server control argument');
+  if (args.includes('--stop-if-idle')) return stopServer(true);
   if (args.includes('--stop')) return stopServer();
   if (args.includes('--status')) { const state = await managedServer(); process.stdout.write(state ? `Running: ${state.origin} (PID ${state.pid}, diagnostics: ${state.diagnosticsEnabled?'on':'off'})\n` : 'No managed Codex Web server is running.\n'); return; }
   if (args.includes('--worker') || args.includes('--foreground')) return runServer(args.includes('--portable'),args.includes('--diagnostics'));

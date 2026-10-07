@@ -1,0 +1,10 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Markdown 锚点回归</title>
+<style>.fixture{height:280px;overflow:auto;max-width:700px;margin:20px auto}</style><div id="root"></div>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {MarkdownView} from '/src/web/MarkdownView.tsx';
+import '/src/web/style.css';
+const text='[定位](#目标-api-v2)\n\n'+Array.from({length:20},(_,i)=>'正文 '+i).join('\n\n')+'\n\n## 目标 **API** `v2` 🚀\n\n目标正文\n\n'+Array.from({length:20},(_,i)=>'后文 '+i).join('\n\n')+'\n\n## 目标 API v2\n\n## 目标 API v2-1\n';
+createRoot(document.querySelector('#root')).render(React.createElement(React.Fragment,null,...[false,true].map(streaming=>React.createElement('div',{className:'fixture',key:String(streaming),'data-fixture':String(streaming)},React.createElement(MarkdownView,{text,streaming})))));
+</script></html>

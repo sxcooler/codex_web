@@ -190,7 +190,9 @@ test('session bootstrap and login enforce Host, Origin, CSRF, schemas, and stric
       const settings = await app.inject({ url: '/api/settings', headers: { host: HOST, cookie: authenticated.authCookie } });
       assert.equal(settings.statusCode, 200);
       const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-      assert.deepEqual(settings.json(), { origin: ORIGIN, appVersion: version, nodeVersion: process.version });
+      assert.deepEqual(settings.json(), { origin: ORIGIN, appVersion: version, nodeVersion: process.version,
+        diagnostics: {enabled:false,lastWriteAt:null,dropped:0,writeFailures:0},
+        webRestart: {available:false,status:'idle',reason:'当前启动方式不支持从页面重启 Web 服务。'} });
       assert.equal(settings.headers['cache-control'], 'no-store');
     } finally {
       await app.close();
@@ -247,6 +249,38 @@ test('session tokens are hashed at rest and expired sessions are rejected', asyn
     } finally {
       await app.close();
     }
+  });
+});
+
+test('only explicit activity renews a live session; renewal survives restart and cannot revive expiry', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const hour = 60 * 60 * 1000;
+  await withAuth(async dataDir => {
+    let app = await buildServer({ dataDir, origin: ORIGIN });
+    try {
+      const signed = await login(app);
+      const headers = { host: HOST, origin: ORIGIN, cookie: `${signed.authCookie}; ${signed.csrf.cookie}`, 'x-csrf-token': signed.csrf.token };
+      const renew = () => app.inject({ method: 'POST', url: '/api/auth/renew', headers, payload: {} });
+      now += 7 * hour;
+      assert.equal((await app.inject({ url: '/api/settings', headers })).statusCode, 200);
+      assert.equal((await app.inject({ url: '/api/auth/session', headers })).json().authenticated, true);
+      assert.equal((await app.inject({ method: 'POST', url: '/api/auth/renew', headers: { ...headers, origin: 'https://evil.invalid' }, payload: {} })).statusCode, 403);
+      assert.equal((await app.inject({ method: 'POST', url: '/api/auth/renew', headers: { ...headers, 'x-csrf-token': 'A'.repeat(43) }, payload: {} })).statusCode, 403);
+      assert.equal((await renew()).statusCode, 200);
+      await app.close();
+      app = await buildServer({ dataDir, origin: ORIGIN });
+      now += hour;
+      assert.equal((await app.inject({ url: '/api/settings', headers })).statusCode, 200);
+      now += 7 * hour - 1;
+      assert.equal((await app.inject({ url: '/api/auth/session', headers })).json().authenticated, true);
+      assert.equal((await app.inject({ url: '/api/settings', headers })).statusCode, 200);
+      now += 1;
+      assert.equal((await renew()).statusCode, 401);
+      assert.equal((await app.inject({ url: '/api/settings', headers })).statusCode, 401);
+      assert.equal((await app.inject({ url: '/api/auth/session', headers })).json().expired, true);
+      assert.equal((await csrf(app)).response.json().expired, false);
+    } finally { await app.close(); }
   });
 });
 

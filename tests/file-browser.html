@@ -2,14 +2,16 @@
 <style>#root{max-width:650px;margin:auto}#right-sidebar{height:calc(100dvh - 50px)}</style><div id="root"></div><output id="result">RUNNING</output>
 <script type="module">
 import '/src/web/style.css';import React from 'react';import{createRoot}from'react-dom/client';import{GitPanel}from'/src/web/GitPanel.tsx';
-const base='runs/diablo4_run_2026-09-19_160917/annotations/semantic-pilot/images',requests=[];
+const base='runs/diablo4_run_2026-09-19_160917/annotations/semantic-pilot/images',requests=[];let delayContent=false;
 const entries=[['file10.txt','file'],['folder10','directory'],['file2.txt','file'],['folder2','directory']];
-window.fetch=async input=>{const url=new URL(String(input),location.origin);requests.push(url);if(url.pathname.endsWith('/files')&&!url.pathname.endsWith('/git/files'))return Response.json({files:entries.map(([name,type])=>({path:url.searchParams.get('directory')+'/'+name,type}))});if(url.pathname.endsWith('/files/content'))return Response.json({text:'preview '+url.searchParams.get('path')});return Response.json({files:[{path:'src/nested/code.ts',status:'M',added:2,deleted:1}]});};
+window.fetch=async input=>{const url=new URL(String(input),location.origin);requests.push(url);if(url.pathname.endsWith('/files')&&!url.pathname.endsWith('/git/files'))return Response.json({files:entries.map(([name,type])=>({path:url.searchParams.get('directory')+'/'+name,type}))});if(url.pathname.endsWith('/files/content')){if(delayContent)await new Promise(r=>setTimeout(r,120));const path=url.searchParams.get('path'),padding=Array.from({length:100},(_,i)=>'paragraph '+i).join('\n\n');return Response.json({text:(path.endsWith('guide.md')?'# 文档\n\n[下一文件](next.md#目标)\n\n':path.endsWith('next.md')?'# 下一文件\n\n## 目标\n\n':'preview '+path+'\n')+padding});}return Response.json({files:[{path:'src/nested/code.ts',status:'M',added:2,deleted:1}]});};
 const until=async(fn,message)=>{for(let i=0;i<150;i++){if(fn())return;await new Promise(r=>setTimeout(r,20))}throw Error(message)},check=(ok,message)=>{if(!ok)throw Error(message)};
 const buttons=()=>[...document.querySelectorAll('.panel-list-body .file-list>button')],button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);
 try{
- localStorage.clear();createRoot(document.querySelector('#root')).render(React.createElement(GitPanel,{id:'files-test',projectId:'files-test',tick:0,visible:true,openFile:{path:base+'/file2.txt'}}));
+ localStorage.clear();const root=createRoot(document.querySelector('#root')),render=(projectId='files-test',openFile)=>root.render(React.createElement(GitPanel,{key:projectId,id:'files-test',projectId,tick:0,visible:true,openFile}));render('files-test',{path:base+'/file2.txt'});
  await until(()=>buttons().length===4,'文件列表未加载');
+ const back=()=>document.querySelector('[aria-label="后退"]'),forward=()=>document.querySelector('[aria-label="前进"]'),recent=()=>document.querySelector('[aria-label="最近文件"]'),heading=()=>document.querySelector('.file-preview h3')?.textContent;
+ check(back()?.disabled&&forward()?.disabled&&recent(),'首次打开的导航状态错误');
  check(JSON.stringify(buttons().map(b=>b.title))===JSON.stringify(['folder2','folder10','file2.txt','file10.txt'].map(n=>base+'/'+n)),'文件夹优先或自然排序错误');
  check(buttons().every(b=>!b.textContent.includes(base)),'列表仍重复目录路径');
  const labels=buttons().map(b=>b.querySelector('.file-name-text').getBoundingClientRect().left);
@@ -23,6 +25,26 @@ try{
  buttons()[3].click();await until(()=>document.querySelector('.preview-content')?.textContent.includes(base+'/file10.txt'),'预览未使用完整路径');
  button('变更').click();await until(()=>buttons()[0]?.title==='src/nested/code.ts','变更未加载');check(buttons()[0].textContent.includes('src/nested/code.ts'),'变更的路径被错误缩短');
  button('文件').click();await until(()=>buttons().length===4,'切回文件列表失败');
- document.querySelector('#result').textContent='PASS · 文件名、目录优先、自然排序、名称对齐、长路径导航、预览、变更路径';
+ back().click();await until(()=>heading()===base+'/file2.txt','后退未返回前一文件');check(back().disabled&&!forward().disabled,'后退边界错误');
+ forward().click();await until(()=>heading()===base+'/file10.txt','前进未返回后一文件');
+ buttons()[0].click();await until(()=>buttons()[0]?.title===base+'/folder2/folder2','子目录未加载');buttons()[2].click();await until(()=>heading()===base+'/folder2/file2.txt','跨目录文件未打开');
+ back().click();await until(()=>heading()===base+'/file10.txt'&&buttons()[0]?.title===base+'/folder2','后退未恢复目录');
+ buttons()[2].click();await until(()=>heading()===base+'/file2.txt','后退后新文件未打开');check(forward().disabled,'新文件未清空前进记录');
+ recent().click();await until(()=>document.querySelector('.recent-files-popover')?.matches(':popover-open'),'最近文件未打开');
+ const recentItems=[...document.querySelectorAll('.recent-files-popover button')];check(recentItems.length===3&&new Set(recentItems.map(b=>b.title)).size===3,'最近文件未去重');check(recentItems[0].title===base+'/file2.txt','最近文件顺序错误');
+ const rects=[...document.querySelectorAll('.file-preview-header button')].map(b=>b.getBoundingClientRect());check(rects.every(r=>r.left>=panel.left&&r.right<=panel.right),'长路径挤出导航按钮');
+ recentItems.find(b=>b.title===base+'/folder2/file2.txt').click();await until(()=>heading()===base+'/folder2/file2.txt','最近文件选择未打开');check(!document.querySelector('.recent-files-popover').matches(':popover-open'),'选择后未关闭最近文件');
+ render('files-test',{path:base+'/external.txt'});await until(()=>heading()===base+'/external.txt','外部文件入口未打开');back().click();await until(()=>heading()===base+'/folder2/file2.txt','外部入口未加入导航');
+ await until(()=>document.querySelector('.preview-content')?.textContent.includes(base+'/folder2/file2.txt'),'旧文件内容未加载');document.querySelector('.preview-content').scrollTop=200;await new Promise(r=>setTimeout(r,80));
+ render('files-test',{path:base+'/guide.md'});await until(()=>document.querySelector('.preview-content a')?.textContent==='下一文件','Markdown 链接未加载');
+ const preview=()=>document.querySelector('.preview-content');preview().scrollTop=160;await new Promise(r=>setTimeout(r,80));document.querySelector('.preview-content a').click();await until(()=>heading()===base+'/next.md','Markdown 链接未打开文件');
+ back().click();await until(()=>heading()===base+'/guide.md'&&preview().scrollTop===160,'Markdown 返回丢失阅读位置');
+ button('源码').click();await until(()=>button('源码').getAttribute('aria-pressed')==='true','源码未切换');preview().scrollTop=240;await new Promise(r=>setTimeout(r,80));
+ render('files-test',{path:base+'/next.md'});await until(()=>heading()===base+'/next.md','源码后的新文件未打开');back().click();await until(()=>heading()===base+'/guide.md'&&button('源码').getAttribute('aria-pressed')==='true'&&preview().scrollTop===240,'返回丢失源码模式或滚动');
+ recent().click();await until(()=>document.querySelector('.recent-files-popover').matches(':popover-open'),'最近文件未展开');button('Git 日志').click();await until(()=>!document.querySelector('.recent-files-popover')?.matches(':popover-open'),'切换标签残留最近文件');button('文件').click();await until(()=>heading()===base+'/guide.md','切回文件失败');
+ render('other');await until(()=>button('变更').getAttribute('aria-pressed')==='true','项目切换未恢复默认状态');render();await until(()=>heading()===base+'/guide.md'&&preview().scrollTop===240,'重开项目未恢复文件与阅读位置');check(!back().disabled&&!forward().disabled,'重开项目丢失导航记录');
+ delayContent=true;back().click();await until(()=>heading()===base+'/folder2/file2.txt'&&preview().scrollTop===200,'未缓存文件慢加载丢失返回位置');forward().click();await until(()=>heading()===base+'/guide.md'&&preview().scrollTop===240,'慢加载后的前进丢失位置');
+ check(document.documentElement.scrollWidth<=innerWidth,'导航造成页面横向溢出');
+ document.querySelector('#result').textContent='PASS · 文件列表、后退/前进、跨目录、分支历史、最近文件去重、外部入口、项目隔离与持久化、窄屏布局';
 }catch(error){document.querySelector('#result').textContent='FAIL · '+error.message;console.error(error)}
 </script></html>

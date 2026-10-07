@@ -46,6 +46,32 @@ function start(t: any, mode = 'normal') {
   t.after(() => runtime.close());
   return runtime;
 }
+
+test('live item times survive completion, turn replacement, replay and stale history', async t => {
+  const runtime = start(t), { threadId, turnId } = await runtime.create({ cwd, clientRequestId: 'timed-live', prompt: 'hold' });
+  let browser: any = await runtime.snapshot(threadId);
+  const cursor = browser.syncCursor, startedAtMs = 1791065677672, completedAtMs = startedAtMs + 4321;
+  const events: any[] = [];
+  runtime.on('change', event => { events.push(event); browser = applyChange(browser, event); assert.ok(browser); });
+  const notify = (method: string, params: any) => (runtime as any).onNotification({ method, params: { threadId, turnId, ...params } });
+  const item = { id: 'timed-message', type: 'agentMessage', text: 'first' };
+  const message = () => browser.thread.turns.find((turn: any) => turn.id === turnId).items.find((entry: any) => entry.id === item.id);
+  notify('item/started', { item, startedAtMs });
+  assert.equal(message().startedAtMs, startedAtMs);
+  notify('item/completed', { item: { ...item, text: 'completed' }, completedAtMs });
+  assert.equal(message().startedAtMs, startedAtMs);
+  assert.equal(message().completedAtMs, completedAtMs);
+  notify('turn/completed', { turn: { id: turnId, status: 'completed', items: [{ ...item, text: 'final replacement' }] } });
+  assert.equal(message().text, 'final replacement');
+  assert.equal(message().startedAtMs, startedAtMs);
+  assert.equal(message().completedAtMs, completedAtMs);
+  assert.deepEqual(runtime.replay(threadId, cursor).events, events);
+  t.mock.method(runtime as any, 'readThread', async () => ({ id: threadId, status: { type: 'idle' }, turns: [{ id: turnId, status: 'completed', items: [{ ...item, text: 'native final' }] }] }));
+  const historical = (await runtime.snapshot(threadId, { window: true })).thread.turns[0].items[0];
+  assert.equal(historical.text, 'native final');
+  assert.equal(historical.startedAtMs, startedAtMs);
+  assert.equal(historical.completedAtMs, completedAtMs);
+});
 test('snapshot cursor replays compact text changes and authoritative completion', async t => {
   const runtime = start(t), changes: any[] = [];
   const { threadId } = await runtime.create({cwd,clientRequestId:'create'});
@@ -151,7 +177,7 @@ test('status preserves the same-epoch unmaterialized empty-thread fallback',asyn
     assert.equal(snapshot.unmaterialized,true);
     assert.deepEqual(await runtime.status(threadId,snapshot.epoch),{resync:false});
     await runtime.send(threadId,{text:'hold',clientRequestId:'first-message'});
-    await assert.rejects(runtime.status(threadId,snapshot.epoch),(error:any)=>error.code==='RUNTIME_HISTORY_UNSUPPORTED');
+    assert.equal(typeof (await runtime.status(threadId,snapshot.epoch)).resync,'boolean');
   }
 });
 

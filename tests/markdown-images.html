@@ -12,7 +12,8 @@ import '/src/web/style.css';
 const h=React.createElement,root=createRoot(document.querySelector('#root'));
 const sample='![标准](../assets/图%20片.png)\n\n<img src="/assets/mobile.png" alt="HTML" width="360" height="720" onerror="window.imageExecuted=true" style="position:fixed" srcset="https://example.invalid/tracker.png 2x" id="unsafe" name="unsafe">\n\n![失败](missing.png)\n\n![远程](https://example.invalid/tracker.png)\n\n<img src="//example.invalid/tracker.png" alt="外链">\n\n![越界](../../secret.png)\n\n<img src="data:image/svg+xml,evil" alt="data">\n\n<script>window.imageExecuted=true<\/script>\n\n<iframe src="https://example.invalid"></iframe>\n\n<img src="/assets/huge.png" width="999999" height="-1" alt="超大">';
 const params=new URLSearchParams(location.search);
-if(params.has('panel'))root.render(h(GitPanel,{id:'fixture',projectId:'fixture',tick:0,visible:true,openFile:{path:'README.md'}}));
-else if(params.has('chat'))root.render(h(Message,{item:{type:'agentMessage',text:sample},threadId:'fixture',projectRoot:'/example/project'}));
-else root.render(h(MarkdownView,{text:sample,streaming:params.has('streaming'),linkScope:'fixture|docs/guide.md',resolveImage:params.has('unbound')?undefined:url=>fileImageUrl('fixture','docs/guide.md',url)}));
+const absolute='\n\n![绝对路径](C:/work/project/runs/full.png)\n\n<img src="c:\\work\\project\\runs\\roi.png" alt="Windows HTML">\n\n![项目外](C:/work/project-other/private.png)';
+if(params.has('panel'))root.render(h(GitPanel,{id:'fixture',projectId:'fixture',projectRoot:'C:/work/project',tick:0,visible:true,openFile:{path:'README.md'}}));
+else if(params.has('chat'))root.render(h(Message,{item:{type:'agentMessage',text:sample+absolute},threadId:'fixture',projectRoot:'C:/work/project'}));
+else root.render(h(MarkdownView,{text:sample+absolute,streaming:params.has('streaming'),linkScope:'fixture|docs/guide.md',resolveImage:params.has('unbound')?undefined:url=>fileImageUrl('fixture','docs/guide.md',url,location.origin,'C:/work/project')}));
 </script></html>

@@ -10,13 +10,115 @@ import { join, dirname, relative } from 'node:path';
 import { initializeAuth } from '../src/server/auth.ts';
 import { buildServer } from '../src/server/app.ts';
 import { Projects } from '../src/projects.ts';
+import { Runtime } from '../src/codex/runtime.ts';
+import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
+import Fastify from 'fastify';
+import {registerApi} from '../src/server/api.ts';
+import {MetadataStore} from '../src/server/metadata.ts';
+
+test('empty-preview fork supplements persist, remain reachable after native exhaustion and bind pagination to sort/filter',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'fork-list-api-')),runtime=new Runtime({executable:process.execPath,cwd:dir});
+  t.mock.method(runtime,'close',async()=>{});
+  const headers=new Map<string,any>(),reads:string[]=[],sorts:string[]=[];let active=0,maxActive=0;
+  t.mock.method(runtime,'list',async(cursor,archived,sort)=>{sorts.push(sort!);return {data:cursor?[]:[{id:'native',createdAt:15,updatedAt:25}],nextCursor:null};});
+  const readHeader=async(id:string)=>{reads.push(id);active++;maxActive=Math.max(active,maxActive);await new Promise(resolve=>setTimeout(resolve,1));active--;const thread=headers.get(id);return thread?{thread,archived:!!thread.archived}:null;};
+  const headerMock=t.mock.method(runtime,'forkListHeader',readHeader);
+  t.mock.method(runtime,'snapshot',async id=>({thread:{...headers.get(id),turns:[]},phase:'IDLE',pending:[]}));
+  t.mock.method(runtime,'fork',async()=>({threadId:'new-fork',status:'idle',cwd:dir,header:headers.get('new-fork')}));
+  t.mock.method(runtime,'invalidateForkHeader',()=>{});
+  const project:any={root:dir,list:async()=>[]};
+  let app=Fastify();registerApi(app,{dataDir:dir,runtime,projects:project,authenticated:()=>()=>true});
+  try{
+    const store=new MetadataStore(join(dir,'metadata.sqlite'));
+    for(let i=0;i<34;i++){const thread={id:'fork-'+i,forkedFromId:'source',source:'vscode',preview:'',createdAt:100-i,updatedAt:200-i,cwd:dir};headers.set(thread.id,thread);store.registerFork(thread);}
+    store.update('fork-33',{hidden:true});store.close();
+    const first=await app.inject('/api/sessions?sortKey=created_at');assert.equal(first.statusCode,200,first.body);
+    assert.equal(reads.length,32);assert.ok(maxActive<=4);assert.ok(first.json().forksPending);assert.ok(first.json().nextCursor);assert.ok(!first.json().data.some((thread:any)=>thread.id==='fork-33'));
+    const home=join(dir,'native-home');await mkdir(join(home,'sessions'),{recursive:true});(runtime as any).initializeInfo={codexHome:home};
+    for(const id of ['fork-0','fork-1']){const path=join(home,'sessions',id+'.jsonl');await writeFile(path,'header');headers.get(id).path=path;}
+    const initialized=new Promise(resolve=>setTimeout(()=>resolve({request:async(method:string,input:any)=>{assert.equal(method,'thread/read');assert.equal(input.includeTurns,false);reads.push(input.threadId);return {thread:{...headers.get(input.threadId),turns:[]}};}}),20));
+    t.mock.method(runtime as any,'getServer',()=>initialized);headerMock.mock.restore();
+    const second=await app.inject('/api/sessions?sortKey=created_at&cursor='+encodeURIComponent(first.json().nextCursor));assert.equal(second.statusCode,200,second.body);
+    assert.deepEqual(second.json().data.map((thread:any)=>thread.id),['fork-0','fork-1']);assert.equal(second.json().nextCursor,null);assert.equal(reads.length,34);assert.equal(sorts.length,1,'do not restart an exhausted native stream');
+    t.mock.method(runtime,'forkListHeader',readHeader);
+    assert.equal((await app.inject('/api/sessions?sortKey=updated_at&cursor='+encodeURIComponent(first.json().nextCursor))).statusCode,400);
+    assert.equal((await app.inject('/api/sessions?sortKey=created_at&archived=true&cursor='+encodeURIComponent(first.json().nextCursor))).statusCode,400);
+    assert.equal((await app.inject('/api/sessions?sortKey=recency_at')).statusCode,400);
+    headers.set('existing',{id:'existing',forkedFromId:'source',source:'vscode',preview:'',createdAt:300,updatedAt:400,cwd:dir});
+    assert.equal((await app.inject('/api/sessions/existing')).statusCode,200);
+    headers.set('new-fork',{...headers.get('existing'),id:'new-fork'});
+    assert.equal((await app.inject({method:'POST',url:'/api/sessions/source/fork',payload:{lastTurnId:'done',clientRequestId:'test-fork-1'}})).statusCode,200);
+    await app.close();app=Fastify();registerApi(app,{dataDir:dir,runtime,projects:project,authenticated:()=>()=>true});
+    const refreshed=(await app.inject('/api/sessions')).json();assert.ok(refreshed.data.some((thread:any)=>thread.id==='existing'));assert.ok(refreshed.data.some((thread:any)=>thread.id==='new-fork'));
+    headers.get('new-fork').archived=true;headers.delete('existing');
+    const recent=(await app.inject('/api/sessions')).json();assert.ok(!recent.data.some((thread:any)=>['new-fork','existing'].includes(thread.id)));
+    const archived=(await app.inject('/api/sessions?archived=true')).json();assert.deepEqual(archived.data.filter((thread:any)=>thread.id.startsWith('new')).map((thread:any)=>thread.id),['new-fork']);
+    const included=(await app.inject('/api/sessions?includeHidden=true')).json();assert.ok(included.data.some((thread:any)=>thread.id==='fork-33'));
+    const originalNow=Date.now;let now=originalNow(),attempted=0;
+    const timer=t.mock.method(Date,'now',()=>now);
+    t.mock.method(runtime,'forkListHeader',async(_id,timeoutMs)=>{assert.ok(timeoutMs!>0&&timeoutMs!<=5000);attempted++;now+=2000;throw Error('native read timed out');});
+    const partial=(await app.inject('/api/sessions')).json();timer.mock.restore();
+    assert.equal(partial.forkReadsFailed,true);assert.equal(partial.forksPending,true);assert.ok(partial.nextCursor);
+    assert.deepEqual(partial.data.map((thread:any)=>thread.id),['native'],'a failed supplement cannot manufacture headers');
+    assert.equal(attempted,4,'the expired budget must not schedule another header batch');
+  }finally{await app.close();await rm(dir,{recursive:true,force:true});}
+});
+
+test('fork API enforces authentication, strict body and native project association without repeating degraded forks',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'codex-fork-api-'));
+  let app:any;
+  const runtime=new Runtime({executable:process.execPath,args:[fileURLToPath(new URL('./fixtures/runtime-server.mjs',import.meta.url))],cwd:dir,idleMs:60_000});
+  try{
+    const root=join(dir,'work');await mkdir(root);
+    const projects=new Projects(root),project=await projects.create({name:'Fork project',folderName:'fork-project'});
+    const dataDir=join(dir,'data');await initializeAuth(dataDir,'fork-api-password-long');
+    app=await buildServer({dataDir,origin:'http://localhost:3000',projects,runtime});
+    await (runtime as any).call('fixture/native-thread',{threadId:'source',status:{type:'notLoaded'},thread:{cwd:project.path,turns:[{id:'first',status:'completed',items:[]}]}});
+    const payload={lastTurnId:'first',clientRequestId:'fork-api-request-1'},url='/api/sessions/source/fork';
+    const csrf=await app.inject({url:'/api/auth/session',headers:{host:'localhost:3000'}});
+    const headers:any={host:'localhost:3000',origin:'http://localhost:3000','x-csrf-token':csrf.json().csrfToken,cookie:csrf.headers['set-cookie'].split(';')[0]};
+    assert.equal((await app.inject({method:'POST',url,headers,payload})).statusCode,401);
+    const login=await app.inject({method:'POST',url:'/api/auth/login',headers,payload:{password:'fork-api-password-long'}});
+    headers.cookie+='; '+login.headers['set-cookie'].split(';')[0];
+    const {['x-csrf-token']:token,...noCsrf}=headers;
+    assert.equal((await app.inject({method:'POST',url,headers:noCsrf,payload})).statusCode,403);
+    assert.equal((await app.inject({method:'POST',url,headers:{...headers,origin:'http://other.test'},payload})).statusCode,403);
+    for(const invalid of [{...payload,cwd:root},{...payload,config:{}},{...payload,lastTurnId:'bad/id'},{...payload,clientRequestId:'x'},{clientRequestId:payload.clientRequestId}]){
+      assert.equal((await app.inject({method:'POST',url,headers,payload:invalid})).statusCode,400);
+    }
+    assert.equal((await (runtime as any).call('fixture/stats',{})).forks,0);
+    const response=await app.inject({method:'POST',url,headers,payload});
+    assert.equal(response.statusCode,200,response.body);
+    assert.deepEqual(response.json(),{threadId:'fork-1',status:'idle'});
+    const metadata=new DatabaseSync(join(dataDir,'metadata.sqlite'));
+    try{
+      assert.equal((metadata.prepare('SELECT project_path FROM session_meta WHERE thread_id=?').get('fork-1') as any).project_path,project.path);
+      assert.equal((metadata.prepare('SELECT thread_id FROM known_forks WHERE thread_id=?').get('fork-1') as any).thread_id,'fork-1');
+      metadata.exec("CREATE TRIGGER reject_fork_metadata BEFORE INSERT ON session_meta BEGIN SELECT RAISE(FAIL, 'test disk failure'); END;");
+    }finally{metadata.close();}
+    const degradedInput={...payload,clientRequestId:'fork-api-request-2'};
+    const degraded=await app.inject({method:'POST',url,headers,payload:degradedInput});
+    assert.equal(degraded.statusCode,200,degraded.body);assert.equal(degraded.json().threadId,'fork-2');assert.match(degraded.json().warning,/metadata/i);
+    assert.deepEqual((await app.inject({method:'POST',url,headers,payload:degradedInput})).json(),degraded.json());
+    assert.equal((await (runtime as any).call('fixture/stats',{})).forks,2);
+    assert.ok((await app.inject({url:'/api/sessions',headers})).json().data.some((thread:any)=>thread.id==='fork-2'));
+    const originalList=projects.list;
+    projects.list=async()=>{throw new Error('project association unavailable');};
+    const unassociated=await app.inject({method:'POST',url,headers,payload:{...payload,clientRequestId:'fork-api-request-4'}});
+    assert.equal(unassociated.statusCode,200,unassociated.body);assert.equal(unassociated.json().threadId,'fork-3');assert.match(unassociated.json().warning,/metadata/i);
+    projects.list=originalList;
+    runtime.fork=async()=>{throw Object.assign(new Error('Fork result unknown'),{code:'RUNTIME_RESULT_UNKNOWN',statusCode:504,partial:{threadId:'known-fork'}});};
+    const uncertain=await app.inject({method:'POST',url,headers,payload:{...payload,clientRequestId:'fork-api-request-3'}});
+    assert.equal(uncertain.statusCode,504);assert.deepEqual(uncertain.json(),{error:'Fork result unknown',code:'RUNTIME_RESULT_UNKNOWN',partial:{threadId:'known-fork'}});
+  }finally{if(app)await app.close();else await runtime.close();await rm(dir,{recursive:true,force:true});}
+});
 
 test('authenticated project/session routes keep cwd server-owned and SSE closes on logout', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'codex-api-'));
   let app: any;
   const runtime: any = new EventEmitter();
-  let created: any;
+  let created: any,modelDefaults:any;
   let allowHistory=true;
   let replayCursor: string | undefined;
   let archiveFilter=false,archiveInput:any;
@@ -24,6 +126,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
   let imageReads=0;
   Object.assign(runtime, {
     create: async (input: any) => { created = input; return {threadId:'thread-1',status:'idle'}; },
+    saveModelDefaults: async (cwd:string,model:string,effort:string,expectedVersion:string) => {modelDefaults={cwd,model,effort,expectedVersion};return {model,effort,effectiveModel:model,effectiveEffort:effort};},
     list: async (_cursor:string,archived=false) => {archiveFilter=archived;return { data:[{id:'thread-1',cwd:created?.cwd}],nextCursor:null };},
     threadCwd: async () => created?.cwd??null,
     snapshot: async () => {assert.ok(allowHistory,'Workspace requests must not read conversation history');return {thread:{id:'thread-1',cwd:created?.cwd,turns:[]},phase:'IDLE',pending:[]};},
@@ -36,11 +139,14 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     rename: async (_id:string,name:string) => ({name}),
     open: async () => ({phase:'IDLE'}),
     archive: async (id:string,archived:boolean) => {archiveInput={id,archived};return {threadId:id,archived};},
+    invalidateForkHeader:()=>{},
   });
   try {
     const root = join(dir,'work'); await mkdir(root);
     const dataDir=join(dir,'data'); await initializeAuth(dataDir,'api-test-password-long');
     app=await buildServer({dataDir,origin:'http://localhost:3000',projects:new Projects(root),runtime});
+    let eventStream: any;
+    app.addHook('onRequest', async (request: any, reply: any) => { if (request.url.includes('/events')) eventStream = reply.raw; });
     assert.equal((await app.inject({url:'/api/projects',headers:{host:'localhost:3000'}})).statusCode,401);
     assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/turns/turn-1/items/question-1/answer',headers:{host:'localhost:3000'},payload:{answers:['Yes'],clientRequestId:'answer-old-123'}})).statusCode,403);
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png',headers:{host:'localhost:3000'}})).statusCode,401);
@@ -74,6 +180,11 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     const session=await app.inject({method:'POST',url:'/api/sessions',headers,payload:{projectId,clientRequestId:'test-request-1',prompt:'hello'}});
     assert.equal(session.statusCode,200,session.body);
     assert.equal(created.cwd,join(root,'test'));
+    assert.equal((await app.inject({method:'POST',url:'/api/model-defaults',headers:{host:'localhost:3000'},payload:{model:'fixture'}})).statusCode,403);
+    assert.equal((await app.inject({method:'POST',url:'/api/model-defaults',headers,payload:{model:'fixture',keyPath:'secret'}})).statusCode,400);
+    assert.equal((await app.inject({method:'POST',url:'/api/model-defaults',headers,payload:{projectId,model:'fixture',effort:'high'}})).statusCode,409);
+    assert.equal((await app.inject({method:'POST',url:'/api/model-defaults',headers,payload:{projectId,model:'fixture',effort:'high',expectedVersion:'user-v1'}})).statusCode,200);
+    assert.deepEqual(modelDefaults,{cwd:join(root,'test'),model:'fixture',effort:'high',expectedVersion:'user-v1'});
     assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/open',headers,payload:{}})).json().phase,'IDLE');
     assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/open',headers,payload:{cwd:root}})).statusCode,400);
     for(const kind of ['archive','unarchive']){
@@ -156,8 +267,11 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     const originalList=runtime.list;let hiddenPageReads=0;
     for(let i=0;i<8;i++)await app.inject({method:'POST',url:'/api/sessions/hidden-'+i+'/metadata',headers,payload:{hidden:true}});
     runtime.list=async(cursor:string|undefined)=>{hiddenPageReads++;const i=Number(cursor??0);return {data:[{id:'hidden-'+i}],nextCursor:i<7?String(i+1):null};};
-    const hiddenPage=await app.inject({url:'/api/sessions',headers});assert.equal(hiddenPage.statusCode,200,hiddenPage.body);assert.equal(hiddenPageReads,5,'Hidden sessions must not scan the entire history in one request');assert.deepEqual(hiddenPage.json().data,[]);assert.equal(hiddenPage.json().nextCursor,'5');
-    const nextHiddenPage=await app.inject({url:'/api/sessions?cursor=5',headers});assert.equal(nextHiddenPage.json().nextCursor,null);
+    const hiddenPage=await app.inject({url:'/api/sessions',headers});assert.equal(hiddenPage.statusCode,200,hiddenPage.body);assert.equal(hiddenPageReads,5,'Hidden sessions must not scan the entire history in one request');assert.deepEqual(hiddenPage.json().data,[]);
+    assert.equal(JSON.parse(Buffer.from(hiddenPage.json().nextCursor.slice(5),'base64url').toString()).native,'5');
+    const nextHiddenPage=await app.inject({url:'/api/sessions?cursor='+encodeURIComponent(hiddenPage.json().nextCursor),headers});assert.equal(nextHiddenPage.json().nextCursor,null);
+    runtime.list=async(cursor:string|undefined)=>cursor?{data:[{id:'parent'}],nextCursor:null}:{data:[],nextCursor:'after-subagents'};
+    assert.deepEqual((await app.inject({url:'/api/sessions',headers})).json().data.map((thread:any)=>thread.id),['parent'],'Continue past a page containing only filtered subagents');
     runtime.list=async()=>({data:[{id:'hidden-0'}],nextCursor:'repeated'});
     assert.equal((await app.inject({url:'/api/sessions',headers})).statusCode,503,'Repeated native cursor must fail instead of looping');
     runtime.list=originalList;
@@ -198,7 +312,16 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
       finally{client.destroy();runtime[route]=original;}
     }
     const queryResponse=await new Promise<any>(resolve=>get(address+'/api/sessions/thread-1/events?cursor=epoch:7',{headers},resolve));
-    assert.equal(queryResponse.statusCode,200); assert.equal(replayCursor,'epoch:7'); queryResponse.destroy();
+    assert.equal(queryResponse.statusCode,200); assert.equal(replayCursor,'epoch:7');
+    assert.doesNotThrow(() => eventStream.emit('error', Object.assign(new Error('connection reset'), { code: 'ECONNRESET' })));
+    assert.equal(runtime.listenerCount('change'),0, 'Broken SSE must release its runtime listener');
+    queryResponse.destroy();
+    const malformedResponse=await new Promise<any>(resolve=>get(address+'/api/sessions/thread-1/events',{headers},resolve));
+    const circular: any = { threadId: 'thread-1', kind: 'change' }; circular.patch = circular;
+    assert.doesNotThrow(() => runtime.emit('change', circular));
+    assert.equal(runtime.listenerCount('change'),0, 'Unserializable SSE must close only its connection');
+    malformedResponse.destroy();
+    assert.equal((await app.inject({url:'/api/sessions/thread-1/status',headers})).statusCode,200, 'HTTP remains usable after stream failures');
     const response=await new Promise<any>(resolve=>get(address+'/api/sessions/thread-1/events?cursor=epoch:7',{headers:{...headers,'last-event-id':'epoch:9'}},resolve));
     assert.equal(replayCursor,'epoch:9');
     assert.equal(response.statusCode,200);

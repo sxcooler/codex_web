@@ -9,6 +9,7 @@ import test from 'node:test';
 import { promisify } from 'node:util';
 
 import { Projects } from '../src/projects.ts';
+import { layoutGitGraph } from '../src/web/gitGraph.ts';
 
 const exec = promisify(execFile);
 async function git(cwd: string, ...args: string[]) {
@@ -20,6 +21,40 @@ async function commit(repo: string, subject: string, file: string, value = subje
   await git(repo, 'commit', '-m', subject);
   return git(repo, 'rev-parse', 'HEAD');
 }
+
+test('all-branch history interleaves commit dates while preserving parents and author identity', async () => {
+  const root=await mkdtemp(join(tmpdir(),'codex-history-dates-')),repo=join(root,'repo');
+  try {
+    await mkdir(repo);await git(repo,'init','-b','main');
+    const tree=execFileSync('git',['mktree'],{cwd:repo,input:'',encoding:'utf8'}).trim();
+    const authorDate='2020-01-01T00:00:00+00:00',dates=new Map<string,string>();
+    async function dated(subject:string,date:string,parents:string[]=[]){
+      const id=(await exec('git',['commit-tree',tree,...parents.flatMap(parent=>['-p',parent]),'-m',subject],{cwd:repo,encoding:'utf8',env:{...process.env,GIT_AUTHOR_NAME:'Original Author',GIT_AUTHOR_EMAIL:'author@example.test',GIT_AUTHOR_DATE:authorDate,GIT_COMMITTER_NAME:'History Committer',GIT_COMMITTER_EMAIL:'committer@example.test',GIT_COMMITTER_DATE:date}})).stdout.trim();
+      dates.set(id,date);return id;
+    }
+    // A future-dated root still belongs below its children, so a global date sort is invalid.
+    const base=await dated('shared root','2026-10-10T00:00:00+00:00');
+    const main=await dated('old main tip','2026-10-02T12:00:00+00:00',[base]);
+    const topicParent=await dated('topic parent','2026-10-06T12:00:00+00:00',[base]);
+    const topic=await dated('new topic tip','2026-10-07T18:59:00+00:00',[topicParent]);
+    const merge=await dated('merge earlier topic','2026-10-07T20:00:00+00:00',[main,topicParent]);
+    for(const [branch,id] of [['main',main],['topic',topic],['merged',merge]])await git(repo,'update-ref','refs/heads/'+branch,id);
+    const projects=new Projects(root),project=(await projects.list())[0];
+    const history=await projects.gitLog(project.id,'all'),ids=history.commits.map(item=>item.id);
+    assert.ok(ids.indexOf(topic)<ids.indexOf(main),'new topic tip must precede the old main branch block');
+    assert.equal(new Set(ids).size,5);assert.equal(history.nextCursor,null);
+    for(const item of history.commits){
+      assert.equal(Date.parse(item.date),Date.parse(dates.get(item.id)!));assert.equal(item.author,'Original Author');
+      for(const parent of item.parents)assert.ok(ids.indexOf(item.id)<ids.indexOf(parent),'children must precede their parents even with clock skew');
+      const detail=(await projects.gitCommit(project.id,item.id)).commit;
+      assert.equal(detail.date,item.date);assert.equal(detail.author,item.author);assert.deepEqual(detail.parents,item.parents);
+    }
+    assert.deepEqual(history.commits.find(item=>item.id===merge)?.parents,[main,topicParent]);
+    const graph=layoutGitGraph(history.commits);
+    assert.deepEqual(graph.pending,[]);assert.equal(graph.rows.length,5);
+    for(let i=0;i<history.commits.length;i++)assert.equal(graph.rows[i].lines.filter(line=>!line.incoming&&line.from===graph.rows[i].column).length,history.commits[i].parents.length);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
 
 test('remote tracking refs decorate commits, can be selected, and contribute remote-only history', async () => {
   const root=await mkdtemp(join(tmpdir(),'codex-remote-history-')),repo=join(root,'repo');

@@ -16,11 +16,19 @@ export class MetadataStore {
         try { this.db.exec('ALTER TABLE session_meta ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0; ALTER TABLE session_meta ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0; ALTER TABLE session_meta ADD COLUMN updated_at INTEGER; PRAGMA user_version=1; COMMIT'); }
         catch(error){this.db.exec('ROLLBACK');throw error;}
       } else if(!exists) this.db.exec(`CREATE TABLE session_meta(thread_id TEXT PRIMARY KEY,project_path TEXT,web_title TEXT,last_opened_at INTEGER NOT NULL,created_at INTEGER NOT NULL,favorite INTEGER NOT NULL DEFAULT 0,hidden INTEGER NOT NULL DEFAULT 0,updated_at INTEGER); PRAGMA user_version=1`);
+      this.db.exec('CREATE TABLE IF NOT EXISTS known_forks(seq INTEGER PRIMARY KEY AUTOINCREMENT,thread_id TEXT NOT NULL UNIQUE,header TEXT NOT NULL,confirmed_at INTEGER NOT NULL)');
     } catch(error) { this.db.close(); throw error; }
   }
   get(id:string):SessionMetadata|null { const row=this.db.prepare('SELECT * FROM session_meta WHERE thread_id=?').get(id) as any; return row?{...row,favorite:!!row.favorite,hidden:!!row.hidden}:null; }
   save(id:string,projectPath:string|null,title:string|null){const now=Date.now();this.db.prepare(`INSERT INTO session_meta(thread_id,project_path,web_title,last_opened_at,created_at,favorite,hidden,updated_at) VALUES(?,?,?,?,?,0,0,?) ON CONFLICT(thread_id) DO UPDATE SET last_opened_at=excluded.last_opened_at,project_path=excluded.project_path,web_title=COALESCE(session_meta.web_title,excluded.web_title),updated_at=excluded.updated_at`).run(id,projectPath,title,now,now,now);return this.get(id)!;}
   update(id:string,patch:{favorite?:boolean;hidden?:boolean;webTitle?:string|null}){const current=this.get(id)??this.save(id,null,null);this.db.prepare('UPDATE session_meta SET favorite=?,hidden=?,web_title=?,updated_at=? WHERE thread_id=?').run(patch.favorite??current.favorite?1:0,patch.hidden??current.hidden?1:0,patch.webTitle===undefined?current.web_title:patch.webTitle,Date.now(),id);return this.get(id)!;}
+  registerFork(thread:any){
+    if(typeof thread?.id!=='string'||typeof thread.forkedFromId!=='string'||!thread.forkedFromId||thread.parentThreadId||(thread.source&&typeof thread.source==='object'&&(Object.hasOwn(thread.source,'subAgent')||Object.hasOwn(thread.source,'subagent'))))return;
+    const {turns,...header}=thread;
+    this.db.prepare('INSERT INTO known_forks(thread_id,header,confirmed_at) VALUES(?,?,?) ON CONFLICT(thread_id) DO UPDATE SET header=excluded.header,confirmed_at=excluded.confirmed_at').run(thread.id,JSON.stringify(header),Date.now());
+  }
+  knownForks(before=Number.MAX_SAFE_INTEGER){return (this.db.prepare('SELECT seq,thread_id,header FROM known_forks WHERE seq<? ORDER BY seq DESC LIMIT 32').all(before) as Array<{seq:number;thread_id:string;header:string}>).map(row=>({seq:row.seq,id:row.thread_id,header:JSON.parse(row.header)}));}
+  hasForksBefore(before:number){return !!this.db.prepare('SELECT 1 FROM known_forks WHERE seq<? LIMIT 1').get(before);}
   clear(id:string){this.db.prepare('DELETE FROM session_meta WHERE thread_id=?').run(id);}
   close(){this.db.close();}
 }

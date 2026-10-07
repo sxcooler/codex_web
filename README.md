@@ -15,6 +15,10 @@
 - 私有文件 / 图片附件、Web Push，以及只缓存静态外壳的 PWA。
 - 顶栏查看账户额度、自动恢复时间和重置机会；使用机会需二次确认，断线后保留同一次操作供核实。
 
+- 设置按常规、配置、个性化、使用情况、已安装插件和 Codex Web 分类：默认模型／强度、速度、权限、搜索与记忆配置均通过原生接口受控读写；个人／项目指令支持差异预览、版本冲突与未保存保护。
+- 已完成回答可分支到新聊天，并展示回答携带的记忆引用；插件页只读显示原生已安装状态，启用不等于已连接或当前会话可调用。
+- 浏览器发送快捷键与会话时间排序可持久化；历史消息时间、文件前进／后退导航、登录续期和会话断线恢复得到改善。
+
 ## 界面展示
 
 **PC 端**
@@ -33,7 +37,9 @@
 | Linux | 提供 x64 glibc 便携包；源码运行、真实任务和沙箱边界已在 WSL2 Ubuntu 22.04 普通用户下验证；不声明全部发行版已验证 |
 | macOS | 本轮未适配、未验证 |
 
-源码运行需要 Node **>=24.20.0**、npm、官方独立 Codex CLI，以及用于项目 /Git 功能的 Git。`.node-version` 声明版本基线，不会自动切换 Node。按 [Codex 官方说明](https://learn.chatgpt.com/docs/codex/cli) 安装并登录；Linux/WSL 应使用 Linux CLI 和该环境自己的登录。不要依赖 VS Code 扩展私有目录内的二进制。
+源码运行需要 Node **>=24.20.0**、npm、官方独立 Codex CLI **>=0.160.1**，以及用于项目 /Git 功能的 Git。`.node-version` 声明版本基线，不会自动切换 Node。按 [Codex 官方说明](https://learn.chatgpt.com/docs/codex/cli) 安装并登录；Linux/WSL 应使用 Linux CLI 和该环境自己的登录。不要依赖 VS Code 扩展私有目录内的二进制。
+
+**Codex Web 0.1.7 要求 Codex CLI >=0.160.1（本版开发／实测基线）**，仅接受可识别的稳定版本。旧 0.1.6 安装须先独立升级 Codex CLI，运行 `codex --version` 核对版本，再执行 0.1.7 应用更新；应用更新不会升级 CLI。版本过旧、预发布或无法识别时，新服务拒绝启动，更新器按既有规则保留或回滚应用。
 
 ## 源码启动
 
@@ -50,11 +56,13 @@ npm start
 
 默认工作根目录为当前用户的 `~/work`（Windows 为 `%USERPROFILE%\work`），仅发现一级项目目录。`.local/web/config.json` 配置 `origin`、`port`、`workRoot`、`codexBin`；对应 `WEB_ORIGIN`、`PORT`、`WORK_ROOT`、`CODEX_BIN` 环境变量优先，`WEB_DATA_DIR` 可更换数据目录。Windows 默认查找独立 CLI 官方安装位置，Linux 默认使用 PATH 中的 `codex`。
 
+`allowProjectDirectoryLinks` 默认 `false`。需要读取项目内目录联接（Windows Junction）或目录符号链接指向的外部目录时，可在服务配置加入 `"allowProjectDirectoryLinks": true`，重启服务后生效。文件浏览、文本读取和图片预览共用此开关，无需配置机器路径；开启表示信任项目内的目录联接及其目标。敏感文件、路径穿越、文件大小及图片像素限制仍保留；不会允许直接读取任意项目外绝对路径或放开 Git 写入。旧的 `projectImageMounts` 映射已移除，使用该配置的管理员须改用此开关。详见 [目录联接规则](docs/design/project-directory-links.md)。
+
 部署脚本按平台放在 [`scripts/windows/` 和 `scripts/linux/`](scripts/README.md)。Linux 可用 `bash scripts/linux/start-server.sh` 前台启动，或 `bash scripts/linux/install-startup.sh --start` 安装用户级 systemd 自启；先完成上述构建与密码设置。停止、日志和 Tailscale 配置见部署指南。
 
 Windows 可双击 `scripts/windows/start-server.cmd` 后台启动源码部署的服务，日志写入 `.local/web/server.log`，关闭启动窗口不会停止服务；双击 `stop-server.cmd` 停止。CMD 入口优先调用已有 PowerShell 7，否则使用系统自带的 Windows PowerShell 5.1，无需额外安装。其他同名 CMD 分别配置自启和网络入口。
 
-右侧“文件”“变更”和“Git 日志”均支持 PNG、JPEG、WebP、GIF、AVIF 和 SVG 图片预览，按面板宽度缩放。变更预览分别读取工作区、暂存区或提交中的实际版本，展示变更前后图片，支持新增、删除和重命名。SVG 转成静态图，动图显示首帧；文件上限 10 MiB、4000 万像素，预览最长边 2048 像素。“文件”也显示并允许读取 `.gitignore` 忽略的文件；项目目录边界、登录验证及凭据等敏感文件保护仍然生效。Git 变更列表继续遵循 Git 的跟踪规则，刷新后会清除已不在列表中的选中项。
+右侧“文件”“变更”和“Git 日志”均支持 PNG、JPEG、WebP、GIF、AVIF 和 SVG 图片预览，按面板宽度缩放。变更预览分别读取工作区、暂存区或提交中的实际版本，展示变更前后图片，支持新增、删除和重命名。SVG 转成静态图，动图显示首帧；文件上限 20 MiB、4000 万像素，预览最长边 2048 像素。“文件”也显示并允许读取 `.gitignore` 忽略的文件；项目目录边界、登录验证及凭据等敏感文件保护仍然生效。Git 变更列表继续遵循 Git 的跟踪规则，刷新后会清除已不在列表中的选中项。
 
 Git 日志用图标和简短名称区分本地分支、远程跟踪分支及标签，支持选择 `origin/main` 等远程分支；“全部分支”也包含仅远程分支可达的提交。三个标签共用“项目”右侧的“刷新”：立即读取本地内容，同时在后台 fetch，完成后更新图谱。获取期间仍可查看文件、切换标签或继续会话；失败保留本地内容并提示。无远程时跳过获取。同项目并发合并，结果保留 10 秒防重复请求；单个远程最多 30 秒，整次最多 60 秒。仅更新和清理远程跟踪分支，不合并代码或修改本地分支、标签、暂存区和工作区。自动刷新及切换标签不触发 fetch，详见[工作区设计](docs/design/workspace-panels.md)。
 
@@ -151,6 +159,8 @@ Linux 包面向 x64 glibc 环境，验证环境为 WSL2 Ubuntu 22.04；暂不提
 提交超时或断网可能结果未知；先核对原生历史，再显式重试，刷新不会重发任务。草稿在本次页面生命周期内保留，完整刷新不保证保留。项目上下文不替代 Codex 原生权限；Web 文件和 Git API 保持受控项目边界，无任意 shell/RPC REST 接口。完整操作见 [会话指南](docs/guides/sessions.md)。
 
 Web Push 需要 HTTPS、浏览器支持与用户主动授权；物理手机后台投递及第二阶段真实 VS Code 接力尚有验收缺口。PWA 不缓存 API、聊天或凭据，离线不能提交任务。
+
+0.1.7 本轮发布范围与验收见 [发布记录](docs/verification/2026-10-07-release-017.md)。便携增量升级以同平台运行环境指纹及文件校验为准；完整范围见 [便携指南](docs/guides/portable.md#数据与升级)。
 
 ## 文档与验证
 

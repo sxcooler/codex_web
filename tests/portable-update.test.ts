@@ -13,10 +13,10 @@ test('update replaces only managed files, removes obsolete files, preserves data
   const entry=(path:string,text:string)=>({path,size:Buffer.byteLength(text),sha256:hash(text)});
   const environment=[entry('runtime/node','runtime'),entry('node_modules/example/index.js','dependency')];
   const old={platform:process.platform+'-x64',sourceCommit:'a'.repeat(40),nodeVersion:'24.20.0',files:[...environment,entry('src/server/old.ts','old'),entry('package.json','{"version":"1.0.0"}')]};
-  const next={...old,sourceCommit:'b'.repeat(40),files:[...environment,entry('src/server/new.ts','new'),entry('package.json','{"version":"1.0.1"}')]};
+  const next={...old,sourceCommit:'b'.repeat(40),files:[...environment,entry('src/server/new.ts','new'),entry('src/codex/itemTimes.ts','export const time=1;'),entry('package.json','{"version":"1.0.1"}')]};
   try{
     for(const [path,text] of [['runtime/node','runtime'],['node_modules/example/index.js','dependency'],['src/server/old.ts','old'],['package.json','{"version":"1.0.0"}'],['.local/web/config.json','private']] as const){await mkdir(join(root,path,'..'),{recursive:true});await writeFile(join(root,path),text);}
-    await mkdir(join(payload,'src/server'),{recursive:true});await writeFile(join(payload,'src/server/new.ts'),'new');await writeFile(join(payload,'package.json'),'{"version":"1.0.1"}');
+    await mkdir(join(payload,'src/server'),{recursive:true});await mkdir(join(payload,'src/codex'),{recursive:true});await writeFile(join(payload,'src/server/new.ts'),'new');await writeFile(join(payload,'src/codex/itemTimes.ts'),'export const time=1;');await writeFile(join(payload,'package.json'),'{"version":"1.0.1"}');
     await writeFile(join(root,'manifest.json'),JSON.stringify(old));await writeFile(join(payload,'manifest.json'),JSON.stringify(next));
     assert.equal(runtimeFingerprint(old),runtimeFingerprint(next));
     let stops=0,starts=0;
@@ -26,10 +26,11 @@ test('update replaces only managed files, removes obsolete files, preserves data
     assert.equal(await readFile(join(root,'.local/web/config.json'),'utf8'),'private');assert.equal(stops,2);
     await applyUpdate(root,payload,{prepare:async()=>false,stop:async()=>{},start:async()=>{}});
     assert.equal(await readFile(join(root,'src/server/new.ts'),'utf8'),'new');await assert.rejects(readFile(join(root,'src/server/old.ts')));
+    assert.equal(await readFile(join(root,'src/codex/itemTimes.ts'),'utf8'),'export const time=1;');
     assert.equal(await readFile(join(root,'node_modules/example/index.js'),'utf8'),'dependency');
     await recoverUpdate(root,{prepare:async()=>false,stop:async()=>{},start:async()=>{}});
-    const backup='backup-'+crypto.randomUUID();await mkdir(join(root,'.local/updates',backup,'src/server'),{recursive:true});
-    await writeFile(join(root,'.local/updates',backup,'src/server/new.ts'),'new');await writeFile(join(root,'.local/updates',backup,'package.json'),'{"version":"1.0.1"}');
+    const backup='backup-'+crypto.randomUUID();await mkdir(join(root,'.local/updates',backup,'src/server'),{recursive:true});await mkdir(join(root,'.local/updates',backup,'src/codex'),{recursive:true});
+    await writeFile(join(root,'.local/updates',backup,'src/server/new.ts'),'new');await writeFile(join(root,'.local/updates',backup,'src/codex/itemTimes.ts'),'export const time=1;');await writeFile(join(root,'.local/updates',backup,'package.json'),'{"version":"1.0.1"}');
     await writeFile(join(root,'.local/updates/pending.json'),JSON.stringify({phase:'applying',backup,old:next,next,wasRunning:false}));
     await writeFile(join(root,'src/server/new.ts'),'interrupted replacement');
     await writeFile(join(root,'.local/update-lock.json'),JSON.stringify({pid:2147483647,token:'dead-owner'}));

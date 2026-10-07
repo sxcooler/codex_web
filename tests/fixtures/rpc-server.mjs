@@ -40,6 +40,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       send({ id: message.id, result: null });
       break;
     case 'ignore': calls++; break;
+    case 'lateRead': calls++;setTimeout(()=>send({id:message.id,result:'late read'}),80);break;
     case 'count': send({ id: message.id, result: calls }); break;
     case 'rpcError': send({ id: message.id, error: { code: -32000, message: 'denied', data: { reason: 'fixture' } } }); break;
     case 'exit': process.exit(7); break;

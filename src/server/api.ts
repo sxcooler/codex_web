@@ -9,6 +9,7 @@ import {AsyncInputs} from './async-input.ts';
 import { parseTestReport } from './test-reports.ts';
 import type { UploadService } from './uploads.ts';
 import {renderNativeImage} from './native-images.ts';
+import {settingsError} from '../codex/settings.ts';
 
 const text = { type: 'string', minLength: 1, maxLength: 12_000 };
 const short = { type: 'string', minLength: 1, maxLength: 120 };
@@ -71,6 +72,7 @@ export function registerApi(app: FastifyInstance, options: {
     inputs.reconcile(threadId,snapshot);
     const project = await projectForCwd(snapshot.thread.cwd);
     const warning = saveMeta(threadId, project?.path ?? null, null);
+    try{metadata.registerFork(snapshot.thread);}catch{}
     return { ...snapshot, project, metadata: readMeta(threadId), inputAnswers:inputs.states(threadId), warning };
   }
 
@@ -97,6 +99,12 @@ export function registerApi(app: FastifyInstance, options: {
   }
 
   app.get('/api/projects', async () => ({ projects: await projects.list() }));
+  app.post('/api/model-defaults', { schema: body({ model: short, effort: short, projectId: short,expectedVersion:{type:'string',minLength:1,maxLength:512} }, ['model']) }, async request => {
+    const input = request.body as {model:string;effort?:string;projectId?:string;expectedVersion?:string};
+    if(!input.expectedVersion)throw settingsError(409,'SETTINGS_VERSION_REQUIRED','缺少读取时的配置版本，请刷新页面后再保存。');
+    const cwd = input.projectId ? (await projects.resolve(input.projectId)).path : projects.root;
+    return runtime.saveModelDefaults(cwd, input.model, input.effort,input.expectedVersion);
+  });
   app.post('/api/projects/refresh', async () => ({ projects: await projects.refresh() }));
   app.get('/api/models',{schema:{querystring:{type:'object',additionalProperties:false,properties:{refresh:{type:'string',enum:['true']}}}}},async request=>({...await runtime.models((request.query as any).refresh==='true',true),source:runtime.modelInfo?.()}));
   app.post('/api/models/reload',{schema:body({},[])},async()=>({...await runtime.reloadModels(),source:runtime.modelInfo()}));
@@ -121,19 +129,49 @@ export function registerApi(app: FastifyInstance, options: {
       }
     });
   }
-  app.get('/api/sessions', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { ...text, maxLength: 2048 }, includeHidden:{type:'string',enum:['true','false']},archived:{type:'string',enum:['true','false']} } } } }, async request => {
-    const query=request.query as any; let result=await runtime.list(query.cursor,query.archived==='true'); const wanted=result.data.length; const data:any[]=[];
+  app.get('/api/sessions', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { ...text, maxLength: 4096 }, sortKey:{type:'string',enum:['updated_at','created_at']},includeHidden:{type:'string',enum:['true','false']},archived:{type:'string',enum:['true','false']} } } } }, async request => {
+    const query=request.query as any,sortKey=query.sortKey??'updated_at',archived=query.archived==='true',includeHidden=query.includeHidden==='true';
+    let nativeCursor:string|null|undefined=query.cursor,forkBefore=Number.MAX_SAFE_INTEGER;
+    if(query.cursor){
+      try{
+        if(!/^web1:[A-Za-z0-9_-]+$/.test(query.cursor))throw Error();
+        const page=JSON.parse(Buffer.from(query.cursor.slice(5),'base64url').toString());
+        if(!page||Object.keys(page).sort().join(',')!=='archived,forkBefore,includeHidden,native,sortKey'||page.sortKey!==sortKey||page.archived!==archived||page.includeHidden!==includeHidden||!Number.isSafeInteger(page.forkBefore)||page.forkBefore<1||(page.native!==null&&(typeof page.native!=='string'||!page.native||page.native.length>2048)))throw Error();
+        nativeCursor=page.native;forkBefore=page.forkBefore;
+      }catch{throw Object.assign(new Error('Session cursor is invalid; refresh the list'),{statusCode:400,code:'SESSION_CURSOR_INVALID'});}
+    }
+    let result=nativeCursor===null?{data:[],nextCursor:null}:await runtime.list(nativeCursor,archived,sortKey);const wanted=Math.max(1,result.data.length);const data:any[]=[],nativeIds=new Set<string>();
     // Keep hidden-heavy histories bounded; the existing Load more action continues at nextCursor.
-    const seen=new Set<string>(query.cursor?[query.cursor]:[]);
+    const seen=new Set<string>(nativeCursor?[nativeCursor]:[]);
     for(let pages=1;;pages++){
-      for(const thread of result.data){const meta=readMeta(thread.id);if(query.archived==='true'||query.includeHidden==='true'||!meta?.hidden)data.push({...thread,metadata:meta});}
+      for(const thread of result.data){nativeIds.add(thread.id);const meta=readMeta(thread.id);if(archived||includeHidden||!meta?.hidden)data.push({...thread,metadata:meta});}
       if(result.nextCursor&&seen.has(result.nextCursor))throw Object.assign(new Error('Native session pagination is invalid'),{statusCode:503,code:'RUNTIME_UNAVAILABLE'});
       if(data.length>=wanted||!result.nextCursor||pages>=5)break;
-      seen.add(result.nextCursor);result=await runtime.list(result.nextCursor,query.archived==='true');
+      seen.add(result.nextCursor);result=await runtime.list(result.nextCursor,archived,sortKey);
     }
-    return { ...result, data, nextCursor:result.nextCursor };
+    const candidates=metadata.knownForks(forkBefore),deadline=Date.now()+5000;let processed=0,forkReadsFailed=false;
+    // ponytail: two bounded streams, sort all loaded rows in the browser; no whole-history snapshot.
+    for(let offset=0;offset<candidates.length&&Date.now()<deadline;offset+=4){
+      const batch=candidates.slice(offset,offset+4);
+      const rows=await Promise.all(batch.map(async candidate=>{if(nativeIds.has(candidate.id))return null;try{return await runtime.forkListHeader(candidate.id,Math.max(1,deadline-Date.now()));}catch{forkReadsFailed=true;return null;}}));
+      for(const row of rows)if(row&&row.archived===archived&&!data.some(thread=>thread.id===row.thread.id)){const meta=readMeta(row.thread.id);if(archived||includeHidden||!meta?.hidden)data.push({...row.thread,metadata:meta});}
+      processed+=batch.length;
+    }
+    if(processed)forkBefore=candidates[processed-1].seq;
+    const forksPending=metadata.hasForksBefore(forkBefore),native=result.nextCursor;
+    const nextCursor=native||forksPending?'web1:'+Buffer.from(JSON.stringify({native,forkBefore,sortKey,archived,includeHidden})).toString('base64url'):null;
+    const timeKey=sortKey==='created_at'?'createdAt':'updatedAt';data.sort((a,b)=>(Number(b[timeKey])||0)-(Number(a[timeKey])||0)||String(a.id).localeCompare(String(b.id)));
+    return { data, nextCursor,forksPending,forkReadsFailed };
   });
   app.post('/api/sessions', { schema: body({ projectId: short, clientRequestId: requestId, prompt: {...text,minLength:0}, ...turnFields }, ['clientRequestId']) }, async request => createSession(request.body,request));
+  app.post('/api/sessions/:threadId/fork', { schema: body({ lastTurnId: { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' }, clientRequestId: requestId }) }, async request => {
+    const result = await runtime.fork(params(request).threadId, request.body as { lastTurnId: string; clientRequestId: string });
+    let warning: string | undefined;
+    try{metadata.registerFork(result.header);}catch{warning='Web fork metadata could not be saved; native thread history remains available.';}
+    try { const project = await projectForCwd(result.cwd); warning = saveMeta(result.threadId, project?.path ?? null, null)??warning; }
+    catch { warning = 'Web metadata could not be saved; native thread history remains available.'; }
+    return { threadId: result.threadId, status: result.status, warning };
+  });
   app.get('/api/sessions/:threadId', async (request,reply) => {const id=params(request).threadId;return {...await associated(id,readSignal(reply)),attachmentPreviews:options.uploads&&options.uploadOwner?options.uploads.listForThread(options.uploadOwner(request),id).map(item=>({...item,url:'/api/uploads/'+item.uploadId})):[]};});
   app.get('/api/sessions/:threadId/history', { schema: { querystring: { type: 'object', additionalProperties: false, required: ['before'], properties: { before: { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' } } } } }, async (request,reply) => {
     const id = params(request).threadId;
@@ -174,7 +212,7 @@ export function registerApi(app: FastifyInstance, options: {
   app.post('/api/sessions/:threadId/cancel-release', async request => runtime.cancelRelease(params(request).threadId));
   app.post('/api/sessions/:threadId/name',{schema:body({name:short},['name'])},async request=>{const id=params(request).threadId;const name=(request.body as any).name.trim();if(!name)throw Object.assign(new Error('Invalid name'),{statusCode:400});await runtime.rename(id,name);const current=readMeta(id);const value=metadata.update(id,{webTitle:name});return {name,metadata:value,warning:current===null?'Web metadata created':undefined};});
   app.post('/api/sessions/:threadId/metadata',{schema:body({favorite:{type:'boolean'},hidden:{type:'boolean'}},[])},async request=>({metadata:metadata.update(params(request).threadId,request.body as any)}));
-  app.post('/api/sessions/:threadId/metadata/clear',{schema:body({},[])},async request=>{metadata.clear(params(request).threadId);return {metadata:null};});
+  app.post('/api/sessions/:threadId/metadata/clear',{schema:body({},[])},async request=>{const id=params(request).threadId;metadata.clear(id);runtime.invalidateForkHeader(id);return {metadata:null};});
   app.post('/api/sessions/:threadId/requests/:requestId/respond', { schema: body({ answer: { type: 'object', maxProperties: 8 } }) }, async request => runtime.respond(params(request).threadId, params(request).requestId, (request.body as any).answer));
 
   const boundProject=async(threadId:string)=>{const project=await projectForCwd(await runtime.threadCwd(threadId));if(!project)throw Object.assign(new Error('This thread is not bound to a project in WORK_ROOT'),{statusCode:404,code:'PROJECT_ERROR'});return project;};
@@ -208,13 +246,15 @@ export function registerApi(app: FastifyInstance, options: {
     };
     const write = (kind: string, data: unknown, id?: string) => {
       if (closed) return;
+      if (stream.destroyed || stream.writableEnded) return close();
       if (!valid() || stream.writableLength > 256 * 1024) return close();
-      stream.write(`${id ? `id: ${id}\n` : ''}event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`);
+      try { stream.write(`${id ? `id: ${id}\n` : ''}event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`); }
+      catch { close(); }
     };
     const changed = (event: any) => { if (event.threadId === threadId) write(event.kind === 'resync' ? 'resync' : 'change', event, event.id); };
     const heartbeat = setInterval(() => write('ping', {}), 15_000); heartbeat.unref();
     const connection = { valid, close }; connections.add(connection);
-    stream.on('close', close); runtime.on('change', changed);
+    stream.on('error', close); stream.on('close', close); runtime.on('change', changed);
     const lastId = request.headers['last-event-id'];
     const replay = runtime.replay(threadId, typeof lastId === 'string' ? lastId : (request.query as any).cursor);
     if (replay.reset) write('resync', {});

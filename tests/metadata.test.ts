@@ -28,3 +28,14 @@ test('closes the database when migration fails', async()=>{
   await rm(path);
   await rm(dir,{recursive:true,force:true});
 });
+
+test('known ordinary fork headers survive a store restart without changing native times',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'metadata-forks-')),path=join(dir,'metadata.sqlite');
+  let store:MetadataStore|undefined;
+  try{
+    store=new MetadataStore(path);store.save('fork',null,null);store.registerFork({id:'fork',forkedFromId:'source',source:'vscode',createdAt:10,updatedAt:20,preview:''});store.close();store=undefined;
+    const reopened=store=new MetadataStore(path);assert.deepEqual(reopened.knownForks().map(row=>row.header),[{id:'fork',forkedFromId:'source',source:'vscode',createdAt:10,updatedAt:20,preview:''}]);
+    reopened.registerFork({id:'child',forkedFromId:'source',parentThreadId:'parent'});assert.equal(reopened.knownForks().length,1);
+    reopened.clear('fork');assert.equal(reopened.get('fork'),null);assert.equal(reopened.knownForks().length,1,'clearing Web preferences must not erase the known native fork');reopened.close();store=undefined;
+  }finally{store?.close();await rm(dir,{recursive:true,force:true});}
+});

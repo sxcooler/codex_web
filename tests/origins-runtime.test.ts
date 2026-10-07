@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm,readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +19,14 @@ test('real backend loads additional origins from config and serves both login pa
   await initializeAuth(data,password);
   await writeFile(join(data,'config.json'),JSON.stringify({origin:local,allowedOrigins:[remote],port,workRoot:data,codexBin:process.execPath}));
   const env={...process.env,WEB_DATA_DIR:data};for(const key of ['WEB_ORIGIN','PORT','WORK_ROOT','CODEX_BIN'])delete env[key];
-  const child=spawn(process.execPath,[fileURLToPath(new URL('../src/server/main.ts',import.meta.url))],{env,windowsHide:true,stdio:['ignore','pipe','pipe']});
+  const entry=new URL('../src/server/main.ts',import.meta.url),wrapper=join(data,'run.mjs');
+  await writeFile(wrapper,`import childProcess from 'node:child_process';const real=childProcess.spawnSync;childProcess.spawnSync=(file,args,options)=>{if(file!==process.execPath||args.length!==1||args[0]!=='--version')return real(file,args,options);const failure=process.env.FIXTURE_CODEX_FAILURE;return failure?{status:failure==='EXIT'?1:null,error:failure==='EXIT'?undefined:Object.assign(Error('private-stdout'),{code:failure}),stdout:'private-stdout',stderr:'private-stderr'}:{status:0,stdout:process.env.FIXTURE_CODEX_VERSION??'codex-cli 0.160.1'};};process.argv[1]=${JSON.stringify(fileURLToPath(entry))};await import(${JSON.stringify(entry.href)});`);
+  const configBefore=await readFile(join(data,'config.json'),'utf8');
+  for(const probe of [{FIXTURE_CODEX_VERSION:'codex-cli 0.160.0'},{FIXTURE_CODEX_VERSION:'codex-cli private-stdout'},...['ENOENT','ETIMEDOUT','ENOBUFS','EXIT'].map(failure=>({FIXTURE_CODEX_FAILURE:failure}))]){
+    const rejected=spawn(process.execPath,[wrapper],{env:{...env,...probe},windowsHide:true,stdio:['ignore','pipe','pipe']});let text='';rejected.stdout.on('data',chunk=>text+=chunk);rejected.stderr.on('data',chunk=>text+=chunk);
+    const [code]=await once(rejected,'close');assert.equal(code,1);assert.match(text,/Codex CLI >= 0\.160\.1/);assert.doesNotMatch(text,/private-stdout|private-stderr|listening/);assert.equal(await readFile(join(data,'config.json'),'utf8'),configBefore);
+  }
+  const child=spawn(process.execPath,[wrapper],{env,windowsHide:true,stdio:['ignore','pipe','pipe']});
   let output='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>output+=chunk);const closed=once(child,'close');
   const call=(host:string,path:string,method='GET',headers:Record<string,string>={},body?:unknown)=>new Promise<any>((resolve,reject)=>{
     const req=request({hostname:'127.0.0.1',port,path,method,headers:{Host:host,...headers},timeout:1000},res=>{

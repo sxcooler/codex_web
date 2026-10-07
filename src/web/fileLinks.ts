@@ -6,16 +6,25 @@ export const relativeFile=(currentPath:string,url:string,decoded=false)=>{
   return safe.join('/');
 };
 export const linkedFile=(id:string,currentPath:string,url:string,origin=location.origin)=>{try{const parsed=new URL(url,origin),prefix='/api/sessions/'+encodeURIComponent(id)+'/files/content';if(parsed.origin===origin&&parsed.pathname===prefix)return relativeFile('',parsed.searchParams.get('path')??'',true);}catch{}return relativeFile(currentPath,url);};
+export const linkFragment=(url:string)=>{try{const fragment=url.includes('#')?decodeURIComponent(url.slice(url.indexOf('#')+1)):'';return /[\x00-\x1f\x7f]/.test(fragment)?'':fragment;}catch{return '';}};
+const referenceFragment=(url:string)=>{const line=/:(\d+)(?::\d+)?$/.exec(url.split(/[?#]/,1)[0]);return linkFragment(url)||(line?'L'+line[1]:'');};
+const fragmentSuffix=(fragment:string)=>fragment?'#'+encodeURIComponent(fragment):'';
 export const fileUrl=(id:string,currentPath:string,url:string,origin=location.origin)=>{
-  if(/^#[a-zA-Z0-9_-]+$/.test(url))return url;
-  try{const parsed=new URL(url);return ['http:','https:'].includes(parsed.protocol)?parsed.href:'';}catch{}
-  const relative=relativeFile(currentPath,url);
-  return relative?origin+'/api/sessions/'+encodeURIComponent(id)+'/files/content?path='+encodeURIComponent(relative):'';
+  if(url.startsWith('#'))return fragmentSuffix(linkFragment(url));
+  if(/^https?:\/\//i.test(url)){try{return new URL(url).href;}catch{return '';}}
+  const relative=relativeFile(currentPath,url.split(/[?#]/,1)[0].replace(/(\.[a-z0-9]+):\d+(?::\d+)?$/i,'$1'));
+  return relative?origin+'/api/sessions/'+encodeURIComponent(id)+'/files/content?path='+encodeURIComponent(relative)+fragmentSuffix(referenceFragment(url)):'';
 };
 
-export const fileImageUrl=(id:string,currentPath:string,url:string,origin=location.origin)=>{
-  let path:string;try{path=decodeURIComponent(url.trim().split(/[?#]/,1)[0]);}catch{return '';}
-  if(!path||/[\\:\x00-\x1f\x7f]/.test(path)||path.startsWith('//'))return '';
+export const fileImageUrl=(id:string,currentPath:string,url:string,origin=location.origin,projectRoot='')=>{
+  let path:string;try{path=decodeURIComponent(url.trim().split(/[?#]/,1)[0]).replace(/\\/g,'/');}catch{return '';}
+  if(!path||/[\x00-\x1f\x7f]/.test(path)||path.startsWith('//'))return '';
+  const root=projectRoot.replace(/\\/g,'/').replace(/\/$/,'');
+  if(/^\/?[a-z]:\//i.test(path)||(root.startsWith('/')&&path.startsWith(root+'/'))){
+    const local=chatFileUrl(id,projectRoot,encodeURIComponent(path),origin);
+    return local?local.replace('/files/content?','/files/image?'):'';
+  }
+  if(path.includes(':'))return '';
   const relative=relativeFile(currentPath,path,true);
   return relative?origin+'/api/sessions/'+encodeURIComponent(id)+'/files/image?path='+encodeURIComponent(relative):'';
 };
@@ -24,6 +33,7 @@ export const fileImageUrl=(id:string,currentPath:string,url:string,origin=locati
 export function chatFileUrl(id:string,projectRoot:string,url:string,origin=location.origin):string{
   if(/^https?:\/\//i.test(url)||url.startsWith('#'))return fileUrl(id,'',url,origin);
   if(!projectRoot)return '';
+  const fragment=referenceFragment(url);
   let path:string;try{
     if(/^file:/i.test(url)){const file=new URL(url);if(file.host)return '';url=file.pathname;}
     path=decodeURIComponent(url.split(/[?#]/,1)[0]).replace(/\\/g,'/').replace(/:\d+(?::\d+)?$/,'').replace(/^\/([a-z]:\/)/i,'$1');
@@ -37,5 +47,5 @@ export function chatFileUrl(id:string,projectRoot:string,url:string,origin=locat
   }
   if(/^[a-z][a-z0-9+.-]*:/i.test(path))return '';
   const relative=relativeFile('',path,true);
-  return relative?origin+'/api/sessions/'+encodeURIComponent(id)+'/files/content?path='+encodeURIComponent(relative):'';
+  return relative?origin+'/api/sessions/'+encodeURIComponent(id)+'/files/content?path='+encodeURIComponent(relative)+fragmentSuffix(fragment):'';
 }

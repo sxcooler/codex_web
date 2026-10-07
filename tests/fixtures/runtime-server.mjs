@@ -19,6 +19,7 @@ let turnLists = 0;
 let fullTurnLists = 0;
 let headerTurnLists = 0;
 let unsubscribes = 0;
+let forks = 0, lastFork;
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const emptyRolloutError = 'failed to read thread: thread-store internal error: failed to read session metadata /private/rollout.jsonl: rollout at /private/rollout.jsonl is empty';
@@ -34,7 +35,7 @@ const turn = (id, status = 'inProgress', items = []) => ({
   completedAt: status === 'inProgress' ? null : 2, durationMs: status === 'inProgress' ? null : 1,
 });
 const settings = (value, params = {}) => ({ thread: value, model: mode === 'resume-text-model' ? 'actual-text' : 'fixture', modelProvider: 'openai', serviceTier: null,
-  cwd: value.cwd, instructionSources: [], approvalPolicy: params.approvalPolicy ?? 'on-request', approvalsReviewer: params.approvalsReviewer ?? 'user',
+  cwd: value.cwd, instructionSources: [], disabledPluginIds: [], approvalPolicy: params.approvalPolicy ?? 'on-request', approvalsReviewer: params.approvalsReviewer ?? 'user',
   sandbox: mode === 'tightened-resume' && params.threadId && !params.sandbox ? {type:'readOnly',networkAccess:false} : mode === 'permission-mismatch' ? { type: 'dangerFullAccess' } : params.sandbox === 'workspace-write' ? { type: 'workspaceWrite', writableRoots: mode === 'implicit-cwd' ? params.config.sandbox_workspace_write.writable_roots.filter(root => root !== value.cwd) : params.config.sandbox_workspace_write.writable_roots, networkAccess: params.config.sandbox_workspace_write.network_access, excludeTmpdirEnvVar: params.config.sandbox_workspace_write.exclude_tmpdir_env_var, excludeSlashTmp: params.config.sandbox_workspace_write.exclude_slash_tmp } : params.sandbox === 'read-only' ? { type: 'readOnly', networkAccess: false } : { type: 'dangerFullAccess' }, reasoningEffort: null });
 
 function finish(threadId, activeTurn, status = 'completed') {
@@ -55,7 +56,7 @@ function startTurn(id, params) {
   const value = threads.get(params.threadId);
   value.status = { type: 'active', activeFlags: [] };
   value.turns.push(activeTurn);
-  if (mode === 'steering') activeTurn.items.push({ type: 'userMessage', id: `user-${turnId}`, clientId: params.clientUserMessageId ?? null, content: params.input });
+  if (mode === 'steering' || mode === 'unsupported-empty') activeTurn.items.push({ type: 'userMessage', id: `user-${turnId}`, clientId: params.clientUserMessageId ?? null, content: params.input });
 
   if (text === 'exit-unknown') return process.exit(9);
   send({ method: 'turn/started', params: { threadId: params.threadId, turn: activeTurn } });
@@ -188,11 +189,19 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (!initialized) return send({ id, error: { code: -32000, message: 'request arrived before initialized' } });
   if (method === 'model/list') { modelLists++; return send({ id, result: { data: [{ id: 'fixture', model: 'fixture', displayName: 'Fixture', description: '', hidden: false, supportedReasoningEfforts: [{reasoningEffort:'low',description:''},{reasoningEffort:'high',description:''}], defaultReasoningEffort: 'low', inputModalities: ['text','image'], isDefault: true }, { id:'actual-text',model:'actual-text',displayName:'Text only',hidden:false,supportedReasoningEfforts:[{reasoningEffort:'low'}],defaultReasoningEffort:'low',inputModalities:['text'],isDefault:false }], nextCursor: null } }); }
+  if (mode === 'settings-conflict' && method === 'config/read') return send({id,result:{config:{web_search:'cached'},origins:{},layers:[{name:{type:'user',file:process.cwd()+'/fixture-config.toml',profile:null},version:'user-v1',config:{web_search:'cached'}}]}});
+  if (mode === 'settings-conflict' && method === 'config/batchWrite') return send({id,error:{code:-32600,message:'FAKE_SECRET_MUST_NOT_LEAK',data:{config_write_error_code:'configVersionConflict'}}});
   if (method === 'config/read') return send({ id, result: { config: { model: mode === 'config-text-model' ? 'actual-text' : 'fixture', approval_policy: mode === 'null-config' ? null : 'on-request', approvals_reviewer: mode === 'null-config' ? null : 'user', sandbox_mode: ['custom-workspace', 'incomplete-workspace'].includes(mode) ? 'workspace-write' : 'read-only', ...(mode === 'incomplete-workspace' ? { sandbox_workspace_write: {} } : {}), ...(mode === 'custom-workspace' ? { sandbox_workspace_write: { writable_roots: [params.cwd + '/extra'], network_access: true, exclude_tmpdir_env_var: false, exclude_slash_tmp: true } } : {}) }, layers: [] } });
   if (method === 'configRequirements/read') return send({ id, result: { requirements: mode === 'managed' ? { allowedSandboxModes: ['read-only'], allowedApprovalPolicies: ['on-request'] } : null } });
   if (method === 'thread/name/set') { threads.get(params.threadId).name = params.name; return send({id,result:{}}); }
   if (method === 'account/read') return send({ id, result: { account: { type: 'chatgpt', email: 'fixture@example.test', planType: 'plus' }, requiresOpenaiAuth: true } });
   if (method === 'thread/list') return send({ id, result: { data: [...threads.values()].filter(value=>archivedThreads.has(value.id)===!!params.archived).map((value) => ({ ...value, turns: [] })), nextCursor: null, backwardsCursor: null } });
+  if (method === 'fixture/native-thread') { const value={...thread(params.threadId),...params.thread};value.status=params.status;threads.set(value.id,value);return send({id,result:{}}); }
+  if (method === 'thread/loaded/list') {
+    if(mode==='loaded-error')return send({id,error:{code:-32601,message:'unsupported'}});
+    const ids=[...threads.keys()],offset=Number(params.cursor??0),next=offset+1;
+    return send({id,result:{data:ids.slice(offset,next),nextCursor:mode==='loaded-bad-cursor'?'0':next<ids.length?String(next):null}});
+  }
   if (method === 'thread/archive' || method === 'thread/unarchive') {
     if(method==='thread/archive')archivedThreads.add(params.threadId);else archivedThreads.delete(params.threadId);
     return send({id,result:method==='thread/archive'?{}:{thread:threads.get(params.threadId)}});
@@ -202,6 +211,23 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const value = thread(mode === 'unmaterialized-current' ? '00000000-0000-4000-8000-000000000010' : `thread-${nextThread++}`, params.cwd);
     threads.set(value.id, value);
     return send({ id, result: settings(value, params) });
+  }
+  if (method === 'thread/fork') {
+    forks++; lastFork = params;
+    if (mode === 'fork-unsupported') return send({id,error:{code:-32601,message:'unknown thread/fork'}});
+    if (mode === 'fork-timeout') return;
+    if (mode === 'fork-disconnect') return process.exit(9);
+    const source = threads.get(params.threadId);
+    const end = source.turns.findIndex(turn => turn.id === params.lastTurnId) + 1;
+    const value = {...thread(`fork-${forks}`, source.cwd, structuredClone(source.turns.slice(0, mode === 'fork-future' ? undefined : end))), forkedFromId:source.id};
+    threads.set(value.id,value);
+    const result = settings(value);
+    if (mode === 'fork-source-id') result.thread = source;
+    if (mode.startsWith('fork-missing-')) delete result[mode.slice('fork-missing-'.length)];
+    if (mode === 'fork-permission') result.sandbox = {type:'unsupported'};
+    if (mode === 'fork-active') value.status = {type:'active',activeFlags:[]};
+    if (mode === 'fork-wrong-cwd') result.cwd = process.cwd() + '/wrong';
+    return send({id,result});
   }
   if (method === 'thread/resume') {
     lastResume = params;
@@ -220,6 +246,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (method === 'fixture/external-change') { const value=threads.get(params.threadId); value.name='External name'; value.updatedAt++; return send({id,result:{}}); }
   if (method === 'thread/read') {
     threadReads++;
+    if (mode === 'fork-readback-disconnect' && params.threadId.startsWith('fork-')) return process.exit(9);
+    if (mode === 'fork-readback-malformed' && params.threadId.startsWith('fork-')) return send({id,result:{thread:null}});
     if (mode === 'metadata-empty' || (mode === 'metadata-delayed' && threadReads <= 2)) return send({ id, error: { code: -32603, message: emptyRolloutError } });
     if (mode === 'metadata-denied') return send({ id, error: { code: -32603, message: emptyRolloutError.replace('is empty', 'access denied') } });
     if (mode === 'notfound') return send({ id, error: { code: -32000, message: 'record not found' } });
@@ -309,6 +337,6 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return finish(params.threadId, activeTurn, 'interrupted');
   }
   if (method === 'thread/unsubscribe') {unsubscribes++;return send({ id, result: { status: mode === 'not-subscribed' ? 'notSubscribed' : 'unsubscribed' } });}
-  if (method === 'fixture/stats') return send({ id, result: { turnStarts, interrupts, lastTurn, modelLists, lastThread, lastResume, itemLists, threadReads, turnLists, fullTurnLists, headerTurnLists, resumes, unsubscribes } });
+  if (method === 'fixture/stats') return send({ id, result: { forks, lastFork, turnStarts, interrupts, lastTurn, modelLists, lastThread, lastResume, itemLists, threadReads, turnLists, fullTurnLists, headerTurnLists, resumes, unsubscribes } });
   send({ id, error: { code: -32601, message: `unknown ${method}` } });
 });

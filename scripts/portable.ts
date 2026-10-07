@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { managedServer, runServer, startBackground, stopServer } from './server-control.ts';
 import { configuredOrigins, optionalDomain } from '../src/server/origins.ts';
+import {assertCodexVersion,codexUpgradeMessage} from '../src/codex/executable.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export function parsePort(value: string): number {
@@ -30,8 +31,8 @@ type Terminal = { question(prompt: string): Promise<string> };
 async function verifiedCodex(path: string): Promise<string | undefined> {
   const executable = resolve(path.trim().replace(/^"|"$/g, ''));
   if (windows !== executable.toLowerCase().endsWith('.exe') || !(await stat(executable).catch(() => null))?.isFile()) return;
-  const result = childProcess.spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: 10_000, windowsHide: true, shell: false });
-  if (!result.error && result.status === 0 && /^codex(?:-cli)?\s+\S/m.test(result.stdout)) return executable;
+  const result = childProcess.spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: 10_000, maxBuffer: 16_384, windowsHide: true, shell: false });
+  if (!result.error && result.status === 0) { try { assertCodexVersion(result.stdout); return executable; } catch {} }
 }
 
 export async function discoverPortableCodex(configured?: string): Promise<string | undefined> {
@@ -54,7 +55,7 @@ function openBrowser(url: string) {
 
 async function chooseCodex(terminal: Terminal): Promise<string> {
   while (true) {
-    process.stdout.write(`未找到可用的 Codex CLI。官方安装说明：${installPage}\n1. 打开官方安装页面，手动安装（默认）\n2. 同意下载并运行 Codex 官方安装脚本\n3. 指定已安装的 Codex 可执行文件\n0. 退出\n选项 2 会联网下载并执行 ${installerUrl}，在当前用户下安装，安装器可能更新用户 PATH。\n`);
+    process.stdout.write(`未找到满足最低版本要求的 Codex CLI。${codexUpgradeMessage}\n官方安装说明：${installPage}\n1. 打开官方安装页面，手动安装（默认）\n2. 同意下载并运行 Codex 官方安装脚本\n3. 指定已安装的 Codex 可执行文件\n0. 退出\n选项 2 会联网下载并执行 ${installerUrl}，在当前用户下安装，安装器可能更新用户 PATH。\n`);
     let choice = (await terminal.question('请选择 [1]: ')).trim() || '1';
     if (choice === '1') {
       openBrowser(installPage);
@@ -71,7 +72,7 @@ async function chooseCodex(terminal: Terminal): Promise<string> {
     if (choice === '3') {
       const executable = await verifiedCodex(await terminal.question('Codex 可执行文件完整路径: '));
       if (executable) return executable;
-      process.stdout.write('该路径不是当前平台可运行的 Codex CLI，请重新选择。\n');
+      process.stdout.write(`该路径不是满足最低版本要求的可用 Codex CLI。${codexUpgradeMessage}\n请重新选择。\n`);
     } else if (choice === '2') {
       const env = { ...process.env };
       delete env.CODEX_NON_INTERACTIVE;
@@ -97,7 +98,7 @@ export async function loadPortableConfig(dataDir: string, terminal?: Terminal) {
   const saved = await exists(configPath) ? JSON.parse(await readFile(configPath, 'utf8')) : undefined;
   const detected = await discoverPortableCodex(saved?.codexBin);
   if (!saved || !detected) {
-    if (!terminal && !process.stdin.isTTY) throw new Error(`请运行 ${launcher}，在交互终端完成配置或修复 Codex CLI 路径；不会自动安装。`);
+    if (!terminal && !process.stdin.isTTY) throw new Error(`${codexUpgradeMessage}\n请运行 ${launcher}，在交互终端完成配置或修复 Codex CLI 路径；不会自动安装。`);
     // Release stdin and raw mode before an interactive child installer runs.
     terminal ??= { async question(prompt) {
       const reader = createInterface({ input: process.stdin, output: process.stdout });

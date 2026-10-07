@@ -21,24 +21,35 @@ try{
    assert.equal(await page.locator('.markdown-message [onerror],.markdown-message [style*="position"],.markdown-message [srcset],.markdown-message #unsafe,.markdown-message script,.markdown-message iframe').count(),0);
    assert.equal(await page.locator('img[alt="超大"]').getAttribute('width'),null);
    await page.waitForFunction(()=>document.body.textContent.includes('图片无法加载'));
-   assert.equal(await page.locator('.markdown-message img').count(),3);
+   assert.equal(await page.locator('.markdown-message img').count(),5);
+   for(const alt of ['绝对路径','Windows HTML']){await page.locator(`img[alt="${alt}"]`).scrollIntoViewIfNeeded();await page.waitForFunction(alt=>document.querySelector(`img[alt="${alt}"]`)?.naturalWidth>0,alt);}
    assert.equal(await page.evaluate(()=>!!window.imageExecuted),false);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
    assert.match(await page.locator('body').innerText(),/仅支持项目内图片/);
+   assert.ok((await page.locator('body').innerText()).includes('https://example.invalid/tracker.png'),'rejected images must retain the source path');
   }
   assert.ok(requested.includes('assets/图 片.png'));
   await page.goto(base+'/tests/markdown-images.html?unbound=1');await page.getByRole('button',{name:'复制 Markdown'}).waitFor();assert.equal(await page.locator('img').count(),0);
   await page.goto(base+'/tests/markdown-images.html?chat=1');await page.locator('img[alt="HTML"]').waitFor();assert.equal(await page.locator('img[alt="标准"]').count(),0,'chat paths must use project root');
+  for(const alt of ['绝对路径','Windows HTML']){await page.locator(`img[alt="${alt}"]`).scrollIntoViewIfNeeded();await page.waitForFunction(alt=>document.querySelector(`img[alt="${alt}"]`)?.naturalWidth>0,alt);}
+  assert.ok(requested.includes('runs/full.png'));assert.ok(requested.includes('runs/roi.png'));
   const readme=await readFile('README.md','utf8');
   await page.route('**/api/sessions/fixture/files?*',route=>route.fulfill({json:{files:[{path:'README.md',type:'file'}]}}));
-  await page.route('**/api/sessions/fixture/files/content?*',route=>route.fulfill({json:{text:readme}}));
+  await page.route('**/api/sessions/fixture/files/content?*',route=>route.fulfill({json:{text:readme+'\n\n![面板绝对路径](C:/work/project/runs/full.png)'}}));
   await page.goto(base+'/tests/markdown-images.html?panel=1');
   await page.locator('.markdown-message img').first().waitFor({state:'attached'});
   await page.locator('.markdown-message img').first().scrollIntoViewIfNeeded();
   await page.waitForFunction(()=>document.querySelector('.markdown-message img')?.naturalWidth>0);
-  assert.equal(await page.locator('.markdown-message img').count(),2,'actual README preview must show both screenshots');
+  const absoluteImage=page.locator('img[alt="面板绝对路径"]');await absoluteImage.scrollIntoViewIfNeeded();await page.waitForFunction(()=>document.querySelector('img[alt="面板绝对路径"]')?.naturalWidth>0);
+  assert.equal(await page.locator('.markdown-message img').count(),3,'README preview must show relative and absolute images');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   assert.deepEqual(remote,[]);assert.deepEqual(errors,[]);
+  for(const suffix of ['', '?streaming=1', '?linux=1']){
+   await page.goto(base+'/tests/document-links.html'+suffix);
+   await page.waitForFunction(()=>!document.querySelector('#result').textContent.startsWith('RUNNING'));
+   assert.match(await page.locator('#result').innerText(),/^PASS/);
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  }
   await page.goto(base+'/tests/markdown.html');await page.waitForFunction(()=>!document.querySelector('#result').textContent.startsWith('RUNNING'));assert.match(await page.locator('#result').innerText(),/^PASS/);
   console.log(`${viewport.width}: PASS (README panel, Markdown/HTML, streaming, chat, attributes, bounds, failure, no external requests, Markdown regression)`);await page.close();
  }

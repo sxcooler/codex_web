@@ -239,6 +239,14 @@ export class AuthStore {
     this.#database.prepare('DELETE FROM sessions WHERE token_hash = ?').run(sessionHash(token, this.#credentials));
   }
 
+  renewSession(token: string): boolean {
+    if (!TOKEN_PATTERN.test(token)) return false;
+    const now = Date.now();
+    return this.#database.prepare(
+      'UPDATE sessions SET expires_at = ? WHERE token_hash = ? AND expires_at > ?',
+    ).run(now + SESSION_LIFETIME_MS, sessionHash(token, this.#credentials), now).changes === 1;
+  }
+
   async changePassword(currentPassword: string, newPassword: string): Promise<PasswordChange> {
     validatePassword(currentPassword);
     validatePassword(newPassword);

@@ -48,12 +48,58 @@ test('image diffs use worktree, index and commit versions, including renamed and
     await assert.rejects(projects.readImage(p.id,picture,'HEAD'),{statusCode:400});
     await assert.rejects(projects.readImage(p.id,'../outside.png',first));
     await assert.rejects(projects.readImage(p.id,'.env.png',first),{statusCode:403});
-    await writeFile(join(p.path,'huge.png'),Buffer.alloc(10*1024*1024+1));git('add','huge.png');
+    await writeFile(join(p.path,'huge.png'),Buffer.alloc(20*1024*1024+1));git('add','huge.png');
     await assert.rejects(projects.readImage(p.id,'huge.png','index'),{statusCode:413});
     const blob=git('rev-parse',first+':'+picture);
     git('update-index','--add','--cacheinfo','120000,'+blob+',link.png');
     await assert.rejects(projects.readImage(p.id,'link.png','index'),{statusCode:400});
   } finally { await rm(root,{recursive:true,force:true}); }
+});
+
+test('directory links require the generic opt-in and retain path and sensitive-file restrictions', async () => {
+  const root=await mkdtemp(join(tmpdir(),'codex-image-mount-'));
+  try {
+    const projects=new Projects(root),p=await projects.create({name:'Images',folderName:'images'});
+    const data=join(root,'data'),outside=join(root,'outside');
+    await mkdir(data);await mkdir(outside);
+    const png=await sharp({create:{width:32,height:24,channels:3,background:'red'}}).png().toBuffer();
+    await writeFile(join(data,'full.png'),png);await writeFile(join(data,'.env.png'),png);await writeFile(join(data,'note.txt'),'linked text');await writeFile(join(outside,'private.png'),png);
+    for(const name of ['data','models','runs'])await symlink(data,join(p.path,name),'junction');
+    await symlink(outside,join(data,'escape'),'junction');
+    await assert.rejects(projects.readImage(p.id,'runs/full.png'),{statusCode:403});
+    await assert.rejects(projects.readFile(p.id,'data/note.txt'),{statusCode:403});
+    await assert.rejects(projects.listFiles(p.id,'models'),{statusCode:403});
+    assert.ok(!(await projects.listFiles(p.id)).files.some(file=>file.path==='runs'));
+    const allowed=new Projects(root,true);
+    assert.equal((await sharp(await allowed.readImage(p.id,'runs/full.png')).metadata()).width,32);
+    assert.equal((await allowed.readFile(p.id,'data/note.txt')).text,'linked text');
+    assert.equal((await allowed.readFile(p.id,'data/note.txt')).path,'data/note.txt');
+    assert.equal((await allowed.readReportFile(p.id,'data/note.txt',1024)).bytes.toString(),'linked text');
+    for(const name of ['data','models','runs'])assert.ok((await allowed.listFiles(p.id)).files.some(file=>file.path===name&&file.type==='directory'));
+    assert.ok((await allowed.listFiles(p.id,'models')).files.some(file=>file.path==='models/note.txt'));
+    assert.equal((await sharp(await allowed.readImage(p.id,'runs/escape/private.png')).metadata()).width,32);
+    await assert.rejects(allowed.readImage(p.id,'runs/.env.png'),{statusCode:403});
+    for(const name of ['.git','.env','.codex-uploads']){
+      await mkdir(join(outside,name));await writeFile(join(outside,name,'note.txt'),'private');
+      const alias='alias-'+name.slice(1);await symlink(join(outside,name),join(data,alias),'junction');
+      await assert.rejects(allowed.readFile(p.id,'data/'+alias+'/note.txt'),{statusCode:403});
+      assert.ok(!(await allowed.listFiles(p.id,'data')).files.some(file=>file.path==='data/'+alias));
+      await symlink(data,join(outside,name,'back'),'junction');
+      await assert.rejects(allowed.readFile(p.id,'data/'+alias+'/back/note.txt'),{statusCode:403},'A second link cannot hide a sensitive ancestor');
+    }
+    await symlink(join(root,'missing'),join(data,'broken'),'junction');
+    await assert.rejects(allowed.listFiles(p.id,'data/broken'),{statusCode:404});
+    assert.ok(!(await allowed.listFiles(p.id,'data')).files.some(file=>file.path==='data/broken'));
+    await symlink(join(data,'loop'),join(data,'loop'),'junction');
+    await assert.rejects(allowed.listFiles(p.id,'data/loop'),{statusCode:404});
+    await assert.rejects(allowed.readFile(p.id,'../data/note.txt'),{statusCode:400});
+    await assert.rejects(allowed.readFile(p.id,join(data,'note.txt')),{statusCode:400});
+    assert.throws(()=>new Projects(root,'true' as any),/boolean/);
+    if(process.platform!=='win32'){
+      await symlink(join(data,'note.txt'),join(p.path,'file-link.txt'));
+      await assert.rejects(allowed.readFile(p.id,'file-link.txt'),{statusCode:403});
+    }
+  } finally {await rm(root,{recursive:true,force:true});}
 });
 
 test('project image previews decode safely, bound size and retain file access restrictions', async () => {
@@ -65,11 +111,14 @@ test('project image previews decode safely, bound size and retain file access re
     const preview = await projects.readImage(project.id,'图 #1.png');
     const metadata = await sharp(preview).metadata();
     assert.equal(metadata.format,'webp'); assert.equal(metadata.width,2048); assert.equal(metadata.height,1024);
+    // A valid PNG with trailing bytes exercises the file-size gate without a huge pixel allocation.
+    await writeFile(join(project.path,'screenshot.png'),Buffer.concat([png,Buffer.alloc(12*1024*1024)]));
+    assert.equal((await sharp(await projects.readImage(project.id,'screenshot.png')).metadata()).width,2048);
     await writeFile(join(project.path,'icon.svg'),'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><script>alert(1)</script><rect width="24" height="24" fill="red"/></svg>');
     assert.equal((await sharp(await projects.readImage(project.id,'icon.svg')).metadata()).format,'webp');
     await writeFile(join(project.path,'bad.png'),'<html>not an image</html>');
     await assert.rejects(projects.readImage(project.id,'bad.png'),{statusCode:415});
-    await writeFile(join(project.path,'large.png'),Buffer.alloc(10*1024*1024+1));
+    await writeFile(join(project.path,'large.png'),Buffer.alloc(20*1024*1024+1));
     await assert.rejects(projects.readImage(project.id,'large.png'),{statusCode:413});
     await writeFile(join(project.path,'pixels.svg'),'<svg xmlns="http://www.w3.org/2000/svg" width="10000" height="10000"/>');
     await assert.rejects(projects.readImage(project.id,'pixels.svg'));

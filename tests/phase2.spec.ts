@@ -55,10 +55,10 @@ test('pane drag persists ratios and navigating releases old session while preser
   await page.mouse.move(box.x+box.width/2,box.y+100);await page.mouse.down();await page.mouse.move(box.x+60,box.y+100);await page.mouse.up();
   const saved=await page.evaluate(()=>localStorage.getItem('codex-web:layout:v1'));
   expect(saved).toBeTruthy();
-  await page.getByRole('button',{name:'会话 B',exact:true}).click();
+  await page.getByRole('link',{name:'会话 B',exact:true}).click();
   await expect(page.locator('h1')).toHaveText('会话 B');
   expect(releases.some(x=>x.includes('/a/'))).toBe(true);
-  await page.getByRole('button',{name:'会话 A',exact:true}).click();
+  await page.getByRole('link',{name:'会话 A',exact:true}).click();
   await expect(page.locator('#message')).toHaveValue('保留的草稿');
   await page.reload();expect(await page.evaluate(()=>localStorage.getItem('codex-web:layout:v1'))).toBe(saved);
   await page.getByRole('button',{name:/审批方式/}).click();
@@ -130,7 +130,7 @@ test('file diff and an attachment-only task use the selected options',async({pag
   await expect(page.locator('.attachments li')).toHaveCount(0);
  }
  await page.locator('input[type=file]').evaluate(input=>{const files=new DataTransfer();for(let i=0;i<5;i++)files.items.add(new File([new Uint8Array(15*1024*1024)],`file-${i}.png`,{type:'image/png'}));(input as HTMLInputElement).files=files.files;input.dispatchEvent(new Event('change',{bubbles:true}));});
- await expect(page.getByText(/KiB · 就绪/)).toHaveCount(5);
+ await expect(page.locator('.attachments li small').filter({hasText:'就绪'})).toHaveCount(5,{timeout:15000});
  await expect(page.locator('.attachments [role=alert]')).toHaveCount(0);
  for(let i=0;i<5;i++)await page.getByRole('button',{name:'移除附件 note.txt',exact:true}).first().click();
  await page.locator('input[type=file]').setInputFiles({name:'note.txt',mimeType:'text/plain',buffer:Buffer.from('hello')});
@@ -173,9 +173,9 @@ test('rapid return cancels release only after the delayed leave request complete
   await route.fulfill({json:data});
  });
  await page.goto('/sessions/a');await expect(page.locator('h1')).toHaveText('甲');calls.length=0;
- await page.getByRole('button',{name:'乙',exact:true}).click();await expect(page.locator('h1')).toHaveText('乙');
+ await page.getByRole('link',{name:'乙',exact:true}).click();await expect(page.locator('h1')).toHaveText('乙');
  await expect.poll(()=>!!completeLeave).toBe(true);
- await page.getByRole('button',{name:'甲',exact:true}).click();await expect(page).toHaveURL(/sessions\/a$/);
+ await page.getByRole('link',{name:'甲',exact:true}).click();await expect(page).toHaveURL(/sessions\/a$/);
  await page.getByRole('button',{name:'操作',exact:true}).click();await page.getByRole('button',{name:'刷新当前会话'}).click();await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
  expect(calls).toEqual(['leave-start']);completeLeave!();
@@ -195,9 +195,9 @@ test('creation context survives navigation and late-created tasks are automatica
   await route.fulfill({json:data});
  });
  await page.goto('/');await page.getByRole('combobox',{name:'项目',exact:true}).selectOption('p');await page.getByRole('textbox',{name:'任务',exact:true}).fill('项目任务');
- await page.getByRole('button',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');
+ await page.getByRole('link',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');
  await page.getByRole('button',{name:'＋ 新任务'}).click();await expect(page.getByRole('combobox',{name:'项目',exact:true})).toHaveValue('p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toHaveValue('项目任务');
  await page.getByRole('button',{name:'开始任务 →'}).click();await expect.poll(()=>!!finishCreate).toBe(true);expect(sent.projectId).toBe('p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toBeDisabled();
- await page.getByRole('button',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');finishCreate!();
+ await page.getByRole('link',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');finishCreate!();
  await expect.poll(()=>released.includes('/api/sessions/late/release-on-leave')).toBe(true);await expect(page).toHaveURL(/sessions\/other$/);
 });

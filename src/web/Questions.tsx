@@ -1,10 +1,17 @@
 import {createContext,useContext,useId,useRef,useState} from 'react';
 import {api,type Json} from './api.ts';
+import {MarkdownView} from './MarkdownView.tsx';
+import {chatFileUrl,fileImageUrl,linkedFile,linkFragment} from './fileLinks.ts';
 
-export const QuestionContext=createContext<{canSend:boolean;expectedTurnId?:string;states:Json;onSent:()=>void}>({canSend:false,states:{},onSent:()=>{}});
+export const QuestionContext=createContext<{canSend:boolean;expectedTurnId?:string;states:Json;onSent:()=>void;threadId?:string;projectRoot?:string;onOpenFile?:(path:string,fragment?:string)=>void}>({canSend:false,states:{},onSent:()=>{}});
 export function QuestionFields({questions,values,onChange,disabled=false}:{questions:Json[];values:Record<string,string>;onChange:(id:string,value:string)=>void;disabled?:boolean}){
-  const prefix=useId();
-  return <>{questions.map((q,index)=>{const id=q.id??String(index),options=q.options??[],free=!options.length||q.isOther!==false;return <fieldset key={id} disabled={disabled} className="question-fields"><legend>{q.question??q.title}</legend>{options.length?<div className="question-options">{options.map((o:any)=>{const label=typeof o==='string'?o:o.label;return <label key={label}><input type="radio" name={prefix+id} checked={values[id]===label} onChange={()=>onChange(id,label)}/><span>{label}{o.description?<small>{o.description}</small>:null}</span></label>;})}</div>:null}{free?<label>其他回答<input type={q.isSecret?'password':'text'} value={options.some((o:any)=>(typeof o==='string'?o:o.label)===values[id])?'':values[id]??''} onChange={e=>onChange(id,e.target.value)} maxLength={12000}/></label>:null}</fieldset>;})}</>;
+  const prefix=useId(),{threadId,projectRoot,onOpenFile}=useContext(QuestionContext);
+  return <>{questions.map((q,index)=>{const id=q.id??String(index),options=q.options??[],free=!options.length||q.isOther!==false,promptId=prefix+id+'-prompt';return <fieldset key={id} disabled={disabled} className="question-fields" aria-labelledby={promptId}>
+    <div id={promptId} className="question-prompt"><MarkdownView text={q.question??q.title??''} linkScope={'questions|'+(threadId??'')+'|'+(projectRoot??'')}
+      resolveImage={threadId&&projectRoot?url=>fileImageUrl(threadId,'',url,location.origin,projectRoot):undefined}
+      resolveUrl={threadId&&projectRoot?url=>chatFileUrl(threadId,projectRoot,url):undefined}
+      onLink={url=>{const path=threadId?linkedFile(threadId,'',url):'';if(!path||!onOpenFile)return false;onOpenFile(path,linkFragment(url));return true;}}/></div>
+    {options.length?<div className="question-options">{options.map((o:any)=>{const label=typeof o==='string'?o:o.label;return <label key={label}><input type="radio" name={prefix+id} checked={values[id]===label} onChange={()=>onChange(id,label)}/><span>{label}{o.description?<small>{o.description}</small>:null}</span></label>;})}</div>:null}{free?<label>其他回答<input type={q.isSecret?'password':'text'} value={options.some((o:any)=>(typeof o==='string'?o:o.label)===values[id])?'':values[id]??''} onChange={e=>onChange(id,e.target.value)} maxLength={12000}/></label>:null}</fieldset>;})}</>;
 }
 export function AsyncQuestions({item,threadId,turnId}:{item:Json;threadId:string;turnId:string}){
   const context=useContext(QuestionContext),[values,setValues]=useState<Record<string,string>>({}),[status,setStatus]=useState(''),[error,setError]=useState(''),sending=useRef(false),request=useRef<string|undefined>(undefined);

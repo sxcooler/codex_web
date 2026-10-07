@@ -5,6 +5,8 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, ty
 
 import { openAuth } from './auth.ts';
 import { registerApi } from './api.ts';
+import {registerCodexSettingsRoutes} from './codex-settings.ts';
+import {Instructions} from './instructions.ts';
 import type { Runtime } from '../codex/runtime.ts';
 import type { Projects } from '../projects.ts';
 import { registerStatic } from './static.ts';
@@ -13,6 +15,7 @@ import { createUploadService, registerUploadRoutes } from './uploads.ts';
 import { createPushService, registerPushRoutes } from './push.ts';
 import { configuredOrigins } from './origins.ts';
 import type {Diagnostics} from './diagnostics.ts';
+import type {WebRestart} from './restart.ts';
 
 const CSRF_COOKIE = 'codex_csrf';
 const SESSION_COOKIE = 'codex_session';
@@ -74,7 +77,7 @@ function passwordSchema(properties: Record<string, unknown>) {
 
 const passwordField = { type: 'string', minLength: 12, maxLength: 256 };
 
-export async function buildServer(options: { dataDir: string; origin: string; allowedOrigins?: unknown; runtime?: Runtime; projects?: Projects; distDir?: string;diagnostics?:Diagnostics }): Promise<FastifyInstance> {
+export async function buildServer(options: { dataDir: string; origin: string; allowedOrigins?: unknown; runtime?: Runtime; projects?: Projects; distDir?: string;diagnostics?:Diagnostics;webRestart?:WebRestart }): Promise<FastifyInstance> {
   const origins = configuredOrigins(options.origin, options.allowedOrigins);
   const originsByHost = new Map(origins.map(origin => [origin.host, origin]));
   const requestOrigins = new WeakMap<FastifyRequest, URL>();
@@ -155,7 +158,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     if (error.validation || error.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || error.statusCode === 400) {
       return reply.code(400).send({ error: 'Invalid request' });
     }
-    if (['PROJECT_ERROR', 'RUNTIME_ERROR', 'UPLOAD_ERROR', 'PUSH_ERROR', 'REPORT_ERROR'].includes(error.code ?? '') || error.code?.startsWith('RUNTIME_') || error.code?.startsWith('ACCOUNT_')) {
+    if (['PROJECT_ERROR', 'RUNTIME_ERROR', 'UPLOAD_ERROR', 'PUSH_ERROR', 'REPORT_ERROR'].includes(error.code ?? '') || error.code?.startsWith('RUNTIME_') || error.code?.startsWith('ACCOUNT_') || error.code?.startsWith('SETTINGS_') || error.code?.startsWith('INSTRUCTIONS_') || error.code?.startsWith('PLUGINS_')) {
       return reply.code(error.statusCode ?? 500).send({ error: error.message, code: error.code, partial: (error as any).partial });
     }
     return reply.code(500).send({ error: 'Internal server error' });
@@ -166,7 +169,8 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     const cookies = requestCookies.get(request) ?? {};
     const csrfToken = cookies.csrf ?? randomBytes(32).toString('base64url');
     if (!cookies.csrf) setCookie(reply, CSRF_COOKIE, csrfToken, requestOrigin(request).protocol === 'https:');
-    return { authenticated: auth.authenticate(cookies.session), csrfToken };
+    const authenticated = auth.authenticate(cookies.session);
+    return { authenticated, expired: !!cookies.session && !authenticated, csrfToken };
   });
 
   app.post(
@@ -189,6 +193,13 @@ export async function buildServer(options: { dataDir: string; origin: string; al
       return { authenticated: true };
     },
   );
+
+  app.post('/api/auth/renew', async (request, reply) => {
+    if (!auth.renewSession(authenticatedTokens.get(request)!)) {
+      return reply.code(401).send({ error: 'Authentication required' });
+    }
+    return { authenticated: true };
+  });
 
   app.post('/api/auth/logout', async (request, reply) => {
     auth.revokeSession(authenticatedTokens.get(request)!);
@@ -219,9 +230,24 @@ export async function buildServer(options: { dataDir: string; origin: string; al
   );
 
   app.get('/api/settings', async request => ({ origin: requestOrigin(request).origin, appVersion: packageInfo.version, nodeVersion: process.version,
-    workRoot: options.projects?.root, runtime: options.runtime ? await options.runtime.diagnostics() : undefined,modelSource:options.runtime?.modelInfo?.() }));
+    workRoot: options.projects?.root, runtime: options.runtime ? await options.runtime.diagnostics({currentOnly:true}) : undefined,modelSource:options.runtime?.modelInfo?.(),
+    diagnostics:options.diagnostics?.status()??{enabled:false,lastWriteAt:null,dropped:0,writeFailures:0},
+    webRestart: options.webRestart ? await options.webRestart.status() : {available:false,status:'idle',reason:'当前启动方式不支持从页面重启 Web 服务。'} }));
+  app.post('/api/server/restart', {schema:passwordSchema({confirmed:{type:'boolean',const:true}})}, async () => {
+    if (!options.webRestart || !options.runtime) throw Object.assign(new Error('当前启动方式不支持从页面重启 Web 服务。'), {statusCode:503,code:'RUNTIME_RESTART_UNAVAILABLE'});
+    await options.runtime.assertNativeIdle();
+    return options.webRestart.schedule();
+  });
+  app.get('/api/server/restart', async () => options.webRestart ? options.webRestart.status() : {available:false,status:'idle'});
+  app.get('/api/runtime/restart-check', async () => {
+    if(!options.runtime)throw Object.assign(new Error('无法查询本机 Codex App Server 的活动状态。'),{statusCode:503,code:'RUNTIME_UNAVAILABLE'});
+    await options.runtime.assertNativeIdle();
+    return {idle:true};
+  });
   try {
   if (options.runtime && options.projects) {
+    const instructions=new Instructions({codexHome:()=>options.runtime!.configurationHome(),projects:options.projects});
+    registerCodexSettingsRoutes(app,{runtime:options.runtime,projects:options.projects,instructions});
     const uploads = await createUploadService({dataDir:options.dataDir});
     app.addHook('onClose',async()=>uploads.close());
     const access={authenticated:(request:FastifyRequest)=>auth.authenticate(authenticatedTokens.get(request)),owner:(request:FastifyRequest)=>auth.sessionId(authenticatedTokens.get(request)!)};
