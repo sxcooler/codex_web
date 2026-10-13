@@ -2,7 +2,7 @@ import {test,expect,type Page,type Route} from '@playwright/test';
 
 const agent=(id:string,text:string,memoryCitation?:unknown)=>({id,type:'agentMessage',text,memoryCitation});
 const citation={entries:[{path:'MEMORY.md',lineStart:3,lineEnd:5,note:'保留原有草稿'},{path:'<img src=x onerror=alert(1)>',lineStart:8,lineEnd:8,note:'<script>window.citationExecuted=true</script> & "安全文本"'},null,{path:'bad',lineStart:'3',lineEnd:5,note:'invalid'}],threadIds:['original-thread']};
-const completed={id:'selected-turn',status:'completed',items:[agent('progress','中间说明'),{type:'commandExecution',id:'cmd',command:'echo test',status:'completed'},agent('final','**最终回答**',citation),{...agent('async','异步问题'),delivery:'async',questions:[{title:'是否继续',options:['是','否']}]}]};
+const completed={id:'selected-turn',status:'completed',items:[{...agent('progress','中间说明'),phase:'commentary'},{type:'commandExecution',id:'cmd',command:'echo test',status:'completed'},{...agent('final','**最终回答**',citation),phase:'final_answer'},{...agent('async','异步问题'),delivery:'async',questions:[{title:'是否继续',options:['是','否']}]}]};
 async function fixture(page:Page,options:{turns?:any[];fork?:(route:Route)=>Promise<void>;listFails?:()=>boolean}={}){
   const posts:any[]=[],requests:string[]=[],errors:string[]=[];
   page.on('pageerror',error=>errors.push(error.message));
@@ -40,6 +40,10 @@ test('fork appears only on the final ordinary assistant of completed turns',asyn
   await fixture(page,{turns:[completed,{id:'running',status:'inProgress',items:[agent('live','正在生成',citation)]},{id:'failed',status:'failed',items:[agent('failed-agent','失败回答')]}]});
   await expect(page.getByRole('button',{name:'分支到新聊天',exact:true})).toHaveCount(1);
   await expect(message(page,'最终回答').getByRole('button',{name:'分支到新聊天',exact:true})).toBeVisible();
+  await expect(message(page,'中间说明')).toHaveCount(0);
+  await page.locator('[data-turn-id="selected-turn"] > .execution-process > summary').click();
+  await expect(message(page,'中间说明')).toBeVisible();
+  await expect(message(page,'中间说明').getByRole('button',{name:'分支到新聊天',exact:true})).toHaveCount(0);
   await expect(message(page,'正在生成').getByRole('button',{name:'引用的记忆'})).toHaveCount(0);
   await page.getByRole('button',{name:/加载更早/}).click();
   await expect(message(page,'历史回答').getByRole('button',{name:'分支到新聊天',exact:true})).toBeVisible();

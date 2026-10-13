@@ -400,7 +400,7 @@ test('same-epoch newly created empty thread falls back to authoritative metadata
   assert.deepEqual(window.history, { nextCursor: null });
   assert.deepEqual(window.thread.turns, []);
   assert.equal(window.unmaterialized, true);
-  assert.deepEqual(await runtime.status(threadId, window.epoch), { resync: false });
+  assert.equal((await runtime.status(threadId, window.epoch)).resync,false);
 });
 
 test('current native unmaterialized error uses the same narrow empty-thread fallback', async (t) => {
@@ -449,7 +449,7 @@ test('unsupported turn pagination reads accepted first turn from full native his
   const snapshot = await runtime.snapshot(threadId, { window: true });
   assert.equal(snapshot.thread.turns.length, 1);
   assert.equal(snapshot.thread.turns[0].items[0].clientId, 'first-turn');
-  assert.deepEqual(await runtime.status(threadId, snapshot.epoch), { resync: false });
+  assert.equal((await runtime.status(threadId, snapshot.epoch)).resync,false);
   await runtime.abort(threadId);
 });
 
@@ -1011,7 +1011,7 @@ test('native lifecycle notifications emit small stable Push events without snaps
   await runtime.send(threadId, { text: 'approval', clientRequestId: 'approval' });
   await (runtime as any).call('fixture/stats', {});
   assert.equal(events.at(-1).kind, 'approval');
-  assert.deepEqual(Object.keys(events[0]).sort(), ['eventKey','kind','threadId']);
+  assert.deepEqual(Object.keys(events[0]).sort(), ['eventKey','kind','threadId','turnId']);
 });
 
 test('subagent threads are excluded from lists, direct entry and every notification kind', async t => {
@@ -1143,6 +1143,6 @@ test('session listing uses the native state index and preserves cursor/source fi
   const runtime=start(t);let args:any;
   t.mock.method(runtime as any,'call',async(method:string,input:any)=>{assert.equal(method,'thread/list');args=input;return {data:[{id:'listed'}],nextCursor:'next'};});
   const result=await runtime.list('page');assert.equal(args.useStateDbOnly,true);assert.equal(args.cursor,'page');assert.deepEqual(args.sourceKinds,['cli','vscode','appServer','exec']);assert.equal(result.nextCursor,'next');assert.equal(result.data[0].id,'listed');
-  assert.equal(args.sortKey,'updated_at');assert.equal(args.sortDirection,'desc');
+  assert.equal(args.sortKey,'recency_at');assert.equal(args.sortDirection,'desc');
   await runtime.list('next',true,'created_at');assert.equal(args.sortKey,'created_at');assert.equal(args.archived,true);
 });

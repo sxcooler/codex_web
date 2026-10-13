@@ -24,6 +24,7 @@ for (const width of [1280, 390]) test(`Codex document anchors and line reference
     else if (path === '/api/permission-modes') data = { modes: [] };
     else if (path === '/api/sessions/anchors') data = { project: { id: 'anchor-project', path: 'C:/work/project' }, thread: { id: 'anchors', turns: [{ id: 'turn', status: 'completed', items: [{ id: 'answer', type: 'agentMessage', text }] }] }, phase: 'IDLE', pending: [] };
     else if (path.endsWith('/files')) data = { files: [{ path: 'docs/guide.md', type: 'file' }, { path: 'docs/next.md', type: 'file' }] };
+    else if (path.endsWith('/files/entry')) data = { path: url.searchParams.get('path'), type: 'file' };
     else if (path.endsWith('/files/content')) { reads.push(url.searchParams.get('path')!); data = { text: url.searchParams.get('path') === 'docs/next.md' ? '# 下一文档\n\n' + padding + '\n\n## 下一步\n\n正确目标\n\n' + padding : document }; }
     await route.fulfill({ json: data });
   });

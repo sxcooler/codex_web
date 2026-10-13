@@ -1,0 +1,8 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Git 刷新提示回归</title>
+<style>#root{max-width:650px;margin:auto}#right-sidebar{height:calc(100dvh - 40px)}</style><div id="root"></div>
+<script type="module">
+import '/src/web/style.css';import React from 'react';import{createRoot}from'react-dom/client';import{GitPanel}from'/src/web/GitPanel.tsx';
+const root=createRoot(document.querySelector('#root'));
+window.renderNoticeSession=(id='notice-session')=>root.render(React.createElement(GitPanel,{id,projectId:'notice-project',tick:0,visible:true}));
+window.renderNoticeSession();
+</script></html>

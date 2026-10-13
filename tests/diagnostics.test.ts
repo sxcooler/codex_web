@@ -134,7 +134,7 @@ test('two read-only history requests share a project key without taking ownershi
   await runtime.close();await done;
 });
 
-test('the real server entry writes periodic diagnostics without starting an idle native runtime',async t=>{
+test('the real server entry writes periodic diagnostics without diagnostic requests starting native business work',async t=>{
   t.mock.method(childProcess,'spawnSync',(executable:string,args:string[],options:any)=>{assert.match(executable,/must-not-be-spawned$/);assert.deepEqual(args,['--version']);assert.equal(options.shell,false);assert.equal(options.windowsHide,true);assert.equal(options.timeout,10_000);assert.equal(options.maxBuffer,16_384);return {status:0,stdout:'codex-cli 0.160.1\n'};});
   const dir=await mkdtemp(join(tmpdir(),'codex-diagnostics-')),probe=createServer();
   await new Promise<void>(resolve=>probe.listen(0,'127.0.0.1',resolve));const port=(probe.address() as any).port;
@@ -150,7 +150,9 @@ test('the real server entry writes periodic diagnostics without starting an idle
   assert.equal((await app.inject({url:'/api/auth/session',headers:{host:`127.0.0.1:${port}`}})).statusCode,200);
   let events:any[]=[];const deadline=Date.now()+13_000;
   while(!events.some(v=>v.event==='sample')&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,100));events=(await readFile(join(dir,'diagnostics.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));}
-  assert.ok(events.some(v=>v.event==='sample'&&v.runtime.inFlight===0&&!v.runtime.native));assert.equal(events.filter(v=>v.event==='native_start').length,0);
+  assert.ok(events.some(v=>v.event==='sample'&&v.runtime.inFlight===0&&!v.runtime.native));const bootstrapStarts=events.filter(v=>v.event==='native_start').length;assert.ok(bootstrapStarts<=1,'only independent project bootstrap may start the idle runtime');assert.ok(!events.some(v=>['thread/start','turn/start'].includes(v.method)));
+  assert.equal((await app.inject({url:'/api/auth/session',headers:{host:`127.0.0.1:${port}`}})).statusCode,200);await new Promise(resolve=>setTimeout(resolve,50));
+  const afterRequest=(await readFile(join(dir,'diagnostics.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(afterRequest.filter(v=>v.event==='native_start').length,bootstrapStarts);assert.ok(!afterRequest.some(v=>['thread/start','turn/start'].includes(v.method)));assert.equal(afterRequest.filter(v=>v.event==='rpc_start').length,events.filter(v=>v.event==='rpc_start').length,'diagnostic/session requests must not add native RPC after settled bootstrap');
   await app.close();assert.match(await readFile(join(dir,'diagnostics.jsonl'),'utf8'),/"event":"stop"/);
   const saved=await readFile(join(dir,'diagnostics.jsonl'),'utf8');app=await startServer();await app.close();
   assert.equal(await readFile(join(dir,'diagnostics.jsonl'),'utf8'),saved,'normal restart must not inherit diagnostics or erase previous logs');

@@ -4,7 +4,7 @@ import '/src/web/style.css';import React from 'react';import{createRoot}from'rea
 const h=React.createElement,root=createRoot(document.querySelector('#root')),check=(v,m)=>{if(!v)throw Error(m)},pause=ms=>new Promise(r=>setTimeout(r,ms));
 const storageSet=Storage.prototype.setItem;let storageWrites=0;Storage.prototype.setItem=function(key,value){if(key.startsWith('codex.project-panel.'))storageWrites++;return storageSet.call(this,key,value);};
 const markdown=Array.from({length:40},(_,i)=>'## Section '+i+'\n\nText with **emphasis** and [child](child.md).\n\n| A | B |\n|---|---|\n| one | two |\n\n```typescript\nconst item = '+i+';\n```').join('\n\n');
-window.fetch=async input=>String(input).includes('/files/content?')?Response.json({text:markdown}):Response.json({files:[{path:'README.md',type:'file'}]});
+window.fetch=async input=>String(input).includes('/files/entry?')?Response.json({path:new URL(String(input),location.origin).searchParams.get('path'),type:'file'}):String(input).includes('/files/content?')?Response.json({text:markdown}):Response.json({files:[{path:'README.md',type:'file'}]});
 localStorage.setItem('codex.project-panel.performance',JSON.stringify({tab:'files',files:{path:'README.md'}}));
 let diffsRead=0;const lines=Array.from({length:1000},(_,i)=>({kind:'add',newLine:i+1,text:'const example = '+i+';'})),diff={hunks:[{oldStart:1,newStart:1,oldLines:0,newLines:1000,get lines(){diffsRead++;return lines;}}]};
 const renderDiff=label=>root.render(h('div',null,h('span',null,label),h(DiffView,{content:diff})));

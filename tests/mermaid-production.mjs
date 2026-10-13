@@ -25,7 +25,7 @@ const port=Number(process.env.MERMAID_TEST_PORT??3199),origin=`http://127.0.0.1:
 let app,browser;
 try{
  await initializeAuth(dataDir,'mermaid-test-password');
- app=await buildServer({dataDir,origin,distDir:resolve('dist')});await app.listen({host:'127.0.0.1',port});
+ app=await buildServer({dataDir,origin,distDir:resolve(process.env.MERMAID_TEST_DIST??'dist')});await app.listen({host:'127.0.0.1',port});
  browser=await chromium.launch({channel:'chrome',headless:true});
  await mkdir('.local/mermaid-csp',{recursive:true});
  for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
@@ -38,11 +38,12 @@ try{
   });
   const id='mermaid-csp',path='docs/diagram.md',snapshot={project:{id:'project',path:'/example/project'},thread:{id,name:'Mermaid 样式验证',cwd:'/example/project',turns:[{id:'turn',status:'completed',items:[{id:'answer',type:'agentMessage',text:`[打开测试文档](${path})`}]}]},phase:'IDLE',pending:[]};
   await page.route('**/api/**',route=>{
-   const p=new URL(route.request().url()).pathname;let value={};
+   const url=new URL(route.request().url()),p=url.pathname;let value={};
    if(p==='/api/auth/session')value={authenticated:true,csrfToken:'test'};
    else if(p==='/api/projects')value={projects:[snapshot.project]};
    else if(p==='/api/sessions')value={data:[snapshot.thread]};
    else if(p==='/api/sessions/'+id)value=snapshot;
+   else if(p.endsWith('/files/entry'))value={path:url.searchParams.get('path'),type:'file'};
    else if(p.endsWith('/files/content'))value={text};
    else if(p.endsWith('/files'))value={files:[{path,type:'file'}]};
    else if(p==='/api/models')value={data:[]};
@@ -111,4 +112,4 @@ try{
   console.log(`${viewport.width}: PASS (${await diagrams.count()} diagrams, stable loading height, real server CSP, dark colors, fullscreen${viewport.width<600?', touch pan/reset and inline scroll':''}, inline scripts blocked)`);
   await page.close();
  }
-}finally{await browser?.close();await app?.close();await rm(dataDir,{recursive:true,force:true});}
+}finally{await browser?.close();await app?.close();assert.ok(resolve(dataDir).startsWith(join(tmpdir(),'codex-mermaid-csp-')));await rm(dataDir,{recursive:true,force:true});}

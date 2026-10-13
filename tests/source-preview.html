@@ -1,0 +1,44 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/icon.svg"><title>源码高亮回归</title><div id="root"></div>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {GitPanel} from '/src/web/GitPanel.tsx';
+import '/src/web/style.css';
+const root=createRoot(document.querySelector('#root')),h=React.createElement;
+window.previewState={path:'example.ts',text:'const greeting: string = "你好";\n  console.log(greeting);\n\n',tick:0,workers:[]};
+const state=window.previewState;
+window.fetch=async path=>{
+ const url=new URL(path,location.origin);
+ if(url.pathname.endsWith('/files/entry'))return Response.json({path:url.searchParams.get('path'),type:'file'});
+ if(url.pathname.endsWith('/files/content'))return Response.json({text:state.text});
+ if(url.pathname.endsWith('/files'))return Response.json({files:[{path:state.path,type:'file'}]});
+ if(url.pathname.endsWith('/git/files'))return Response.json({files:[],revision:null});
+ throw Error('Unexpected fixture API '+url.pathname);
+};
+const source=new URLSearchParams(location.search).has('baseline')?null:await import('/src/web/SourcePreview.tsx');
+window.previewRenderer=source?'source':'baseline';
+window.renderPreview=(path,text,anchor)=>{
+ Object.assign(state,{path,text,anchor});state.tick++;
+ root.render(source?h('aside',{className:'git-panel',style:{display:'block',width:'min(100%,800px)',height:600}},h('section',{className:'file-preview'},h('div',{className:'preview-content','aria-label':'文件内容',style:{height:340,maxHeight:340,overflow:'auto'}},h(source.SourcePreview,{path,text,anchor})))):h(GitPanel,{id:'preview-test',projectId:'preview-project',visible:true,tick:state.tick,openFile:{path,fragment:anchor?.fragment}}));
+};
+const NativeWorker=window.Worker;
+window.controlWorkers=mode=>{
+ if(mode==='real')window.Worker=class extends NativeWorker{
+  constructor(...args){super(...args);state.workers.push(this);this.startedAt=performance.now();this.terminated=false;}
+  terminate(){this.terminated=true;super.terminate();}
+ };
+ else window.Worker=class{
+  constructor(){if(mode==='throw')throw Error('Fixture worker startup failed');state.workers.push(this);this.startedAt=performance.now();this.terminated=false;}
+  postMessage(options){this.options=options;}
+  terminate(){this.terminated=true;}
+ };
+};
+window.replyWorker=(index,kind='exact')=>{
+ const worker=state.workers[index];
+ if(kind==='error'){worker.onerror({preventDefault(){}});return;}
+ if(kind==='messageerror'){worker.onmessageerror();return;}
+ worker.onmessage({data:{tokens:kind==='wrong'?[[{content:'wrong cached source'}]]:worker.options.code.split('\n').map(content=>[{content,color:'#f97583'}])}});
+};
+window.renderMarkdown=async text=>{const {Markdown}=await import('/src/web/Markdown.tsx');root.render(h(Markdown,{text}));};
+window.controlWorkers('real');window.renderPreview(state.path,state.text);
+</script></html>

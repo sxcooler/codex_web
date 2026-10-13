@@ -1,6 +1,15 @@
 import type {Json} from './api.ts';
 const object=(value:unknown):value is Json=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const terminal=(turn:Json)=>['completed','interrupted','failed'].includes(turn.status);
+// A recent window refreshes live state without collapsing the history already expanded here.
+export function mergeSnapshot(previous:Json|null,next:Json):Json{
+  if(!previous?.history||!next.history||previous.historyPending||next.historyPending||previous.epoch!==next.epoch||previous.thread?.id!==next.thread?.id)return next;
+  const turns:Json[]=previous.thread.turns??[],start=turns.findIndex(turn=>turn.id===next.thread.turns?.[0]?.id);
+  if(start<1)return next;
+  const attachments=new Map((previous.attachmentPreviews??[]).map((file:Json)=>[file.path,file]));
+  for(const file of next.attachmentPreviews??[])attachments.set(file.path,file);
+  return {...next,history:previous.history,inputAnswers:{...previous.inputAnswers,...next.inputAnswers},attachmentPreviews:[...attachments.values()],thread:{...next.thread,turns:[...turns.slice(0,start),...next.thread.turns]}};
+}
 // Returns null when this event cannot safely extend the current baseline.
 export function applyChange(snapshot:Json,event:Json):Json|null{
   if(!object(event)||event.threadId!==snapshot.thread?.id||event.kind==='resync'||typeof event.id!=='string'||event.id.split(':')[0]!==snapshot.epoch||!Number.isSafeInteger(event.revision))return null;

@@ -6,6 +6,29 @@ import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { launchPreference } from '../scripts/portable.ts';
+import {setTimeout as delay} from 'node:timers/promises';
+
+test('managed worker close failure releases HTTP, control and its record while preserving the error', {timeout:10_000},async()=>{
+ const root=await mkdtemp(join(tmpdir(),'codex close failure '));let worker:ReturnType<typeof spawn>|undefined;
+ try{
+  for(const dir of ['scripts','src/server','.local/web'])await mkdir(join(root,dir),{recursive:true});
+  await copyFile(new URL('../scripts/server-control.ts',import.meta.url),join(root,'scripts/server-control.ts'));
+  await copyFile(new URL('../src/server/lifecycle.ts',import.meta.url),join(root,'src/server/lifecycle.ts'));
+  await writeFile(join(root,'src/server/main.ts'),`import {createServer} from 'node:http';import {writeFile} from 'node:fs/promises';export async function startServer(){const server=createServer((req,res)=>res.end('fixture'));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));await writeFile(new URL('../../.local/web/fixture-port.json',import.meta.url),JSON.stringify(server.address().port));return {prepareRestart:async()=>{},close:async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));throw Error('native-close-failure');}};}`);
+  worker=spawn(process.execPath,[join(root,'scripts/server-control.ts'),'--worker'],{cwd:root,windowsHide:true});
+  let stderr='';worker.stderr!.on('data',chunk=>stderr+=chunk);const exited=Promise.withResolvers<number|null>();worker.once('close',code=>exited.resolve(code));
+  const record=join(root,'.local/web/server-control.json');let state:any;
+  for(let attempt=0;attempt<100&&!state;attempt++){state=await readFile(record,'utf8').then(JSON.parse,()=>null);if(!state)await delay(20);}
+  assert.ok(state,'isolated worker must publish its control identity');
+  const port=JSON.parse(await readFile(join(root,'.local/web/fixture-port.json'),'utf8')),web=`http://127.0.0.1:${port}`,control=`http://127.0.0.1:${state.port}`;
+  assert.equal((await fetch(web)).status,200);
+  assert.equal((await fetch(control+'/stop-idle',{method:'POST',headers:{Authorization:`Bearer ${state.token}`,Connection:'close'}})).status,200);
+  const result=await Promise.race([exited.promise.then(code=>({exited:true,code})),delay(1500).then(()=>({exited:false,code:null}))]);
+  const webListening=await fetch(web).then(()=>true,()=>false),controlListening=await fetch(control+'/status',{headers:{Authorization:`Bearer ${state.token}`}}).then(()=>true,()=>false),recordPresent=await readFile(record,'utf8').then(()=>true,()=>false);
+  console.log('isolated close failure evidence',JSON.stringify({webListening,controlListening,recordPresent,...result,stderr}));
+  assert.equal(webListening,false);assert.equal(controlListening,false);assert.equal(recordPresent,false);assert.equal(result.exited,true,'worker must exit without waiting for the stop-controller polling deadline');assert.equal(result.code,1);assert.match(stderr,/native-close-failure/);
+ }finally{if(worker&&worker.exitCode===null&&worker.signalCode===null){worker.kill();await new Promise<void>(resolve=>worker!.once('close',()=>resolve()));}await rm(root,{recursive:true,force:true});}
+});
 
 test('portable remembers explicit launch preference and never changes unattended defaults',async()=>{
   assert.equal(await launchPreference({}),false);
@@ -54,6 +77,7 @@ test('background startup survives launcher exit, authenticates control, reuses a
   try {
     await mkdir(join(root,'scripts'),{recursive:true}); await mkdir(join(root,'src/server'),{recursive:true}); await mkdir(join(root,'.local/web'),{recursive:true});
     await copyFile(new URL('../scripts/server-control.ts',import.meta.url),join(root,'scripts/server-control.ts'));
+    await copyFile(new URL('../src/server/lifecycle.ts',import.meta.url),join(root,'src/server/lifecycle.ts'));
     await mkdir(join(root,'scripts/windows'),{recursive:true});
     await copyFile(new URL('../scripts/windows/background-host.ps1',import.meta.url),join(root,'scripts/windows/background-host.ps1'));
     await writeFile(join(root,'.local/web/config.json'),JSON.stringify({origin:`http://localhost:${port}`}));

@@ -10,7 +10,7 @@ async function setup(page:Page){
     else if(path==='/api/sessions')data={data:[],nextCursor:null};
     else if(path==='/api/models')data={data:[]};
     else if(path==='/api/permission-modes')data={modes:[]};
-    else if(path.endsWith('/open')){state.opens++;if(state.holdOpen)await new Promise<void>(resolve=>{state.finishOpen=resolve;});if(state.failOpen){status=state.denied?403:503;data={error:'测试：运行时暂不可用',code:state.denied?'FORBIDDEN':'RUNTIME_UNAVAILABLE'};}else data={phase:state.external?'EXTERNAL':state.snapshot.phase};}
+    else if(path.endsWith('/open')){state.opens++;if(state.holdOpen)await new Promise<void>(resolve=>{state.finishOpen=resolve;});if(state.failOpen){status=state.denied?403:503;data={error:'测试：运行时暂不可用',code:state.denied?'FORBIDDEN':'RUNTIME_UNAVAILABLE'};}else{if(state.snapshot.phase==='UNKNOWN')state.snapshot.phase='IDLE';data={phase:state.external?'EXTERNAL':state.snapshot.phase};}}
     else if(path==='/api/sessions/recovery'){if(state.holdRead){state.reading=true;await new Promise<void>(resolve=>{state.finishRead=resolve;});}data={...state.snapshot,...(state.external?{phase:'EXTERNAL',activeTurnId:null}:{})};}
     else if(path.endsWith('/status'))data={resync:false};
     else if(path.endsWith('/messages')){
@@ -32,10 +32,10 @@ for(const width of [1440,390])test(`refresh during an unacknowledged send recove
   state.holdSend=true;await page.getByRole('button',{name:'发送',exact:true}).click();
   await expect.poll(()=>state.posted.length).toBe(1);
   state.failOpen=true;await page.reload();
-  await expect(page.locator('.composer')).toContainText('会话占用状态未确认');
+  await expect(page.locator('.connection')).toHaveText('运行中');expect(state.opens).toBe(0);
   await expect(page.locator('.timeline')).toContainText('刷新前已发送的任务');
   await page.getByRole('textbox',{name:'继续这个会话'}).fill('下一条指令');
-  await expect(page.getByRole('button',{name:'插话',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'插话',exact:true})).toBeEnabled();
   await page.screenshot({path:`.local/session-open-${width}-pending.png`});
   state.failOpen=false;state.finishSend();
   await expect(page.getByRole('button',{name:'插话',exact:true})).toBeEnabled({timeout:7000});
@@ -46,7 +46,7 @@ for(const width of [1440,390])test(`refresh during an unacknowledged send recove
 });
 
 test('persistent open failures are bounded and manual retry still verifies external ownership',async({page})=>{
-  const state=await setup(page);state.failOpen=true;await page.goto('/sessions/recovery');
+  const state=await setup(page);state.failOpen=true;state.snapshot.phase='UNKNOWN';await page.goto('/sessions/recovery');await page.getByRole('button',{name:'接续会话',exact:true}).click();
   await page.getByRole('textbox',{name:'继续这个会话'}).fill('不要自动发送');
   await expect(page.locator('.composer')).toContainText('测试：运行时暂不可用');
   await expect.poll(()=>state.opens,{timeout:9000}).toBe(3);
@@ -54,18 +54,17 @@ test('persistent open failures are bounded and manual retry still verifies exter
   expect(state.opens).toBe(3);
   await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
   state.failOpen=false;state.external=true;
-  await page.locator('.composer').getByRole('button',{name:'重试',exact:true}).click();
+  await page.locator('.composer').getByRole('button',{name:'接续会话',exact:true}).click();
   await expect(page.locator('.composer')).toContainText('已在另一个应用中打开');
   await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
   expect(state.posted).toHaveLength(0);
-  state.external=false;await page.getByRole('button',{name:'操作',exact:true}).click();
-  await page.getByRole('button',{name:'刷新当前会话'}).click();
+  state.external=false;await page.getByRole('button',{name:'接续会话',exact:true}).click();
   await expect(page.getByRole('button',{name:'发送',exact:true})).toBeEnabled();
 });
 
 test('an open timeout recovers through a fresh open, not through a successful history read',async({page})=>{
   test.setTimeout(45_000);
-  const state=await setup(page);state.holdOpen=true;await page.goto('/sessions/recovery');
+  const state=await setup(page);state.holdOpen=true;state.snapshot.phase='UNKNOWN';await page.goto('/sessions/recovery');await page.getByRole('button',{name:'接续会话',exact:true}).click();
   await expect(page.locator('.composer')).toContainText('核对超时',{timeout:35_000});
   await page.getByRole('textbox',{name:'继续这个会话'}).fill('超时后继续');
   await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
@@ -74,16 +73,16 @@ test('an open timeout recovers through a fresh open, not through a successful hi
   expect(state.opens).toBe(2);expect(state.posted).toHaveLength(0);
 });
 
-test('recovery keeps stale running controls locked until the new ownership snapshot arrives',async({page})=>{
+test('recovery keeps controls locked until the new ownership snapshot arrives',async({page})=>{
   const state=await setup(page);state.failOpen=true;
-  state.snapshot.phase='RUNNING';state.snapshot.activeTurnId='turn';
-  await page.goto('/sessions/recovery');
+  state.snapshot.phase='UNKNOWN';state.snapshot.activeTurnId='turn';
+  await page.goto('/sessions/recovery');await page.getByRole('button',{name:'接续会话',exact:true}).click();
   await expect(page.locator('.composer')).toContainText('会话占用状态未确认');
   await page.getByRole('textbox',{name:'继续这个会话'}).fill('不能发给旧轮次');
-  state.failOpen=false;state.external=true;state.holdRead=true;
+  state.failOpen=false;state.snapshot.phase='RUNNING';state.external=true;state.holdRead=true;
   await expect.poll(()=>state.reading,{timeout:7000}).toBe(true);
   await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
-  await expect(page.getByRole('button',{name:'插话',exact:true})).toBeDisabled();
+  await expect(page.locator('.composer button.primary:visible')).toBeDisabled();
   state.holdRead=false;state.finishRead();
   await expect(page.locator('.composer')).toContainText('已在另一个应用中打开');
   await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
@@ -91,18 +90,18 @@ test('recovery keeps stale running controls locked until the new ownership snaps
 });
 
 test('permission failures do not retry and leaving cancels transient recovery',async({page})=>{
-  const state=await setup(page);state.failOpen=true;state.denied=true;
-  await page.goto('/sessions/recovery');await expect(page.locator('.composer')).toContainText('会话占用状态未确认');
+  const state=await setup(page);state.failOpen=true;state.denied=true;state.snapshot.phase='UNKNOWN';
+  await page.goto('/sessions/recovery');await page.getByRole('button',{name:'接续会话',exact:true}).click();await expect(page.locator('.composer')).toContainText('会话占用状态未确认');
   await page.clock.install();await page.clock.runFor(10_000);expect(state.opens).toBe(1);
-  state.denied=false;await page.locator('.composer').getByRole('button',{name:'重试',exact:true}).click();
+  state.denied=false;await page.locator('.composer').getByRole('button',{name:'接续会话',exact:true}).click();
   await expect.poll(()=>state.opens).toBe(2);
   await page.getByRole('button',{name:'＋ 新任务',exact:true}).click();
   await expect(page).toHaveURL(/\/$/);await page.clock.runFor(10_000);expect(state.opens).toBe(2);
 });
 
 test('an open error remains visible while history is still loading',async({page})=>{
-  const state=await setup(page);state.failOpen=true;state.holdRead=true;
-  await page.goto('/sessions/recovery');
+  const state=await setup(page);state.failOpen=true;state.snapshot.phase='UNKNOWN';
+  await page.goto('/sessions/recovery');await expect(page.locator('.connection')).toHaveText('待核实');state.holdRead=true;await page.getByRole('button',{name:'接续会话',exact:true}).click();
   await expect.poll(()=>state.reading).toBe(true);
   await expect(page.locator('.composer')).toContainText('测试：运行时暂不可用');
   await page.getByRole('textbox',{name:'继续这个会话'}).fill('仍需确认');

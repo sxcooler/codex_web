@@ -2,6 +2,7 @@ import {useEffect,useId,useRef,useState} from 'react';
 import {api} from './api.ts';
 import {drafts,type ForkResult} from './drafts.ts';
 import {navigate} from './navigation.ts';
+import {markSessionWrite,releaseOnLeave} from './handoff.ts';
 
 type Entry={path:string;lineStart:number;lineEnd:number;note:string};
 type Props={threadId:string;turnId?:string;canFork:boolean;memoryCitation?:unknown;onChanged?:()=>Promise<void>};
@@ -38,12 +39,15 @@ export function MessageActions({threadId,turnId,canFork,memoryCitation,onChanged
     try{
       const response=await api('/sessions/'+encodeURIComponent(threadId)+'/fork',{lastTurnId:turnId,clientRequestId:crypto.randomUUID()},AbortSignal.timeout(45_000));
       if(!threadIdValid(response.threadId,threadId))throw new Error('服务器未返回有效的新会话。');
+      markSessionWrite(response.threadId);
       if(response.status!=='idle')throw Object.assign(new Error('服务器未返回有效的新会话状态。'),{data:{partial:{threadId:response.threadId}}});
       save({status:'created',threadId:response.threadId,message:typeof response.warning==='string'?response.warning:undefined});
       void onChanged?.().catch(()=>{});
       if(mounted.current&&location.pathname==='/sessions/'+threadId)navigate('/sessions/'+response.threadId);
+      else if(location.pathname!=='/sessions/'+response.threadId)void releaseOnLeave(response.threadId).catch(()=>{});
     }catch(error:any){
       const partial=threadIdValid(error.data?.partial?.threadId,threadId)?error.data.partial.threadId:undefined;
+      if(partial){markSessionWrite(partial);if(location.pathname!=='/sessions/'+partial)void releaseOnLeave(partial).catch(()=>{});}
       const definite=!partial&&typeof error.data?.error==='string'&&(
         !error.data.code&&[400,401,403].includes(error.status)||
         ['RUNTIME_NOT_FOUND','RUNTIME_SUBAGENT_THREAD','RUNTIME_FORK_TURN_INCOMPLETE','RUNTIME_IDEMPOTENCY_CONFLICT','RUNTIME_FORK_UNSUPPORTED','RUNTIME_THREAD_CONFLICT'].includes(error.data.code)&&error.status>=400&&error.status<500);

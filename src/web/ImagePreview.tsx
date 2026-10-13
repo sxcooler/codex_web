@@ -16,9 +16,9 @@ function NativeImage({src,label}:{src:string;label:string}){
   </figure>;
 }
 
-export function ImagePreview({id,path,version,revision}:{id:string;path:string;version:string;revision?:string}){
+export function ImagePreview({id,path,version,revision,repository}:{id:string;path:string;version:string;revision?:string;repository?:string}){
   const [status,setStatus]=useState<'loading'|'ready'|'error'>('loading');
-  const src='/api/sessions/'+encodeURIComponent(id)+'/files/image?path='+encodeURIComponent(path)+'&v='+encodeURIComponent(version)+(revision?'&revision='+encodeURIComponent(revision):'');
+  const src='/api/sessions/'+encodeURIComponent(id)+'/files/image?path='+encodeURIComponent(path)+'&v='+encodeURIComponent(version)+(revision?'&revision='+encodeURIComponent(revision)+(repository!==undefined?'&repository='+encodeURIComponent(repository):''):'');
   return <div className="image-preview">
     {status==='loading'?<p className="muted" role="status">读取图片…</p>:null}
     {status==='error'?<p className="notice error" role="alert">图片预览不可用，请检查文件是否已变更、损坏或超过限制。</p>:null}
@@ -27,9 +27,9 @@ export function ImagePreview({id,path,version,revision}:{id:string;path:string;v
     <p className="muted small">预览最长边 2048 像素；动图显示首帧。支持 20 MiB / 4000 万像素以内的图片。</p>
   </div>;
 }
-export function ImageDiff({id,images,version,split=false}:{id:string;images:Json;version:string;split?:boolean}){
+export function ImageDiff({id,images,version,split=false,repository}:{id:string;images:Json;version:string;split?:boolean;repository?:string}){
   return <div className={'image-diff'+(split?' split':'')}>{(['before','after'] as const).map(side=>{
     const source=images[side];
-    return <section key={side}><h4>{side==='before'?'变更前':'变更后'}</h4>{source?<ImagePreview key={id+'|'+source.path+'|'+source.revision+'|'+version} id={id} path={source.path} revision={source.revision} version={version}/>:<p className="muted">此版本中不存在（{side==='before'?'新增':'已删除'}）。</p>}</section>;
+    return <section key={side}><h4>{side==='before'?'变更前':'变更后'}</h4>{source?<ImagePreview key={JSON.stringify([id,repository,source.path,source.revision,version])} id={id} path={source.path} revision={source.revision} repository={repository} version={version}/>:<p className="muted">此版本中不存在（{side==='before'?'新增':'已删除'}）。</p>}</section>;
   })}</div>;
 }

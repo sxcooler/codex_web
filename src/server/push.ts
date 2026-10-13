@@ -6,6 +6,7 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import webpush, { type PushSubscription } from 'web-push';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import {notificationTarget,type NotificationTarget} from '../codex/notificationTarget.ts';
 
 const PROVIDERS=new Set(['fcm.googleapis.com','updates.push.services.mozilla.com','web.push.apple.com']);
 const blocked=new BlockList();
@@ -17,7 +18,7 @@ function publicAddress(address:string){const mapped=/^(?:::ffff:|(?:0{1,4}:){5}f
 function sleep(ms:number){return new Promise<void>(resolve=>setTimeout(resolve,ms));}
 
 type Delivery={address:string;agent:Agent};
-type Options={dataDir:string;origin:string;sessionValid:(id:string)=>boolean|Promise<boolean>;resolve?:(host:string)=>Promise<string[]>;sleep?:(ms:number)=>Promise<void>;send?:(subscription:PushSubscription,payload:string,delivery:Delivery)=>Promise<{statusCode:number}>};
+type Options={dataDir:string;origin:string;sessionValid:(id:string)=>boolean|Promise<boolean>;resolve?:(host:string)=>Promise<string[]>;sleep?:(ms:number)=>Promise<void>;diagnostic?:(event:Record<string,unknown>)=>void;send?:(subscription:PushSubscription,payload:string,delivery:Delivery)=>Promise<{statusCode:number;error?:unknown}>};
 export async function createPushService(options:Options){
   await mkdir(options.dataDir,{recursive:true});const keyPath=join(options.dataDir,'vapid.json');
   let keys:{publicKey:string;privateKey:string};
@@ -28,7 +29,23 @@ export async function createPushService(options:Options){
   const resolveHost=options.resolve??(async host=>(await lookup(host,{all:true})).map(x=>x.address)),wait=options.sleep??sleep;
   async function endpoint(value:string){let url:URL;try{url=new URL(value);}catch{throw pushError(400,'Invalid push provider endpoint');}if(url.protocol!=='https:'||url.port||url.username||url.password||url.hash||!PROVIDERS.has(url.hostname)||isIP(url.hostname))throw pushError(400,'Unsupported push provider endpoint');return url;}
   async function pin(url:URL){const addresses=await resolveHost(url.hostname);if(!addresses.length||addresses.some(address=>!publicAddress(address)))throw pushError(400,'Push provider address is not public');const address=addresses[0],family=isIP(address) as 4|6;const agent=new Agent({lookup:(_hostname,lookupOptions,callback)=>lookupOptions?.all?callback(null,[{address,family}]):callback(null,address,family)});return{address,agent};}
-  const send=options.send??(async(subscription,payload,delivery)=>{try{const result=await webpush.sendNotification(subscription,payload,{TTL:300,timeout:10_000,agent:delivery.agent,vapidDetails:{subject:origin.origin,publicKey:keys.publicKey,privateKey:keys.privateKey}});return{statusCode:result.statusCode};}catch(error:any){return{statusCode:error?.statusCode??500};}});
+  const send=options.send??(async(subscription,payload,delivery)=>{try{const result=await webpush.sendNotification(subscription,payload,{TTL:300,timeout:10_000,agent:delivery.agent,vapidDetails:{subject:origin.origin,publicKey:keys.publicKey,privateKey:keys.privateKey}});return{statusCode:result.statusCode};}catch(error:any){return{statusCode:error?.statusCode??500,error};}});
+  function logFailure(error:unknown,row:any,threadId:string,statusCode:number,attempt:number,payload:string){
+    try{
+      const redact=(value:unknown,limit:number)=>{
+        if(typeof value!=='string'&&typeof value!=='number')return undefined;
+        let text=String(value);
+        for(const secret of [row.endpoint,row.p256dh,row.auth,keys.publicKey,keys.privateKey,payload])if(secret)text=text.replaceAll(secret,'[redacted]');
+        return text.replace(/\bhttps?:\/\/[^\s"'<>]+/gi,'[redacted-url]').replace(/["']?\b(?:authorization|proxy-authorization|p256dh|auth|vapid|headers?|body)["']?\s*[:=][\s\S]*/gi,'[redacted]').replace(/\b(?:Bearer|WebPush|vapid)\s+[^\r\n,;]+/gi,'[redacted]').slice(0,limit);
+      };
+      let provider:string|undefined;try{const host=new URL(row.endpoint).hostname;if(PROVIDERS.has(host))provider=host;}catch{}
+      const exception=error as any;
+      const entry={event:'push_error',time:new Date().toISOString(),pid:process.pid,threadId,provider,statusCode,attempt,
+        name:redact(exception?.name,64)??'Error',code:redact(exception?.code,64),message:redact(typeof error==='string'?error:exception?.message,1024)??`Push provider returned HTTP ${statusCode}`,stack:redact(exception?.stack,4096)};
+      try{console.error(JSON.stringify(entry));}catch{/* Logging cannot change delivery. */}
+      try{options.diagnostic?.(entry);}catch{/* Keep stderr independent of diagnostics. */}
+    }catch{/* Unreadable exception fields cannot change delivery. */}
+  }
   const service={
     available,
     publicKey:keys.publicKey,
@@ -37,12 +54,13 @@ export async function createPushService(options:Options){
     revokeOwner(ownerId:string){return Number(db.prepare('DELETE FROM subscriptions WHERE owner_id=?').run(ownerId).changes);},
     async pruneInvalid(){let removed=0;for(const row of db.prepare('SELECT id,owner_id FROM subscriptions').all() as any[])if(!await options.sessionValid(row.owner_id)){db.prepare('DELETE FROM subscriptions WHERE id=?').run(row.id);removed++;}return removed;},
     subscriptionCount(){return Number((db.prepare('SELECT COUNT(*) count FROM subscriptions').get() as any).count);},
-    async notify(event:{threadId:string;eventKey:string;kind:'complete'|'failed'|'approval'|'input'}){
+    async notify(event:NotificationTarget&{eventKey:string;kind:'complete'|'failed'|'approval'|'input'}){
+      const target=notificationTarget(event);if(!target)return{sent:0,removed:0};
       let sent=0,removed=0;if(!available)return{sent,removed};for(const row of db.prepare('SELECT * FROM subscriptions').all() as any[]){if(!await options.sessionValid(row.owner_id)){db.prepare('DELETE FROM subscriptions WHERE id=?').run(row.id);removed++;continue;}
         const reserved=db.prepare('INSERT OR IGNORE INTO deliveries VALUES(?,?,?,?)').run(row.id,event.threadId,event.eventKey,Date.now());if(!reserved.changes)continue;
-        const payload=JSON.stringify({title:event.kind==='approval'||event.kind==='input'?'需要确认':event.kind==='failed'?'任务失败':'任务完成',threadId:event.threadId,url:`/sessions/${encodeURIComponent(event.threadId)}`});let status=0;
-        try{const url=await endpoint(row.endpoint);for(let attempt=0;attempt<3;attempt++){const delivery=await pin(url);try{status=(await send({endpoint:row.endpoint,keys:{p256dh:row.p256dh,auth:row.auth}},payload,delivery)).statusCode;}finally{delivery.agent.destroy();}if(status!==429&&status<500)break;if(attempt<2)await wait(100*2**attempt);}}
-        catch{status=0;}
+        const payload=JSON.stringify({title:event.kind==='approval'||event.kind==='input'?'需要确认':event.kind==='failed'?'任务失败':'任务完成',...target,url:`/sessions/${encodeURIComponent(event.threadId)}`});let status=0,attempt=1;
+        try{const url=await endpoint(row.endpoint);for(attempt=1;attempt<=3;attempt++){const delivery=await pin(url);try{const result=await send({endpoint:row.endpoint,keys:{p256dh:row.p256dh,auth:row.auth}},payload,delivery);status=result.statusCode;if(result.error!==undefined||status<200||status>=300)logFailure(result.error,row,event.threadId,status,attempt,payload);}finally{delivery.agent.destroy();}if(status!==429&&status<500)break;if(attempt<3)await wait(100*2**(attempt-1));}}
+        catch(error){status=0;logFailure(error,row,event.threadId,status,attempt,payload);}
         if(status===404||status===410){db.prepare('DELETE FROM subscriptions WHERE id=?').run(row.id);db.prepare('DELETE FROM deliveries WHERE subscription_id=?').run(row.id);removed++;continue;}
         if(status>=200&&status<300){sent++;continue;}db.prepare('DELETE FROM deliveries WHERE subscription_id=? AND thread_id=? AND event_key=?').run(row.id,event.threadId,event.eventKey);
       }

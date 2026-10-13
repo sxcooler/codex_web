@@ -6,6 +6,15 @@ import test from 'node:test';
 import { AppServer } from '../src/codex/app-server.ts';
 
 const fixture = fileURLToPath(new URL('./fixtures/rpc-server.mjs', import.meta.url));
+test('native history diagnostics retain only exact error class code method and thread correlation',async t=>{
+ const events:any[]=[],server=start(t,{diagnostic:(event:any)=>events.push(event)}),threadId='d5f13aa2-13c1-4119-a795-0006b4e326a6';
+ const message=`thread ${threadId} is not materialized yet; thread/turns/list is unavailable before first user message`;
+ for(const [code,text,method,kind] of [[-32600,message,'thread/turns/list','history-not-materialized'],[-32603,message,'thread/turns/list','rpc-error'],[-32601,'list_turns is not supported yet','thread/read','history-unsupported']]){
+  await assert.rejects(server.request(method as string,{threadId,prompt:'secret-prompt',fixtureError:{code,message:text,data:{credential:'secret-credential'}}}));
+  const event=events.filter(event=>event.event==='rpc_end').at(-1);assert.equal(event.errorClass,kind);assert.equal(event.errorCode,code);assert.equal(event.method,method);assert.equal(event.threadId,threadId);
+ }
+ assert.doesNotMatch(JSON.stringify(events),/secret-prompt|secret-credential|not materialized yet|fixtureError/);
+});
 function start(t: { after: (fn: () => Promise<void>) => void }, options = {}) {
   const server = new AppServer({ executable: process.execPath, args: [fixture], timeoutMs: 1000, ...options });
   t.after(() => server.close().catch(() => {}));
@@ -38,7 +47,7 @@ test('initialize completes before initialized is sent', async (t) => {
   const server = start(t);
   assert.deepEqual(await server.initialize(), {
     clientInfo: { name: 'codex_remote_web', title: 'Codex Web', version: '0.1.0' },
-    capabilities: { experimentalApi: false },
+    capabilities: { experimentalApi: true },
   });
   assert.equal(await server.request('ready', {}), true);
 });
@@ -68,8 +77,9 @@ test('separates requests from notifications, preserves typed ids, rejects stale 
 });
 
 test('timeout reports uncertain outcome without retrying and leaves connection usable', async (t) => {
-  const server = start(t, { timeoutMs: 80 });
-  await assert.rejects(server.request('ignore', {}), /timed out.*uncertain/i);
+  const server = start(t);
+  await server.initialize();
+  await assert.rejects(server.request('ignore', {}, 80), /timed out.*uncertain/i);
   assert.equal(await server.request('count', {}), 1);
   await assert.rejects(server.request('rpcError', {}), /denied/);
 });
@@ -82,6 +92,39 @@ test('a short read deadline removes the pending request without changing other R
   assert.equal(await server.request('count',{}),1);
   await new Promise(resolve=>setTimeout(resolve,100));
   assert.equal(await server.request('ready',{}),true);assert.equal(server.diagnosticState().pendingCount,0);
+});
+
+test('opt-in late outcomes retain exact RPC ownership without retrying ordinary timed-out calls',async t=>{
+  const server=start(t);await server.initialize();
+  const outcomes:any[]=[],first=Promise.withResolvers<void>(),second=Promise.withResolvers<void>();
+  await Promise.all([
+    assert.rejects(server.request('lateOutcome',{value:'first',delay:120},20,(outcome:any)=>{outcomes.push(['first',outcome]);first.resolve();}),/timed out.*uncertain/i),
+    assert.rejects(server.request('lateOutcome',{value:'second',delay:80},20,(outcome:any)=>{outcomes.push(['second',outcome]);second.resolve();}),/timed out.*uncertain/i),
+    assert.rejects(server.request('lateOutcome',{value:'ordinary',delay:60},20),/timed out.*uncertain/i),
+  ]);
+  assert.equal(server.diagnosticState().pendingCount,0);
+  assert.equal(server.diagnosticState().lateOutcomeCount,2);
+  await Promise.all([first.promise,second.promise]);
+  assert.deepEqual(outcomes,[['second',{result:'second'}],['first',{result:'first'}]]);
+  assert.equal(server.diagnosticState().lateOutcomeCount,0);
+  assert.equal(await server.request('count',{}),3,'No timed-out call is replayed');
+});
+
+test('opt-in late RPC errors settle ownership once while callbacks cannot break the transport',{timeout:2000},async t=>{
+  const server=start(t);await server.initialize();
+  const late=Promise.withResolvers<any>();
+  await assert.rejects(server.request('lateOutcome',{error:true},20,(outcome:any)=>{late.resolve(outcome);throw Error('observer failure');}),/timed out/i);
+  const outcome=await late.promise;assert.equal(outcome.error.code,-32000);assert.match(outcome.error.message,/late denial/);
+  assert.equal(server.diagnosticState().lateOutcomeCount,0);assert.equal(await server.request('ready',{}),true);
+});
+
+for(const end of ['close','failure'])test(`opt-in late ownership ends on ${end} without waiting for the unknown RPC`,async t=>{
+  const server=start(t);await server.initialize();const outcomes:any[]=[];
+  await assert.rejects(server.request('ignore',{},20,(outcome:any)=>outcomes.push(outcome)),/timed out/i);
+  assert.equal(server.diagnosticState().lateOutcomeCount,1);
+  if(end==='close')await server.close();else await assert.rejects(server.request('exit',{}),/exited/i);
+  assert.equal(outcomes.length,1);assert.match(outcomes[0].error.message,/closed|exited/i);
+  assert.equal(server.diagnosticState().lateOutcomeCount,0);
 });
 
 test('process exit rejects all pending calls and future calls', async (t) => {

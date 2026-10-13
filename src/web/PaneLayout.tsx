@@ -7,7 +7,7 @@ const Context=createContext<PaneState>(null!);
 const visibilityKey='codex-web:panels:v1';
 export const usePanes=()=>useContext(Context);
 export function PaneLayout({children,className}:{children:ReactNode;className:string}) {
-  const [composerCollapsed,setComposerCollapsed]=useState(false);
+  const [composerCollapsed,setComposerCollapsed]=useState(()=>{try{const v=JSON.parse(localStorage.getItem(visibilityKey)??'null');return v?.version===1&&v.composerCollapsed===true;}catch{return false;}});
   const [layout,setLayout]=useState(()=>{try{return parseLayout(localStorage.getItem(layoutKey))??defaultLayout;}catch{return defaultLayout;}});
   const [shown,setShown]=useState(()=>{try{const v=JSON.parse(localStorage.getItem(visibilityKey)??'null');if(v?.version===1&&typeof v.left==='boolean'&&typeof v.right==='boolean')return {left:v.left as boolean,right:v.right as boolean};}catch{}return {left:true,right:true};});
   const [mobile,setMobile]=useState(()=>matchMedia('(max-width:1000px)').matches),[drawer,setDrawer]=useState<Side|null>(null);
@@ -16,14 +16,14 @@ export function PaneLayout({children,className}:{children:ReactNode;className:st
   const leftVisible=mobile?drawer==='left':shown.left,rightVisible=rightAvailable&&(mobile?drawer==='right':shown.right);
   useEffect(()=>{const observer=new ResizeObserver(entries=>setWidth(entries[0].contentRect.width));if(root.current)observer.observe(root.current);return()=>observer.disconnect();},[]);
   useEffect(()=>{const media=matchMedia('(max-width:1000px)'),change=()=>{setMobile(media.matches);setDrawer(null);};media.addEventListener('change',change);return()=>media.removeEventListener('change',change);},[]);
-  useEffect(()=>{try{localStorage.setItem(visibilityKey,JSON.stringify({version:1,...shown}));}catch{}},[shown]);
+  useEffect(()=>{try{localStorage.setItem(visibilityKey,JSON.stringify({version:1,...shown,composerCollapsed}));}catch{}},[shown,composerCollapsed]);
   useEffect(()=>{if(!rightAvailable)setDrawer(value=>value==='right'?null:value);},[rightAvailable]);
   useEffect(()=>{const close=()=>setDrawer(null);window.addEventListener('popstate',close);return()=>window.removeEventListener('popstate',close);},[]);
   useEffect(()=>{
     const previous=lastDrawer.current;lastDrawer.current=drawer;
     const frame=requestAnimationFrame(()=>{if(drawer)root.current?.querySelector<HTMLElement>(drawer==='left'?'.sidebar button':'.git-panel button')?.focus();else if(previous)root.current?.querySelector<HTMLElement>('[data-panel-toggle="'+previous+'"]')?.focus();});
     if(!drawer)return()=>cancelAnimationFrame(frame);
-    const keyboard=(event:KeyboardEvent)=>{if(event.defaultPrevented||document.querySelector('dialog[open]'))return;if(event.key==='Escape'){event.preventDefault();setDrawer(null);}else if(event.key==='Tab'){
+    const keyboard=(event:KeyboardEvent)=>{if(event.defaultPrevented||document.querySelector('dialog:modal'))return;if(event.key==='Escape'){event.preventDefault();setDrawer(null);}else if(event.key==='Tab'){
       const panel=root.current?.querySelector(drawer==='left'?'.sidebar':'.git-panel');
       const nodes=[...root.current?.querySelectorAll<HTMLElement>('.pane-toolbar button:not(:disabled)')??[],...panel?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]')??[],...root.current?.querySelectorAll<HTMLElement>('.app-notifications button:not(:disabled),.app-notifications [tabindex="0"]')??[]].filter(el=>el.getClientRects().length>0);
       const index=nodes.indexOf(document.activeElement as HTMLElement),next=nodes[(index+(event.shiftKey?-1:1)+nodes.length)%nodes.length];if(next){event.preventDefault();next.focus();}

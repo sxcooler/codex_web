@@ -1,0 +1,88 @@
+import assert from 'node:assert/strict';
+import {mkdir,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
+import {join,resolve,sep} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {request as httpRequest} from 'node:http';
+import {createServer} from 'vite';
+import {chromium} from 'playwright';
+import {Runtime} from '../src/codex/runtime.ts';
+import {Projects} from '../src/projects.ts';
+import {buildServer} from '../src/server/app.ts';
+import {initializeAuth} from '../src/server/auth.ts';
+import {MetadataStore} from '../src/server/metadata.ts';
+
+const local=resolve('.local');await mkdir(local,{recursive:true});
+const dir=await mkdtemp(join(local,'release-list-browser-')),evidence=join(local,'runtime-release-list-browser',String(Date.now()));await mkdir(evidence,{recursive:true});console.log('Evidence: '+evidence);
+const home=join(dir,'native'),dataDir=join(dir,'web'),work=join(dir,'work');for(const path of [home,dataDir,work,join(home,'sessions')])await mkdir(path,{recursive:true});
+const trace=join(home,'rpc.jsonl'),stateFile=join(home,'threads.json'),nativeFixture=join(home,'native.mjs');
+let source=await readFile(fileURLToPath(new URL('./fixtures/runtime-server.mjs',import.meta.url)),'utf8');
+const replace=(before,after)=>{assert.ok(source.includes(before),'native fixture contract changed');source=source.replace(before,after);};
+source="import {appendFileSync,readFileSync,writeFileSync,existsSync} from 'node:fs';\n"+source;
+replace("createInterface({ input: process.stdin }).on('line', (line) => {",`if(existsSync(${JSON.stringify(stateFile)}))for(const [id,value] of JSON.parse(readFileSync(${JSON.stringify(stateFile)},'utf8')))threads.set(id,value);
+const fixtureInput=createInterface({input:process.stdin});
+fixtureInput.on('close',()=>writeFileSync(${JSON.stringify(stateFile)},JSON.stringify([...threads])));
+fixtureInput.on('line',(line)=>{`);
+replace('  const { id, method, params } = message;',`  const { id, method, params } = message;
+  appendFileSync(${JSON.stringify(trace)},JSON.stringify({method,pid:process.pid,threadId:params?.threadId})+'\\n');
+  if(method==='fixture/complete'){const value=threads.get(params.threadId),active=value.turns.find(turn=>turn.status==='inProgress');finish(params.threadId,active);return send({id,result:{}});}
+  if(method==='account/rateLimits/read')return send({id,result:{rateLimits:{limitId:'codex',primary:{usedPercent:10,windowDurationMins:300,resetsAt:null}},rateLimitsByLimitId:null}});`);
+replace('archivedThreads.has(value.id)===!!params.archived','archivedThreads.has(value.id)===!!params.archived && value.id!==\'known-fork\'');
+await writeFile(nativeFixture,source);
+const nativeEvents=[],http=[],errors=[];let backendOrigin;
+const runtime=new Runtime({executable:process.execPath,cwd:home,args:[nativeFixture],idleMs:60_000,diagnostic:event=>nativeEvents.push(event)});
+const vite=await createServer({cacheDir:join(dir,'vite-cache'),server:{host:'127.0.0.1',port:0,strictPort:true},plugins:[{name:'real-api-proxy',configureServer(server){server.middlewares.use((request,response,next)=>{
+  if(!request.url?.startsWith('/api/'))return next();
+  const proxy=httpRequest(backendOrigin+request.url,{method:request.method,headers:request.headers},upstream=>{response.writeHead(upstream.statusCode,upstream.headers);upstream.pipe(response);response.on('close',()=>upstream.destroy());});
+  proxy.on('error',()=>{if(!response.headersSent)response.writeHead(502);response.end();});request.pipe(proxy);response.on('close',()=>proxy.destroy());
+});}}]});
+let app,browser,context;const until=async(check,message)=>{const deadline=Date.now()+15_000;while(!await check()){assert.ok(Date.now()<deadline,message);await new Promise(resolve=>setTimeout(resolve,30));}};
+const nativeTrace=async()=>{try{return (await readFile(trace,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));}catch(error){if(error.code==='ENOENT')return [];throw error;}};
+const listCount=async()=> (await nativeTrace()).filter(event=>event.method==='thread/list').length;
+const capture=async(page,name)=>{await page.screenshot({path:join(evidence,name+'.png')});await writeFile(join(evidence,name+'.txt'),await page.locator('body').innerText());};
+try{
+  await vite.listen();await vite.transformRequest('/src/web/style.css');await vite.transformRequest('/src/web/main.tsx');const origin=`http://127.0.0.1:${vite.httpServer.address().port}`;
+  const projects=new Projects(work),project=await projects.create({name:'Release fixture',folderName:'release-fixture'});
+  await initializeAuth(dataDir,'fixture-password-long-enough');
+  app=await buildServer({dataDir,origin,runtime,projects});
+  app.addHook('onResponse',async(request,reply)=>http.push({route:request.routeOptions.url,method:request.method,status:reply.statusCode}));
+  backendOrigin=await app.listen({host:'127.0.0.1',port:0});
+  const idle=await runtime.create({cwd:project.path,clientRequestId:'fixture-release-idle',prompt:''});
+  const busy=await runtime.create({cwd:project.path,clientRequestId:'fixture-release-busy',prompt:''});
+  await runtime.rename(idle.threadId,'等待交接的会话');await runtime.rename(busy.threadId,'正在运行的会话');
+  await runtime.send(busy.threadId,{text:'hold',clientRequestId:'fixture-hold-busy'});
+  const forkPath=join(home,'sessions','fork.jsonl');await writeFile(forkPath,'fixture rollout');
+  const fork={id:'known-fork',forkedFromId:idle.threadId,preview:'',source:'appServer',path:forkPath,cwd:project.path,name:'补充可见的分支',createdAt:2,updatedAt:2};
+  await runtime.call('fixture/native-thread',{threadId:fork.id,thread:fork,status:{type:'idle'}});
+  const metadata=new MetadataStore(join(dataDir,'metadata.sqlite'));try{metadata.registerFork(fork);}finally{metadata.close();}
+  const originalPid=runtime.diagnosticState().native.nativePid;
+  browser=await chromium.launch({channel:'chrome',headless:true});context=await browser.newContext({viewport:{width:1280,height:900}});
+  const pages=await Promise.all([context.newPage(),context.newPage(),context.newPage()]);for(const page of pages){page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});}
+  const [homePage,idlePage,busyPage]=pages;
+  await homePage.goto(origin);await homePage.getByLabel('管理员密码').fill('fixture-password-long-enough');await homePage.getByRole('button',{name:'登录',exact:true}).click();
+  await homePage.locator('.sidebar .session-link').first().waitFor();
+  await until(async()=> (await homePage.locator('.sidebar .session-link').allTextContents()).includes('补充可见的分支'),'actual known-fork supplement must be visible');
+  assert.ok((await nativeTrace()).some(event=>event.method==='thread/read'&&event.threadId===fork.id));
+  await idlePage.goto(origin+'/sessions/'+idle.threadId);await until(async()=>await idlePage.locator('.connection').textContent()==='空闲','first real session view must finish opening before the next tab enters');await busyPage.goto(origin+'/sessions/'+busy.threadId);
+  await until(async()=>await idlePage.locator('.connection').textContent()==='空闲'&&await busyPage.locator('.connection').textContent()==='运行中','both real session views must connect');
+  await idlePage.getByRole('button',{name:'操作',exact:true}).click();await idlePage.getByRole('button',{name:'释放会话占用',exact:true}).click();
+  await until(()=>runtime.diagnosticState().threads.some(thread=>thread.release?.released&&!thread.release.handoffReady),'unsubscribe must remain pending while the sibling is active');
+  await until(()=>runtime.diagnosticState().threads.some(thread=>thread.release?.requested&&thread.release.released&&!thread.release.handoffReady),'manual release must retain its own eventual handoff intent');
+  await until(async()=>['已释放','正在释放占用'].includes(await idlePage.locator('.connection').textContent()),'pending view must settle its actual SSE status');
+  await capture(idlePage,'pending');assert.equal(await idlePage.locator('.connection').textContent(),'正在释放占用','subscription cancellation must not claim completed handoff');assert.equal(await idlePage.locator('.notice').filter({hasText:'正在释放占用'}).count(),0,'normal handoff progress stays in the toolbar without a duplicate notice');
+  assert.equal(runtime.diagnosticState().native.nativePid,originalPid);await new Promise(resolve=>setTimeout(resolve,1200));
+  const quiet=await listCount();await new Promise(resolve=>setTimeout(resolve,3000));assert.equal(await listCount(),quiet,'real multi-tab SSE callbacks must stop native list feedback');
+  assert.equal(http.filter(event=>event.status>=500).length,0);assert.deepEqual(errors,[]);
+  await runtime.call('fixture/complete',{threadId:busy.threadId});
+  await until(()=>nativeEvents.some(event=>event.event==='native_exit'&&event.nativePid===originalPid&&event.expected),'handoff must close the original owned native child');
+  await until(async()=>['已释放','历史浏览'].includes(await idlePage.locator('.connection').textContent()),'actual handoff event must update the rendered status');
+  await capture(idlePage,'ready');assert.equal(await idlePage.locator('.notice').filter({hasText:'正在释放占用'}).count(),0,'confirmed handoff must clear the Chinese pending-release notice');assert.equal(await idlePage.locator('.notice').filter({hasText:'Subscription cancelled; waiting for other runtime work before ownership can be released'}).count(),0,'confirmed handoff must not retain a successful release warning in the error notice');
+  await idlePage.getByRole('button',{name:'操作',exact:true}).click();await idlePage.getByRole('button',{name:'释放会话占用',exact:true}).click();
+  await until(()=>new URL(idlePage.url()).pathname==='/','confirmed release must close the real session page');
+  await idlePage.locator(`.sidebar a[href="/sessions/${idle.threadId}"]`).click();
+  await until(async()=>['已释放','历史浏览'].includes(await idlePage.locator('.connection').textContent()),'Recent entry only reads the persisted thread');
+  await idlePage.getByLabel('继续这个会话',{exact:true}).fill('hold');await idlePage.getByRole('button',{name:'发送',exact:true}).click();await until(()=>runtime.diagnosticState().threads.some(thread=>thread.phase==='RUNNING'),'Explicit sending resumes the stored thread');
+  await capture(idlePage,'resumed');assert.equal(http.filter(event=>event.status>=500).length,0);assert.deepEqual(errors,[]);
+  await writeFile(join(evidence,'result.json'),JSON.stringify({result:'PASS',origin,backendOrigin,viewport:{width:1280,height:900},browser:'Chrome',mode:'real React/buildServer/registerApi/Runtime/fixture AppServer/HTTP SSE',originalPid,quietListCount:quiet,finalListCount:await listCount(),http,errors,nativeEvents,trace:await nativeTrace()},null,2));
+  console.log('PASS real Chrome multi-session release/list/handoff with known-fork supplement');
+}catch(error){await writeFile(join(evidence,'failure.json'),JSON.stringify({message:error.message,stack:error.stack,http,errors,nativeEvents,trace:await nativeTrace()},null,2));throw error;
+}finally{await context?.close();await browser?.close();await app?.close();await runtime.close();await vite.close();assert.ok(dir.startsWith(local+sep));await rm(dir,{recursive:true,force:true});}

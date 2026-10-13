@@ -1,13 +1,10 @@
 import {useEffect,useId,useMemo,useRef,useState,type ReactNode,type ComponentProps} from 'react';
-import {Streamdown,CodeBlock,defaultRehypePlugins,useIsCodeFenceIncomplete,type CodeHighlighterPlugin,type Components} from 'streamdown';
+import {Streamdown,CodeBlock,defaultRehypePlugins,useIsCodeFenceIncomplete,type Components} from 'streamdown';
 import {code} from '@streamdown/code';
 import {linkFragment} from './fileLinks.ts';
 import {MermaidBlock} from './MermaidBlock.tsx';
-type HighlightResult=NonNullable<ReturnType<CodeHighlighterPlugin['highlight']>>;
-const plainTokens=(text:string):HighlightResult=>({tokens:text.split('\n').map(content=>[{content}])});
-const nativeCode:CodeHighlighterPlugin=code;
-// ponytail: upstream caches only code edges/length; keep exact source until its cache key is fixed.
-const checkedCode:CodeHighlighterPlugin={...code,highlight(options,callback){const check=(result:HighlightResult)=>result.tokens.map(line=>line.map(token=>token.content).join('')).join('\n')===options.code?result:plainTokens(options.code);const result=nativeCode.highlight(options,callback?value=>callback(check(value)):undefined);return result?check(result):null;}};
+import {checkedHighlighter} from './codeHighlight.ts';
+const checkedCode=checkedHighlighter(code);
 type MarkdownNode={type?:string;value?:string;tagName?:string;properties?:Record<string,unknown>;children?:MarkdownNode[];position?:{start:{line:number};end:{line:number}}};
 type LinkOptions={resolve:(url:string)=>string;image?:(url:string)=>string;scope:string};
 // Parse only standalone image HTML; other raw HTML keeps the existing rendering policy.
@@ -72,6 +69,7 @@ export function Markdown({text,streaming=false,resolveUrl=safeRemote,resolveImag
    let slug=base,index=0;while(used.has(slug))slug=base+'-'+(++index);used.add(slug);
    heading.dataset.anchor=slug;heading.id='markdown-'+scope+'-'+slug;
   }
+  if(root.current?.closest('.preview-shell'))for(const scroll of root.current.querySelectorAll<HTMLElement>('[data-streamdown="table-wrapper"]>div:last-child'))scroll.tabIndex=0;
   if(anchor?.fragment)jump(anchor.fragment);
  },[text,linkScope,anchor,scope]);
  const rehypePlugins=useMemo(()=>[imageHtmlPlugin,defaultRehypePlugins.raw,[linkPlugin,{resolve:resolveUrl,image:resolveImage,scope:linkScope}] as [typeof linkPlugin,LinkOptions],defaultRehypePlugins.sanitize,sourcePositionPlugin,defaultRehypePlugins.harden],[resolveUrl,resolveImage,linkScope]);const components:Components={code:MarkdownCode,strong:({children})=><strong>{children}</strong>,a:({href,children})=>{const url=safeRemote(href??'');return url?<a href={url} onClick={event=>{if(onLink?.(href??''))event.preventDefault();else if(url.startsWith('#')){event.preventDefault();jump(linkFragment(url));}}} {...(url.startsWith('#')?{}:{target:'_blank',rel:'noopener noreferrer'})}>{children}</a>:<span>{children}</span>;},img:({src,alt,title,width,height})=><MarkdownImage src={src} alt={alt} title={title} width={width} height={height}/>,input:({checked})=><input type="checkbox" checked={!!checked} disabled aria-label={checked?'已完成':'未完成'}/>};return <div ref={root} className="markdown-message" data-streaming={streaming}><Streamdown key={linkScope} mode={streaming?'streaming':'static'} isAnimating={streaming} parseIncompleteMarkdown={streaming} plugins={streaming?{}:{code:checkedCode}} shikiTheme={theme} components={components} rehypePlugins={rehypePlugins} skipHtml urlTransform={safeRemote} controls={{code:false,table:false,image:false,mermaid:false}} lineNumbers={false} tableMaxHeight={0} codeBlockMaxHeight={0}>{text}</Streamdown><div className="message-actions"><Copy text={text} label="复制 Markdown"/>{actions}</div></div>;}

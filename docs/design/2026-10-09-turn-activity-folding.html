@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>整轮执行过程折叠 · 待确认</title>
+<style>
+:root{color-scheme:dark;font:14px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;color:#e4e9ea;background:#121619}
+*{box-sizing:border-box}body{margin:0}button,summary{font:inherit}
+button{border:1px solid #394449;background:#222b2f;color:inherit;padding:6px 12px;border-radius:6px;cursor:pointer}
+button[aria-pressed=true]{background:#314a40;border-color:#82ba9d;color:#d3f4e1}
+header{display:flex;gap:14px;align-items:center;padding:14px 24px;border-bottom:1px solid #2b3438}
+header span{color:#9bacb1}.switch{margin-left:auto;display:flex;gap:7px}
+main{max-width:960px;margin:24px auto;padding:0 30px}
+.note{color:#93aaa2;font-size:12px;margin-bottom:24px}
+.user{display:flex;justify-content:flex-end;gap:12px;margin-bottom:32px}
+.user .bubble{background:#283c48;padding:10px 18px;border-radius:14px}
+.avatar{flex:0 0 30px;width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:#345c49;color:#dff2e6}
+.user .avatar{background:#3c5c70}
+.process{margin:0 0 25px 42px;border:1px solid #344045;border-radius:8px;background:#161d20}
+.process summary{cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:12px 15px;color:#adbdc3}
+.process summary::-webkit-details-marker{display:none}.chevron{display:inline-block;transition:transform .1s}
+.process[open] .chevron{transform:rotate(90deg)}.status{margin-left:auto;font-size:12px;color:#90bdac}
+.hint{color:#99adb4;font-size:13px;flex-basis:100%;padding-left:20px}
+.steps{border-top:1px solid #303b3f;padding:16px}
+.step{padding:12px 0;border-bottom:1px solid #2c363a}.step:first-child{padding-top:0}.step:last-child{border:0;padding-bottom:0}
+.label{color:#99b7a9;font-size:12px;margin-bottom:5px}.step p{margin:4px 0;color:#d0dadd}
+.command{display:block;font:12px/1.6 Consolas,monospace;background:#101618;border:1px solid #303b3f;border-radius:5px;padding:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.answer{display:flex;gap:12px}.answer-body{flex:1;min-width:0}
+.heading{font-weight:600;display:flex;gap:12px}.heading time{font-size:11px;font-weight:400;color:#7f949e}
+.answer p{margin:10px 0 16px}.actions{font-size:12px;color:#8dabb5;margin-top:18px}
+.approval{margin:22px 0 0 42px;border:1px solid #6d6341;border-radius:8px;padding:16px;background:#23251d}
+.approval h3{font-size:14px;margin:0 0 8px}.approval p{margin:8px 0}.buttons{display:flex;gap:8px;margin-top:12px}
+.primary{background:#8fcbb0;color:#18362c;border-color:#8fcbb0}a{color:#99d3bb;text-decoration:underline}
+.composer{margin:30px 0 0 42px;padding:14px;border:1px solid #344045;border-radius:9px;color:#77909b;min-height:95px;background:#171e21}
+.composer-footer{display:flex;justify-content:space-between;align-items:center;font-size:12px;margin-top:22px}
+.footer-note{margin:16px 0 0 42px;color:#7e939b;font-size:12px}[hidden]{display:none!important}
+@media(max-width:600px){header{padding:12px 14px;flex-wrap:wrap;gap:5px 9px}header span{font-size:12px}.switch{width:100%;margin:7px 0 0}main{margin:18px auto;padding:0 14px}.note{margin-bottom:18px}.process,.approval,.composer,.footer-note{margin-left:0}.answer{gap:9px}.avatar{flex-basis:26px;width:26px;height:26px;font-size:12px}.heading time{font-size:10px}.process summary{gap:8px;padding:11px 12px}.answer p{margin:10px 0 14px}.composer{margin-top:23px}}
+</style></head>
+<body>
+<header><strong>Codex Web</strong><span>整轮过程折叠方案</span><div class="switch"><button id="completed" aria-pressed="true">完成状态</button><button id="running" aria-pressed="false">运行与审批</button></div></header>
+<main>
+<p class="note">界面示意 · 尚未实施 · 点击过程摘要可展开 · 使用示例内容</p>
+<section class="user"><div class="bubble">检查启动状态修复并给出结果</div><div class="avatar">U</div></section>
+<details class="process">
+<summary><span class="chevron">›</span><span id="elapsed">用时 34m 14s</span><span class="status" id="status">已完成</span><span class="hint" id="hint" hidden>最后一轮状态切换测试已通过，等待确认后继续。</span></summary>
+<div class="steps">
+<div class="step"><div class="label">Codex · 中间说明</div><p>先检查当前状态，再运行隔离测试。测试结果和失败样例会一并保留。</p></div>
+<div class="step"><div class="label">命令 · 已完成</div><code class="command">pwsh -NoProfile -File ./scripts/verify-startup.ps1
+冷启动 10/10；创建 / 重建 11/11</code></div>
+<div class="step"><div class="label">Codex · 中间说明</div><p>最后 10 轮状态切换通过了，正在整理汇总结果。</p></div>
+<div class="step"><div class="label">文件修改 · 已完成</div><p>docs/reports/startup-validation.md</p></div>
+<div class="step"><div class="label">Codex · 中间说明</div><p>复核已完成，旧失败记录仍保留，接下来给出最终结果。</p></div>
+</div></details>
+<section class="answer" id="answer"><div class="avatar">A</div><div class="answer-body">
+<div class="heading">Codex <time>2026/10/09 02:02:55</time></div>
+<p><strong>启动状态修复已通过本机独立测试：冷启动 10/10，创建 / 重建 11/11，状态切换 10/10。</strong>旧失败记录保留。<a href="#report">实测报告</a></p>
+<p>下一步按约定恢复正式驱动。需要重启时，请手动重启；其他报错先停止，并保留输出。</p>
+<p>真实游戏与安全恢复仍待验证。</p>
+<div class="actions">复制 Markdown　　分支到新聊天　　引用的记忆</div>
+</div></section>
+<section class="approval" id="approval" hidden><h3>等待你的审批</h3><p>运行最后一轮隔离测试。审批入口保持展开。</p><code class="command">pwsh -NoProfile -File ./scripts/verify-startup.ps1</code><div class="buttons"><button class="primary">允许一次</button><button>拒绝</button><button>取消</button></div></section>
+<div class="composer">继续这个会话…<div class="composer-footer"><span>GPT-6.1-Sol　·　high</span><button class="primary">发送</button></div></div>
+<p class="footer-note">最终答复保持展开；中间说明与工具放在同一个可展开的过程区。</p>
+</main>
+<script>
+const controls=[document.querySelector('#completed'),document.querySelector('#running')];
+function show(running){
+ document.querySelector('.process').open=running;
+ controls[0].setAttribute('aria-pressed',String(!running));controls[1].setAttribute('aria-pressed',String(running));
+ document.querySelector('#elapsed').textContent=running?'执行中 · 已用 32m 10s':'用时 34m 14s';
+ document.querySelector('#status').textContent=running?'等待审批':'已完成';
+ document.querySelector('#hint').hidden=!running;document.querySelector('#answer').hidden=running;document.querySelector('#approval').hidden=!running;
+}
+controls[0].addEventListener('click',()=>show(false));controls[1].addEventListener('click',()=>show(true));
+</script>
+</body></html>

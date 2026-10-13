@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { lstat, mkdir, readdir, realpath, open } from 'node:fs/promises';
-import { basename, dirname, join, isAbsolute, relative, sep } from 'node:path';
+import type { Dirent } from 'node:fs';
+import { basename, dirname, join, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import sharp from 'sharp';
@@ -16,6 +17,8 @@ const MAX_PATCH_BYTES = 5 * 1024 * 1024;
 const imagePath = (path: string) => /\.(png|jpe?g|webp|gif|avif|svg)$/i.test(path);
 const HISTORY_PAGE_SIZE = 100;
 export type Project = { id: string; name: string; path: string };
+export type GitRepository = { path: string; name: string; kind: 'main'|'submodule'|'nested'; available: boolean; reason?: string };
+const inside = (root: string, path: string) => { const rel=relative(root,path);return rel!== '..'&&!rel.startsWith('..'+sep)&&!isAbsolute(rel); };
 function parsePatch(path: string, patch: string, extra: Record<string, unknown> = {}) {
   const binary=/Binary files |GIT binary patch/.test(patch); const hunks:any[]=[]; let h:any;
   let oldLine=0,newLine=0,count=0,truncated=Buffer.byteLength(patch)>MAX_VIEW_BYTES;
@@ -169,8 +172,9 @@ export class Projects {
 
   async clone(input: { name: string; folderName: string; repoUrl: string }) { return this.create(input); }
 
-  async fetchRemotes(id: string) {
-    const project=await this.resolve(id),key=fold(project.path);
+  async fetchRemotes(id: string, repository = '') {
+    const project=await this.#repository(await this.resolve(id),repository),key=fold(project.path);
+    if(!project.isRepository)return {skipped:'not-repository',remotes:[]};
     let pending=this.#fetches.get(key);
     if(!pending){
       pending=this.#fetchRemotes(project.path);this.#fetches.set(key,pending);
@@ -178,6 +182,107 @@ export class Projects {
       void pending.then(expire,expire);
     }
     return pending;
+  }
+
+  #repositoryPath(value: string) {
+    if(typeof value!=='string'||value.length>1024||/[\\\x00-\x1f:]/.test(value)||value.startsWith('/')||value&&value.split('/').some(part=>!part||part==='.'||part==='..'))throw problem('Invalid repository path');
+    this.#validateRelative(value);this.#checkVisible(value);return value;
+  }
+
+  async #repositoryDirectory(projectPath: string, repository: string) {
+    let path=projectPath;
+    for(const part of repository ? repository.split('/') : []){
+      path=join(path,part);const info=await lstat(path).catch(()=>{throw problem('Repository directory not found',404);});
+      if(!info.isDirectory()||info.isSymbolicLink()||fold(await realpath(path))!==fold(path))throw problem('Repository directory links are not allowed',403);
+    }
+    return path;
+  }
+
+  async #metadataFile(path: string, maxBytes = 8192) {
+    const info=await lstat(path).catch((error:any)=>{if(error.code==='ENOENT')return null;throw error;});
+    if(!info)return null;
+    if(!info.isFile()||info.isSymbolicLink()||info.size>maxBytes)throw problem('Unsafe Git metadata',403);
+    return (await this.#readBounded(path,maxBytes)).toString('utf8').trim();
+  }
+
+  async #gitMetadata(projectPath: string, path: string, mainCommon?: string) {
+    const marker=join(path,'.git'),info=await lstat(marker).catch((error:any)=>{if(error.code==='ENOENT')return null;throw error;});
+    if(!info)return null;
+    if(info.isSymbolicLink()||!info.isDirectory()&&!info.isFile())throw problem('Unsafe Git metadata',403);
+    const text=info.isFile()?await this.#metadataFile(marker):null;
+    if(text!==null&&!/^gitdir: [^\r\n\0]+$/.test(text))throw problem('Invalid Git metadata',409);
+    const gitDir=text===null?marker:resolve(path,text!.slice(8));
+    const directory=async(target:string)=>{const stat=await lstat(target);if(!stat.isDirectory()||stat.isSymbolicLink()||fold(await realpath(target))!==fold(resolve(target)))throw problem('Unsafe Git metadata',403);};
+    await directory(gitDir);
+    const commonValue=await this.#metadataFile(join(gitDir,'commondir'));
+    const commonDir=commonValue===null?gitDir:resolve(gitDir,commonValue);await directory(commonDir);
+    if(!inside(projectPath,gitDir)||!inside(projectPath,commonDir)){
+      const backlink=await this.#metadataFile(join(gitDir,'gitdir'));
+      const linked=fold(dirname(gitDir))===fold(join(commonDir,'worktrees'))&&backlink!==null&&fold(resolve(gitDir,backlink))===fold(marker);
+      const module=mainCommon!==undefined&&fold(commonDir)===fold(gitDir)&&inside(join(mainCommon,'modules'),gitDir);
+      if(path===projectPath ? !linked : !mainCommon||!module&&!(linked&&fold(commonDir)===fold(mainCommon)))throw problem('Git metadata escapes the project',403);
+    }
+    return {gitDir,commonDir};
+  }
+
+  async #repository(project: Project, value: string, deadline = Infinity) {
+    try{
+      const repository=this.#repositoryPath(value),path=await this.#repositoryDirectory(project.path,repository);
+      let mainCommon:string|undefined;
+      if(repository)mainCommon=(await this.#gitMetadata(project.path,project.path))?.commonDir;
+      const metadata=await this.#gitMetadata(project.path,path,mainCommon);
+      if(!metadata){if(repository)throw problem('Directory is not a repository root',409);return {...project,repository,path,isRepository:false,identity:''};}
+      const remaining=deadline-Date.now();if(remaining<=0)throw problem('Repository scan timed out',504);
+      const top=(await git(path,['rev-parse','--show-toplevel'],Math.min(5000,remaining))).trim();
+      if(fold(await realpath(top))!==fold(path))throw problem('Directory is not a repository root',409);
+      return {...project,repository,path,isRepository:true,identity:createHash('sha256').update(fold(path)+'\0'+fold(metadata.gitDir)).digest('hex')};
+    }catch(error:any){if(error.code==='PROJECT_ERROR')throw error;throw problem('Repository is unavailable or its Git metadata is invalid',409);}
+  }
+
+  async gitRepositories(id: string) {
+    const project=await this.resolve(id),deadline=Date.now()+5000;
+    const repositories=new Map<string,GitRepository>();let complete=true,visited=0;
+    const pending:{path:string;depth:number}[]=[{path:'',depth:0}];
+    const add=async(path:string,kind:GitRepository['kind']):Promise<void>=>{
+      if(repositories.has(path)){if(kind==='submodule')repositories.get(path)!.kind=kind;return;}
+      if(repositories.size>=200||Date.now()>=deadline){complete=false;return;}
+      const entry:GitRepository={path,name:path?basename(path):project.name,kind,available:false};repositories.set(path,entry);
+      let selected:{path:string;isRepository:boolean};
+      try{selected=await this.#repository(project,path,deadline);entry.available=selected.isRepository;if(!entry.available)entry.reason='目录不是 Git 仓库';}
+      catch{entry.reason='仓库未初始化或不可访问';if(Date.now()>=deadline)complete=false;return;}
+      if(!selected.isRepository)return;
+      const remaining=()=>Math.max(1,Math.min(5000,deadline-Date.now()));
+      const declared:string[]=[];
+      try{
+        const moduleFile=join(selected.path,'.gitmodules');
+        if(await this.#metadataFile(moduleFile,MAX_VIEW_BYTES)!==null){
+          const config=await git(selected.path,['config','--no-includes','-z','--file',moduleFile,'--list'],remaining());
+          declared.push(...config.split('\0').filter(record=>/^submodule\..*\.path\n/.test(record)).map(record=>record.slice(record.indexOf('\n')+1)));
+        }
+      }catch{complete=false;}
+      try{
+        const index=await git(selected.path,['ls-files','--stage','-z'],remaining());
+        declared.push(...index.split('\0').filter(record=>record.startsWith('160000 ')).map(record=>record.slice(record.indexOf('\t')+1)));
+      }catch{complete=false;}
+      for(const value of declared){
+        try{this.#repositoryPath(value);if(!value)throw new Error();}catch{complete=false;continue;}
+        await add(path?path+'/'+value:value,'submodule');
+      }
+    };
+    await add('','main');
+    while(pending.length){
+      if(Date.now()>=deadline||visited>=20000||repositories.size>=200){complete=false;break;}
+      const current=pending.pop()!;visited++;
+      let path:string,entries:Dirent[];
+      try{path=await this.#repositoryDirectory(project.path,current.path);entries=await readdir(path,{withFileTypes:true});}catch{complete=false;continue;}
+      if(current.path&&entries.some(entry=>entry.name==='.git'))await add(current.path,'nested');
+      for(const entry of entries){
+        if(!entry.isDirectory()||entry.isSymbolicLink()||['.git','node_modules','.local'].includes(entry.name)||sensitivePath(entry.name))continue;
+        if(current.depth>=12){complete=false;continue;}
+        pending.push({path:current.path?current.path+'/'+entry.name:entry.name,depth:current.depth+1});
+      }
+    }
+    return {repositories:[...repositories.values()].sort((a,b)=>a.path===''?-1:b.path===''?1:a.path.localeCompare(b.path)),complete};
   }
 
   async #fetchRemotes(path: string) {
@@ -274,11 +379,11 @@ export class Projects {
     return { files: files.sort((a,b) => a.path.localeCompare(b.path)) };
   }
 
-  async readImage(id: string, path: string, revision?: string) {
+  async readImage(id: string, path: string, revision?: string, repository = '') {
     const limit = 20 * 1024 * 1024;
     let bytes: Buffer;
     if (revision !== undefined) {
-      const project = await this.resolve(id), rel = this.#historyPath(path);
+      const project = await this.#repository(await this.resolve(id),repository), rel = this.#historyPath(path);
       if (revision !== 'index') {
         this.#historyCommit(revision);
         const commit = (await git(project.path, ['rev-parse','--verify',revision+'^{commit}']).catch(()=>'')).trim();
@@ -311,14 +416,20 @@ export class Projects {
     } catch { throw problem('Image is invalid, unsupported or exceeds 40 megapixels', 415); }
   }
 
+  async fileEntry(id:string,path:string) {
+    const {target,rel}=await this.#safePath(id,path,null);
+    return {path:rel,type:(await lstat(target)).isDirectory()?'directory':'file'};
+  }
+
   async readFile(id: string, path: string) {
     const { project, target, rel } = await this.#safePath(id, path, true);
     this.#checkVisible(rel);
     const info = await lstat(target); const bytes = await this.#readBounded(target,MAX_VIEW_BYTES);
-    const binary = bytes.subarray(0, 8192).includes(0);
-    if (binary) return { path: rel, text: '', size: info.size, truncated: false, binary: true };
-    const slice = bytes.subarray(0, MAX_VIEW_BYTES); let text:string; try{text=new TextDecoder('utf-8',{fatal:true}).decode(slice);}catch{return {path:rel,text:'',size:info.size,truncated:info.size>MAX_VIEW_BYTES,binary:true};}
-    let truncated = info.size > MAX_VIEW_BYTES; const lines = text.split('\n');
+    let truncated = info.size > MAX_VIEW_BYTES;
+    const encoding=bytes[0]===0xff&&bytes[1]===0xfe?'utf-16le':bytes[0]===0xfe&&bytes[1]===0xff?'utf-16be':'utf-8';
+    let text:string;try{text=new TextDecoder(encoding,{fatal:true}).decode(bytes.subarray(0,MAX_VIEW_BYTES),{stream:truncated});}catch{return {path:rel,text:'',size:info.size,truncated,binary:true};}
+    if(text.includes('\0'))return {path:rel,text:'',size:info.size,truncated,binary:true};
+    const lines = text.split('\n');
     if (lines.length > MAX_VIEW_LINES) { text = lines.slice(0,MAX_VIEW_LINES).join('\n'); truncated = true; }
     return { path: rel, text, size: info.size, truncated, binary: false };
   }
@@ -381,22 +492,25 @@ export class Projects {
   #historyPath(value:string,sensitive=true) { this.#validateRelative(value); const rel=value.split(sep).join('/'); if(sensitive&&this.#sensitiveHistoryPath(rel))throw problem('Sensitive file is not readable',403); return rel; }
   #sensitiveHistoryPath(rel:string){return sensitivePath(rel);}
 
-  async gitLog(id:string,ref='HEAD',cursor?:string) {
-    const {path}=await this.resolve(id);
-    if(!(await git(path,['rev-parse','--is-inside-work-tree']).catch(()=>'' )).trim())return {repository:false,commits:[],branches:[],nextCursor:null};
+  async gitLog(id:string,ref='HEAD',cursor?:string,repository='') {
+    const {path,identity,isRepository}=await this.#repository(await this.resolve(id),repository);
+    if(!isRepository)return {repository:false,commits:[],branches:[],nextCursor:null};
     let tips:string[]; let skip=0;
-    if(cursor){try{if(typeof cursor!=='string'||cursor.length>4096)throw new Error();const value=JSON.parse(inflateRawSync(Buffer.from(cursor,'base64url'),{maxOutputLength:64*1024}).toString());if(Object.keys(value).sort().join(',')!=='ref,skip,tips'||value.ref!==ref||!Array.isArray(value.tips)||value.tips.length>512||!value.tips.every((tip:any)=>/^[0-9a-f]{40,64}$/i.test(tip))||!Number.isSafeInteger(value.skip)||value.skip<1)throw new Error();({tips,skip}=value);}catch{throw problem('Invalid history cursor');}}
+    if(cursor){try{if(typeof cursor!=='string'||cursor.length>4096)throw new Error();const value=JSON.parse(inflateRawSync(Buffer.from(cursor,'base64url'),{maxOutputLength:64*1024}).toString());if(Object.keys(value).sort().join(',')!=='order,ref,repository,skip,tips'||value.repository!==identity||value.order!=='committer-date-v1'||value.ref!==ref||!Array.isArray(value.tips)||value.tips.length>512||!value.tips.every((tip:any)=>/^[0-9a-f]{40,64}$/i.test(tip))||!Number.isSafeInteger(value.skip)||value.skip<1)throw new Error();({tips,skip}=value);}catch{throw problem('Invalid history cursor; refresh the history');}}
     else if(ref==='HEAD') { const head=(await git(path,['rev-parse','--verify','HEAD^{commit}']).catch(()=>'')).trim(); tips=head?[head]:[]; }
     else if(ref==='all') { tips=[...new Set((await git(path,['for-each-ref','--format=%(objectname)','refs/heads','refs/remotes','refs/tags'])).split(/\s+/).filter(Boolean))]; }
     else { if(!/^refs\/(?:heads|tags|remotes)\//.test(ref)||/[\x00-\x1f]/.test(ref))throw problem('Invalid Git ref');await git(path,['check-ref-format',ref]).catch(()=>{throw problem('Invalid Git ref')});const tip=(await git(path,['rev-parse','--verify',ref+'^{commit}']).catch(()=>'')).trim();if(!tip)throw problem('Git ref not found',404);tips=[tip]; }
     if(tips.length>512)throw problem('分支过多，请选择具体分支',409);
     const {refs,branches}=await this.#historyRefs(path);
     if(!tips.length)return {repository:true,commits:[],branches,nextCursor:null};
-    const raw=await git(path,['log','--date-order',`--max-count=${HISTORY_PAGE_SIZE+1}`,`--skip=${skip}`,'--format=%H%x00%P%x00%s%x00%an%x00%cI%x00',...tips]);
+    // ponytail: scan all reachable timestamps per page, bounded by Git's 2 MiB/30 s limits;
+    // use a persisted sorted index if larger histories need support. Never return a partial scan.
+    const order=(await git(path,['rev-list','--date-order','--timestamp',...tips])).trim().split('\n').filter(Boolean).map(line=>{const [date,id]=line.split(' ');return {date:Number(date),id};}).sort((a,b)=>b.date-a.date);
+    const selected=order.slice(skip,skip+HISTORY_PAGE_SIZE),more=order.length>skip+HISTORY_PAGE_SIZE;
+    const raw=selected.length?await git(path,['log','--no-walk=unsorted','--format=%H%x00%P%x00%s%x00%an%x00%cI%x00',...selected.map(item=>item.id)]):'';
     const fields=raw.split('\0'); const commits:any[]=[];
     for(let i=0;i+4<fields.length;i+=5){const commitId=fields[i].replace(/^\s+/,'');if(!commitId)continue;commits.push({id:commitId,parents:fields[i+1].trim().split(/\s+/).filter(Boolean),subject:fields[i+2],author:fields[i+3],date:fields[i+4],refs:refs.get(commitId)??[]});}
-    const more=commits.length>HISTORY_PAGE_SIZE; if(more)commits.length=HISTORY_PAGE_SIZE;
-    const nextCursor=more?deflateRawSync(JSON.stringify({ref,tips,skip:skip+HISTORY_PAGE_SIZE})).toString('base64url'):null;if(nextCursor&&nextCursor.length>4096)throw problem('分支过多，请选择具体分支',409);return {repository:true,commits,branches,nextCursor};
+    const nextCursor=more?deflateRawSync(JSON.stringify({order:'committer-date-v1',ref,tips,skip:skip+HISTORY_PAGE_SIZE,repository:identity})).toString('base64url'):null;if(nextCursor&&nextCursor.length>4096)throw problem('分支过多，请选择具体分支',409);return {repository:true,commits,branches,nextCursor};
   }
 
   async #commitInfo(projectPath:string,value:string,withRefs=true) {
@@ -426,11 +540,11 @@ export class Projects {
     });
   }
 
-  async gitCommit(id:string,commit:string,parent?:string) {
-    const {path}=await this.resolve(id);const info=await this.#commitInfo(path,commit);const selected=parent===undefined?info.parents[0]??null:this.#historyCommit(parent);
+  async gitCommit(id:string,commit:string,parent?:string,repository='') {
+    const {path}=await this.#repository(await this.resolve(id),repository);const info=await this.#commitInfo(path,commit);const selected=parent===undefined?info.parents[0]??null:this.#historyCommit(parent);
     if(selected&&!info.parents.includes(selected))throw problem('Parent is not a parent of commit');
     return {commit:info,parent:selected,files:await this.#historyChanges(path,info.id,selected)};
   }
 
-  async gitCommitDiff(id:string,commit:string,parent:string|undefined,pathValue:string){const project=await this.resolve(id);const path=this.#historyPath(pathValue);const info=await this.#commitInfo(project.path,commit,false);const parentId=parent===undefined?info.parents[0]??null:this.#historyCommit(parent);if(parentId&&!info.parents.includes(parentId))throw problem('Parent is not a parent of commit');const file=(await this.#historyChanges(project.path,info.id,parentId,false)).find(item=>item.path===path);if(!file)throw problem('Path is not a changed file');if(imagePath(path))return {path,commit:info.id,parent:parentId,images:{before:!parentId||file.status==='added'?null:{path:file.oldPath??path,revision:parentId},after:file.status==='deleted'?null:{path,revision:info.id}}};const patch=await this.#historyPatch(project.path,info.id,parentId,[...(file.oldPath?[file.oldPath]:[]),path]);return parsePatch(path,patch,{commit:info.id,parent:parentId});}
+  async gitCommitDiff(id:string,commit:string,parent:string|undefined,pathValue:string,repository=''){const project=await this.#repository(await this.resolve(id),repository);const path=this.#historyPath(pathValue);const info=await this.#commitInfo(project.path,commit,false);const parentId=parent===undefined?info.parents[0]??null:this.#historyCommit(parent);if(parentId&&!info.parents.includes(parentId))throw problem('Parent is not a parent of commit');const file=(await this.#historyChanges(project.path,info.id,parentId,false)).find(item=>item.path===path);if(!file)throw problem('Path is not a changed file');if(imagePath(path))return {path,commit:info.id,parent:parentId,images:{before:!parentId||file.status==='added'?null:{path:file.oldPath??path,revision:parentId,...(repository?{repository}:{})},after:file.status==='deleted'?null:{path,revision:info.id,...(repository?{repository}:{})}}};const patch=await this.#historyPatch(project.path,info.id,parentId,[...(file.oldPath?[file.oldPath]:[]),path]);return parsePatch(path,patch,{commit:info.id,parent:parentId});}
 }

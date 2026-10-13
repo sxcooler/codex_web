@@ -1,0 +1,35 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>通知点击定位 · 待确认</title><style>
+:root{color-scheme:dark;font:14px/1.75 "Segoe UI","Microsoft YaHei",sans-serif;background:#121619;color:#e4e9ea}*{box-sizing:border-box}body{margin:0}
+header{display:flex;align-items:center;gap:14px;padding:15px 24px;border-bottom:1px solid #2d383c}header span{color:#9caeb7}button{font:inherit;cursor:pointer;border:1px solid #3b484e;border-radius:6px;background:#202b30;color:#dbe6e8;padding:5px 12px}
+header button{margin-left:auto}main{max-width:940px;margin:25px auto;padding:0 26px}.note{font-size:12px;color:#95b9aa}.title{color:#a4cdbb;border:1px solid #34483e;border-radius:5px;padding:3px 8px;font-size:12px}
+.message{display:flex;gap:13px;margin:28px 0}.avatar{background:#355d49;border-radius:50%;width:30px;height:30px;flex:0 0 30px;display:grid;place-items:center}
+.body{min-width:0;flex:1}.body h3{font-size:14px;margin:0}.body p{margin:10px 0}details{margin:26px 0 26px 43px;border:1px solid #334047;border-radius:7px;background:#171e22}summary{padding:12px 15px;color:#a6b9c2;cursor:pointer}
+#target{outline:none;border:1px solid transparent;border-radius:8px;padding:15px;margin-top:20px}#target:focus{border-color:#92d0b2;background:#1e3028}
+.located{display:inline-block;font-size:12px;border:1px solid #638e79;color:#bce6d0;padding:3px 8px;border-radius:5px;margin-bottom:8px}
+.composer{background:#171e22;border:1px solid #344046;border-radius:8px;padding:15px;min-height:90px;color:#7e99a5;margin:32px 0 0 43px}.composer button{float:right;margin-top:20px;background:#95d1b4;color:#183d2d}
+.notification{position:fixed;right:22px;bottom:25px;width:350px;border:1px solid #536269;border-radius:11px;background:#283138;box-shadow:0 7px 30px #0007;color:#e8eef1;overflow:hidden}
+.notification-top{display:flex;align-items:center;gap:8px;font-size:11px;color:#b6c7cf;padding:10px 13px;border-bottom:1px solid #46535a}
+.notification-top button{margin-left:auto;border:0;background:transparent;padding:0 3px;font-size:17px;line-height:1}
+.notification-click{display:block;width:100%;border:0;border-radius:0;background:transparent;text-align:left;padding:15px}
+.notification-click strong{display:block}.notification-click span{display:block;color:#bdced6;font-size:13px}.notification-click small{display:block;color:#98b5c2;font-size:11px;margin-top:7px}
+#destination{color:#a1c4b3;font-size:12px;margin-left:43px}[hidden]{display:none!important}
+@media(max-width:600px){header{padding:12px 14px;flex-wrap:wrap;gap:5px 9px}header span{font-size:12px}header button{font-size:12px}main{padding:0 14px;margin:18px auto}.message{gap:9px}.avatar{width:26px;height:26px;flex-basis:26px}details,.composer,#destination{margin-left:0}.notification{width:calc(100% - 28px);right:14px;bottom:16px}#target{padding:12px}.composer{margin-top:24px}body{padding-bottom:120px}}
+</style></head><body>
+<header><strong>Codex Web</strong><span id="session">sample-project · 另一个会话</span><button id="reset">重新演示</button></header>
+<main><p class="note">通知交互示意 · 尚未实施 · 通知卡片是原型，非真实系统通知</p>
+<div id="before"><div class="message"><div class="avatar">A</div><div class="body"><h3>Codex</h3><p>这个会话继续保留当前内容和输入。</p><p>另一个任务完成后，点击右下角的任务通知。</p></div></div><div class="composer">继续这个会话…<button>发送</button></div></div>
+<div id="after" hidden><span class="title">SampleSDK · 启动状态验证</span><details><summary>用时 34m 14s · 已完成</summary><p>中间说明、工具和测试记录在过程折叠区中。</p></details>
+<div class="message" id="target" tabindex="-1"><div class="avatar">A</div><div class="body"><span class="located">通知对应的位置</span><h3>Codex · 本轮最终答复</h3><p><strong>启动状态修复已通过独立测试。</strong>冷启动 10/10，创建 / 重建 11/11，状态切换 10/10。旧失败记录保留。</p><p>完整结果已保存，可继续查看报告。</p></div></div>
+<p id="destination" role="status">已定位到通知对应的会话和本轮答复。</p><div class="composer">继续这个会话…<button>发送</button></div></div>
+</main>
+<section class="notification" id="notification" aria-label="系统通知示意">
+<div class="notification-top"><span>◈ Codex Web · 浏览器通知</span><button id="dismiss" aria-label="关闭通知示意">×</button></div>
+<button class="notification-click" id="click"><strong>任务完成</strong><span>点击查看本轮答复</span><small>申请停留到点击或关闭；实际外观和停留由系统决定</small></button>
+</section>
+<script>
+const notice=document.querySelector('#notification'),before=document.querySelector('#before'),after=document.querySelector('#after');
+document.querySelector('#click').addEventListener('click',()=>{notice.hidden=true;before.hidden=true;after.hidden=false;document.querySelector('#session').textContent='SampleSDK · 启动状态验证';const target=document.querySelector('#target');target.scrollIntoView({block:'center'});target.focus({preventScroll:true});});
+document.querySelector('#dismiss').addEventListener('click',()=>notice.hidden=true);
+document.querySelector('#reset').addEventListener('click',()=>{notice.hidden=false;before.hidden=false;after.hidden=true;document.querySelector('#session').textContent='sample-project · 另一个会话';window.scrollTo(0,0);});
+</script></body></html>

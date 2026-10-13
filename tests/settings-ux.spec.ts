@@ -4,6 +4,7 @@ import {mkdir} from 'node:fs/promises';
 const account='a'.repeat(64);
 const field=(value:string|boolean|null,extra:Record<string,unknown>={})=>({userValue:value,effectiveValue:value,origin:{type:'user'},writable:true,reason:null,...extra});
 async function setup(page:Page){
+ await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
  let version=1,fail=false,usage:any={accountId:account,updatedAt:Date.now(),rateLimits:{limitId:'codex',primary:{usedPercent:20,windowDurationMins:300,resetsAt:1800000000},secondary:{usedPercent:62,windowDurationMins:10080,resetsAt:1800000000},credits:{hasCredits:true,unlimited:false,balance:'62500'}},rateLimitsByLimitId:null,rateLimitResetCredits:{availableCount:'1',credits:[]},resetSupported:false};
  const fields:any={model:field('model-a'),model_reasoning_effort:field('high'),approval_policy:field('on-request'),approvals_reviewer:field('auto_review'),sandbox_mode:field('workspace-write'),workspaceNetworkAccess:field(false),web_search:field('cached'),service_tier:field('default'),memoriesEnabled:field(null,{defaultValue:false}),generateMemories:field(null,{defaultValue:true}),useMemories:field(null,{defaultValue:true}),allowExternalMemory:field(null,{defaultValue:true})};
  const posts:any[]=[],errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',message=>{if(message.type()==='error'&&!(fail&&message.text().includes('504')))errors.push(message.text());});
@@ -11,7 +12,7 @@ async function setup(page:Page){
   const request=route.request(),url=new URL(request.url()),path=url.pathname;let data:any={};
   if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
   else if(path==='/api/projects')data={projects:[]};
-  else if(path==='/api/sessions')data={data:[{id:'older',preview:'较早创建',createdAt:1,updatedAt:20},{id:'newer',preview:'较晚创建',createdAt:2,updatedAt:10}],nextCursor:null};
+  else if(path==='/api/sessions')data={data:[{id:'older',preview:'较早创建',createdAt:1,updatedAt:20,recencyAt:20},{id:'newer',preview:'较晚创建',createdAt:2,updatedAt:10,recencyAt:10}],nextCursor:null};
   else if(path==='/api/models')data={data:[{model:'model-a',displayName:'Model A',isDefault:true,defaultServiceTier:'default',supportedReasoningEfforts:[{reasoningEffort:'high'},{reasoningEffort:'low'}],serviceTiers:[{id:'priority',name:'Fast',description:'Native fast tier'},{id:'research',name:'Research',description:'Native research tier'}]}]};
   else if(path==='/api/permission-modes')data={current:'auto-review',modes:[{id:'ask',available:true},{id:'auto-review',available:true},{id:'full-access',available:true},{id:'custom',available:true}]};
   else if(path==='/api/codex/settings'){
@@ -55,10 +56,10 @@ for(const width of [1440,390])test(`global errors can be dismissed without resiz
  await page.route('**/api/sessions/geometry',route=>route.fulfill({json:{thread:{id:'geometry',name:'布局回归',turns:[]},phase:'IDLE',activeTurnId:null,pending:[],epoch:'test',syncCursor:'test:0'}}));
  await page.goto('/sessions/geometry');const composer=page.getByRole('textbox',{name:'继续这个会话',exact:true});await expect(composer).toBeVisible();await composer.focus();
  const layout=()=>page.evaluate(()=>[document.documentElement,document.querySelector('.workspace-content')!,document.querySelector('.session-layout')!].map(el=>({height:el.clientHeight,scroll:el.scrollHeight,top:el.scrollTop})));
- const before=await layout();failed=true;await page.evaluate(()=>window.dispatchEvent(new Event('online')));await expect(page.getByRole('alert').filter({hasText:'最近会话同步失败'})).toBeVisible();
+ const before=await layout();failed=true;await page.evaluate(()=>{window.dispatchEvent(new Event('offline'));window.dispatchEvent(new Event('online'));});await expect(page.getByRole('alert').filter({hasText:'最近会话同步失败'})).toBeVisible();
  const shown=await layout();console.log('notice geometry',width,{before,shown});await screenshot(page,`regression-notice-${width}`);expect.soft(shown).toEqual(before);
- await page.route('**/api/projects/refresh',route=>route.fulfill({status:503,json:{error:'项目同步失败，请检查来源。'.repeat(150)}}));
- if(width===390)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();const refresh=page.locator('.sidebar .side-section').first().getByRole('button',{name:'刷新',exact:true});await refresh.focus();await refresh.press('Enter');await expect(page.getByRole('alert').filter({hasText:'项目同步失败'})).toBeVisible();if(width===390)await page.getByRole('button',{name:'收起左侧栏',exact:true}).click();
+ await page.route('**/api/auth/logout',route=>route.fulfill({status:503,json:{error:'退出失败，请检查连接。'.repeat(150)}}));
+ if(width===390)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();const logout=page.locator('.sidebar').getByRole('button',{name:/退出/});await logout.focus();await logout.press('Enter');await expect(page.getByRole('alert').filter({hasText:'退出失败'})).toBeVisible();if(width===390)await page.getByRole('button',{name:'收起左侧栏',exact:true}).click();
  const messages=page.locator('.app-notification-text');await expect(messages).toHaveCount(2);const stack=await messages.evaluateAll(elements=>elements.map(el=>({top:el.getBoundingClientRect().top,bottom:el.getBoundingClientRect().bottom,height:el.clientHeight,scroll:el.scrollHeight})));
  for(const message of stack){expect(message.height).toBeGreaterThan(0);expect(message.scroll).toBeGreaterThan(message.height);expect(message.bottom).toBeLessThanOrEqual(width===390?844:900);}expect(stack[1].top).toBeGreaterThan(stack[0].bottom);expect(await layout()).toEqual(before);await screenshot(page,`regression-notice-stack-${width}`);
  await page.getByRole('button',{name:'关闭错误提醒',exact:true}).click();await expect(page.locator('.app-notifications [role=alert]')).toHaveCount(1);
@@ -75,7 +76,7 @@ test('mobile drawer Tab cycle includes notification scrolling and dismiss while 
  const state=await setup(page);let failed=false;await page.setViewportSize({width:390,height:844});
  await page.route('**/api/sessions?*',route=>route.fulfill(failed?{status:503,json:{error:'同步失败，需要人工检查。'.repeat(150)}}:{json:{data:[],nextCursor:null}}));
  await page.goto('/');await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();const previous=page.getByRole('button',{name:'＋ 新任务',exact:true});await expect(previous).toBeFocused();
- failed=true;await page.evaluate(()=>window.dispatchEvent(new Event('online')));await expect(page.getByRole('alert').filter({hasText:'最近会话同步失败'})).toBeVisible();
+ failed=true;await page.evaluate(()=>{window.dispatchEvent(new Event('offline'));window.dispatchEvent(new Event('online'));});await expect(page.getByRole('alert').filter({hasText:'最近会话同步失败'})).toBeVisible();
  const text=page.locator('.app-notification-text'),close=page.getByRole('button',{name:'关闭会话同步提醒',exact:true});let textReached=false,closeReached=false;
  for(let index=0;index<20;index++){await page.keyboard.press('Tab');textReached||=await text.evaluate(el=>el===document.activeElement);closeReached||=await close.evaluate(el=>el===document.activeElement);}
  expect.soft(textReached).toBe(true);expect(closeReached).toBe(true);

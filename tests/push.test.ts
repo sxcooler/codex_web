@@ -8,6 +8,18 @@ import Fastify from 'fastify';
 
 const subscription = { endpoint: 'https://fcm.googleapis.com/fcm/send/device', keys: { p256dh: Buffer.concat([Buffer.from([4]),Buffer.alloc(64,1)]).toString('base64url'), auth: Buffer.alloc(16,2).toString('base64url') } };
 
+test('push preserves explicit notification positions without copying private event fields or parsing event keys',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'push-target-')),payloads:any[]=[];
+ const service=await createPushService({dataDir:dir,origin:'https://example.test',sessionValid:()=>true,resolve:async()=>['142.250.1.1'],send:async(_s,payload)=>{payloads.push(JSON.parse(payload));return {statusCode:201};}});
+ try{
+  await service.subscribe('owner',subscription);
+  await service.notify({threadId:'thread-1',eventKey:'DO NOT PARSE:turn:wrong',kind:'input',turnId:'turn:1',itemId:'item_1',requestId:'request:1',text:'PRIVATE',cwd:'C:/private'} as any);
+  assert.deepEqual(payloads[0],{title:'需要确认',threadId:'thread-1',kind:'input',turnId:'turn:1',itemId:'item_1',requestId:'request:1',url:'/sessions/thread-1'});
+  await service.notify({threadId:'thread-1',eventKey:'legacy:turn:wrong',kind:'complete'});
+  assert.equal(payloads[1].turnId,undefined);
+ }finally{service.close();await rm(dir,{recursive:true,force:true});}
+});
+
 test('mixed origins expose Push only for the HTTPS request context',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'push-origins-'));const app=Fastify();
   const service=await createPushService({dataDir:dir,origin:'https://example.test',sessionValid:()=>true,resolve:async()=>['142.250.1.1']});

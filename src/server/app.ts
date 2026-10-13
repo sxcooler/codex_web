@@ -153,12 +153,20 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     }
   });
 
-  app.setErrorHandler((error: FastifyError, _request, reply) => {
+  app.setErrorHandler((error: FastifyError, request, reply) => {
     if (error.code === 'FST_REQ_FILE_TOO_LARGE') return reply.code(413).send({ error: 'File too large' });
     if (error.validation || error.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || error.statusCode === 400) {
       return reply.code(400).send({ error: 'Invalid request' });
     }
-    if (['PROJECT_ERROR', 'RUNTIME_ERROR', 'UPLOAD_ERROR', 'PUSH_ERROR', 'REPORT_ERROR'].includes(error.code ?? '') || error.code?.startsWith('RUNTIME_') || error.code?.startsWith('ACCOUNT_') || error.code?.startsWith('SETTINGS_') || error.code?.startsWith('INSTRUCTIONS_') || error.code?.startsWith('PLUGINS_')) {
+    const known = ['PROJECT_ERROR', 'RUNTIME_ERROR', 'UPLOAD_ERROR', 'PUSH_ERROR', 'REPORT_ERROR'].includes(error.code ?? '') || ['RUNTIME_', 'ACCOUNT_', 'SETTINGS_', 'INSTRUCTIONS_', 'PLUGINS_', 'SHARED_'].some(prefix => error.code?.startsWith(prefix));
+    if (request.routeOptions.url?.startsWith('/api/') && (!known || (error.statusCode ?? 500) >= 500)) {
+      try {
+        const event = {event:'api_error',time:new Date().toISOString(),pid:process.pid,requestId:request.id,method:request.method,route:request.routeOptions.url,name:error.name,code:error.code,message:error.message,stack:error.stack};
+        try { console.error(JSON.stringify(event)); } catch { /* Logging cannot change the response. */ }
+        try { options.diagnostics?.recordHttpError(request,event); } catch { /* Keep ordinary logging independent of diagnostics. */ }
+      } catch { /* An unreadable exception must still receive the safe error response. */ }
+    }
+    if (known) {
       return reply.code(error.statusCode ?? 500).send({ error: error.message, code: error.code, partial: (error as any).partial });
     }
     return reply.code(500).send({ error: 'Internal server error' });
@@ -254,7 +262,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     // This application has one administrator; attachments survive login renewal and password changes.
     const uploadAccess={...access,owner:(_request:FastifyRequest)=>'administrator'};
     await registerUploadRoutes(app,uploads,uploadAccess);
-    const push=await createPushService({dataDir:options.dataDir,origin:(origins.find(origin=>origin.protocol==='https:')??origins[0]).origin,sessionValid:id=>auth.authenticateSessionId(id)});
+    const push=await createPushService({dataDir:options.dataDir,origin:(origins.find(origin=>origin.protocol==='https:')??origins[0]).origin,sessionValid:id=>auth.authenticateSessionId(id),diagnostic:options.diagnostics?.record});
     app.addHook('onClose',async()=>push.close());
     pruneSubscriptions=()=>push.pruneInvalid();
     registerPushRoutes(app,push,{...access,secure:request=>requestOrigin(request).protocol==='https:'});
@@ -265,7 +273,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     app.addHook('preClose',async()=>{closing=true;clearInterval(cleanup);options.runtime!.off('notification',notify);await Promise.allSettled([...jobs]);});
     const api = registerApi(app, { dataDir: options.dataDir, runtime: options.runtime, projects: options.projects,
       authenticated: request => { const token = authenticatedTokens.get(request); return () => auth.authenticate(token); },
-      uploads,uploadOwner:uploadAccess.owner,
+      uploads,uploadOwner:uploadAccess.owner,diagnostic:options.diagnostics?.record,
     });
     closeInvalidStreams = api.closeInvalid;
   }

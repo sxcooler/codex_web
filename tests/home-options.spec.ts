@@ -90,7 +90,7 @@ test('confirmed first message remains visible when history temporarily fails and
   });
   await page.goto('/');await page.getByRole('textbox',{name:'任务',exact:true}).fill('首条消息');await page.getByRole('button',{name:'开始任务 →'}).click();
   await expect(page.locator('.outgoing-message')).toContainText('首条消息');
-  await expect(page.locator('.outgoing-status')).toContainText('已发送，等待历史同步');
+  await expect(page.locator('.outgoing-status')).toContainText('已发送，正在同步');
   await expect(page.getByRole('alert').filter({hasText:'历史暂不可读'})).toBeVisible();
   await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
   expect(posts).toBe(1);

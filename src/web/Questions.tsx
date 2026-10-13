@@ -1,5 +1,6 @@
 import {createContext,useContext,useId,useRef,useState} from 'react';
 import {api,type Json} from './api.ts';
+import {writeSession} from './handoff.ts';
 import {MarkdownView} from './MarkdownView.tsx';
 import {chatFileUrl,fileImageUrl,linkedFile,linkFragment} from './fileLinks.ts';
 
@@ -18,7 +19,7 @@ export function AsyncQuestions({item,threadId,turnId}:{item:Json;threadId:string
   const saved=context.states[turnId+':'+item.id]?.status,state=saved==='accepted'?'accepted':status||saved,locked=state==='accepted'||state==='unknown'||state==='sending';
   return <form className="async-questions" aria-label="回答 Codex 提问" onSubmit={async event=>{
     event.preventDefault();if(sending.current||locked||!context.canSend)return;sending.current=true;request.current??=crypto.randomUUID();setStatus('sending');setError('');
-    try{await api(`/sessions/${threadId}/turns/${encodeURIComponent(turnId)}/items/${encodeURIComponent(item.id)}/answer`,{answers:item.questions.map((_:any,i:number)=>values[String(i)]),clientRequestId:request.current,...(context.expectedTurnId?{expectedTurnId:context.expectedTurnId}:{})});setStatus('accepted');context.onSent();}
+    try{await writeSession(threadId,()=>api(`/sessions/${threadId}/turns/${encodeURIComponent(turnId)}/items/${encodeURIComponent(item.id)}/answer`,{answers:item.questions.map((_:any,i:number)=>values[String(i)]),clientRequestId:request.current,...(context.expectedTurnId?{expectedTurnId:context.expectedTurnId}:{})},AbortSignal.timeout(30_000)));setStatus('accepted');context.onSent();}
     catch(e:any){setStatus(!e.status||e.status>=500?'unknown':'');setError(e.message);context.onSent();}finally{sending.current=false;}
   }}><QuestionFields questions={item.questions} values={values} onChange={(id,value)=>setValues(old=>({...old,[id]:value}))} disabled={locked}/>{state==='accepted'?<p role="status">回答已发送</p>:state==='unknown'?<p role="status">提交结果待核实，请检查历史；不会自动重发。</p>:<button className="primary" disabled={locked||!context.canSend||item.questions.some((_:any,i:number)=>!values[String(i)]?.trim())}>{state==='sending'?'发送中…':'发送回答'}</button>}{!context.canSend&&!locked?<p className="muted small">会话暂不可提交，请核对占用或等待同步完成。</p>:null}{error?<p role="alert">{error}</p>:null}</form>;
 }

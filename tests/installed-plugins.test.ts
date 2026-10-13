@@ -87,15 +87,18 @@ test('plugin API authenticates before native work and resolves only selected pro
  const apiDir=await mkdtemp(join(tmpdir(),'plugins-api-')),root=join(apiDir,'work');await mkdir(join(root,'project'),{recursive:true});const projects=new Projects(root),[project]=await projects.list();
  const dataDir=join(apiDir,'data');await initializeAuth(dataDir,'plugins-test-password');
  const app=await buildServer({dataDir,origin:'http://localhost:3000',runtime:f.runtime,projects});t.after(async()=>{await app.close();await rm(apiDir,{recursive:true,force:true});});
- assert.equal((await app.inject({url:'/api/codex/plugins',headers:{host:'localhost:3000'}})).statusCode,401);assert.deepEqual(await f.calls(),[]);
+ await app.ready();const bootstrapDeadline=Date.now()+3000;
+ while(!(await f.calls()).some(call=>call.method==='project/list')){assert.ok(Date.now()<bootstrapDeadline,'independent catalog bootstrap must settle');await new Promise(resolve=>setTimeout(resolve,10));}
+ const bootstrap=await f.calls();assert.deepEqual(bootstrap.map(call=>call.method),['initialize','project/list']);
+ assert.equal((await app.inject({url:'/api/codex/plugins',headers:{host:'localhost:3000'}})).statusCode,401);assert.deepEqual(await f.calls(),bootstrap);
  const csrf=await app.inject({url:'/api/auth/session',headers:{host:'localhost:3000'}});
  const headers:any={host:'localhost:3000',origin:'http://localhost:3000','x-csrf-token':csrf.json().csrfToken,cookie:String(csrf.headers['set-cookie']).split(';')[0]};
  const login=await app.inject({method:'POST',url:'/api/auth/login',headers,payload:{password:'plugins-test-password'}});headers.cookie+='; '+String(login.headers['set-cookie']).split(';')[0];
  for(const query of ['cwd=/private','projectId=../../escape','projectId=aaaaaaaaaaaaaaaaaaaaaaaa'])assert.ok((await app.inject({url:'/api/codex/plugins?'+query,headers})).statusCode>=400);
- assert.deepEqual(await f.calls(),[]);
+ assert.deepEqual(await f.calls(),bootstrap,'unauthenticated and invalid plugin requests must cause no native business RPC');
  const read=await app.inject({url:'/api/codex/plugins?projectId='+project.id,headers});assert.equal(read.statusCode,200,read.body);assert.equal(read.json().supported,true);
- assert.deepEqual((await f.calls())[1],{method:'plugin/installed',params:{cwds:[project.path]}});
+ assert.deepEqual((await f.calls())[bootstrap.length],{method:'plugin/installed',params:{cwds:[project.path]}});
  const failure=await app.inject({url:'/api/codex/plugins',headers});assert.equal(failure.statusCode,503,failure.body);assert.equal(failure.json().code,'PLUGINS_READ_FAILED');assert.equal(failure.body.includes(secret),false);
- assert.deepEqual((await f.calls()).map(call=>call.method),['initialize','plugin/installed','plugin/installed']);
+ assert.deepEqual((await f.calls()).map(call=>call.method),['initialize','project/list','plugin/installed','plugin/installed']);
  assert.equal((await app.inject({method:'POST',url:'/api/codex/plugins',headers,payload:{}})).statusCode,404);
 });

@@ -35,6 +35,7 @@ try{
   assert.ok(requested.includes('runs/full.png'));assert.ok(requested.includes('runs/roi.png'));
   const readme=await readFile('README.md','utf8');
   await page.route('**/api/sessions/fixture/files?*',route=>route.fulfill({json:{files:[{path:'README.md',type:'file'}]}}));
+  await page.route('**/api/sessions/fixture/files/entry?*',route=>route.fulfill({json:{path:new URL(route.request().url()).searchParams.get('path'),type:'file'}}));
   await page.route('**/api/sessions/fixture/files/content?*',route=>route.fulfill({json:{text:readme+'\n\n![面板绝对路径](C:/work/project/runs/full.png)'}}));
   await page.goto(base+'/tests/markdown-images.html?panel=1');
   await page.locator('.markdown-message img').first().waitFor({state:'attached'});

@@ -14,6 +14,7 @@ const secret='FAKE_SECRET_MUST_NOT_LEAK';
 const config=()=>({model:'model-a',model_reasoning_effort:'high',approval_policy:'on-request',approvals_reviewer:'user',sandbox_mode:'workspace-write',sandbox_workspace_write:{network_access:false,writable_roots:['preserved-root'],exclude_tmpdir_env_var:true,exclude_slash_tmp:true},web_search:'cached',model_provider:secret,mcp_servers:{test:{env:{TOKEN:secret}}}});
 function fixture(t:any){
  const runtime=new Runtime({executable:'unused',cwd:process.cwd()}),writes:any[]=[];
+ t.mock.method(runtime,'configurationHome',async()=>null);
  let user=config(),effective:any=null,version='user-v1',requirements:any=null,layerExtra:any={},sourceExtra:any={},origins:any={},writeError:any=null,readError:any=null,readbackError=false,readCount=0,otherLayers:any[]=[];
  t.mock.method(runtime,'models',async()=>({data:[{model:'model-a',defaultReasoningEffort:'high',supportedReasoningEfforts:[{reasoningEffort:'high'}]},{model:'model-b',defaultReasoningEffort:'low',supportedReasoningEfforts:[{reasoningEffort:'low'}]}],nextCursor:null}));
  t.mock.method(runtime as any,'call',async(method:string,params:any)=>{

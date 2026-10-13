@@ -16,9 +16,48 @@ import sharp from 'sharp';
 import Fastify from 'fastify';
 import {registerApi} from '../src/server/api.ts';
 import {MetadataStore} from '../src/server/metadata.ts';
+import {nativeProjects} from './fixtures/native-projects.ts';
+
+test('session and project creation keep native titles without storing prompt-derived Web titles',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'native-title-api-')),runtime=new Runtime({executable:process.execPath,cwd:dir});
+  const root=join(dir,'work');await mkdir(root);
+  const projects=new Projects(root),project=await projects.create({name:'Title project',folderName:'title-project'});
+  const threads=new Map<string,any>(),requests=new Map<string,string>(),acceptedInputs:any[]=[];
+  const native=nativeProjects(dir);for(const name of ['projectContext','assertProjectContext','configurationHome','listProjects','createProject'] as const)t.mock.method(runtime,name,native[name]);
+  t.mock.method(runtime,'close',async()=>{});
+  t.mock.method(runtime,'create',async input=>{
+    acceptedInputs.push(input);
+    let threadId=requests.get(input.clientRequestId);
+    if(!threadId){threadId='native-'+(requests.size+1);requests.set(input.clientRequestId,threadId);threads.set(threadId,{id:threadId,name:null,preview:input.prompt,cwd:input.cwd,turns:[]});}
+    return {threadId,status:'idle'};
+  });
+  t.mock.method(runtime,'snapshot',async id=>({thread:threads.get(id),phase:'IDLE',pending:[]}));
+  t.mock.method(runtime,'rename',async(id,name)=>{threads.get(id).name=name;return {threadId:id,name};});
+  const app=Fastify();registerApi(app,{dataDir:dir,runtime,projects,authenticated:()=>()=>true});
+  try {
+    const payload={projectId:project.id,clientRequestId:'direct-create',prompt:'这是需要概括的新任务'.repeat(20),model:'gpt-6.1-sol',effort:'ultra'};
+    const created=await app.inject({method:'POST',url:'/api/sessions',payload});assert.equal(created.statusCode,200,created.body);
+    const id=created.json().threadId;
+    assert.equal(acceptedInputs[0].model,'gpt-6.1-sol');assert.equal(acceptedInputs[0].effort,'ultra');
+    const read=(await app.inject('/api/sessions/'+id)).json();assert.equal(read.metadata.web_title,null);assert.equal(read.project.id,project.id);
+    threads.get(id).name='生成的原生标题';
+    const native=(await app.inject('/api/sessions/'+id)).json();assert.equal(native.thread.name,'生成的原生标题');assert.equal(native.metadata.web_title,null);
+    assert.equal((await app.inject({method:'POST',url:'/api/sessions/'+id+'/name',payload:{name:'手动名称'}})).statusCode,200);
+    await app.inject({method:'POST',url:'/api/sessions',payload});
+    assert.equal((await app.inject('/api/sessions/'+id)).json().metadata.web_title,'手动名称','creation retries preserve existing manual compatibility metadata');
+    const fresh=await app.inject({method:'POST',url:'/api/projects',payload:{name:'Fresh title project',folderName:'fresh-title-project',initialPrompt:'新项目初始任务',clientRequestId:'project-create',model:'gpt-6.1-sol',effort:'ultra'}});
+    assert.equal(fresh.statusCode,200,fresh.body);
+    assert.equal(acceptedInputs.at(-1).model,'gpt-6.1-sol');assert.equal(acceptedInputs.at(-1).effort,'ultra');
+    assert.equal((await app.inject('/api/sessions/'+fresh.json().session.threadId)).json().metadata.web_title,null);
+    const legacy={id:'legacy-title',name:null,preview:'旧预览',cwd:project.path,turns:[]};threads.set(legacy.id,legacy);
+    const store=new MetadataStore(join(dir,'metadata.sqlite'));store.save(legacy.id,project.path,'旧 Web 名称');store.close();
+    assert.equal((await app.inject('/api/sessions/'+legacy.id)).json().metadata.web_title,'旧 Web 名称');
+  } finally {await app.close();await rm(dir,{recursive:true,force:true});}
+});
 
 test('empty-preview fork supplements persist, remain reachable after native exhaustion and bind pagination to sort/filter',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'fork-list-api-')),runtime=new Runtime({executable:process.execPath,cwd:dir});
+  t.mock.method(runtime,'configurationHome',async()=>null);
   t.mock.method(runtime,'close',async()=>{});
   const headers=new Map<string,any>(),reads:string[]=[],sorts:string[]=[];let active=0,maxActive=0;
   t.mock.method(runtime,'list',async(cursor,archived,sort)=>{sorts.push(sort!);return {data:cursor?[]:[{id:'native',createdAt:15,updatedAt:25}],nextCursor:null};});
@@ -52,13 +91,13 @@ test('empty-preview fork supplements persist, remain reachable after native exha
     await app.close();app=Fastify();registerApi(app,{dataDir:dir,runtime,projects:project,authenticated:()=>()=>true});
     const refreshed=(await app.inject('/api/sessions')).json();assert.ok(refreshed.data.some((thread:any)=>thread.id==='existing'));assert.ok(refreshed.data.some((thread:any)=>thread.id==='new-fork'));
     headers.get('new-fork').archived=true;headers.delete('existing');
-    const recent=(await app.inject('/api/sessions')).json();assert.ok(!recent.data.some((thread:any)=>['new-fork','existing'].includes(thread.id)));
+    const recent=(await app.inject('/api/sessions?refresh=true')).json();assert.ok(!recent.data.some((thread:any)=>['new-fork','existing'].includes(thread.id)));
     const archived=(await app.inject('/api/sessions?archived=true')).json();assert.deepEqual(archived.data.filter((thread:any)=>thread.id.startsWith('new')).map((thread:any)=>thread.id),['new-fork']);
     const included=(await app.inject('/api/sessions?includeHidden=true')).json();assert.ok(included.data.some((thread:any)=>thread.id==='fork-33'));
     const originalNow=Date.now;let now=originalNow(),attempted=0;
     const timer=t.mock.method(Date,'now',()=>now);
     t.mock.method(runtime,'forkListHeader',async(_id,timeoutMs)=>{assert.ok(timeoutMs!>0&&timeoutMs!<=5000);attempted++;now+=2000;throw Error('native read timed out');});
-    const partial=(await app.inject('/api/sessions')).json();timer.mock.restore();
+    const partial=(await app.inject('/api/sessions?refresh=true')).json();timer.mock.restore();
     assert.equal(partial.forkReadsFailed,true);assert.equal(partial.forksPending,true);assert.ok(partial.nextCursor);
     assert.deepEqual(partial.data.map((thread:any)=>thread.id),['native'],'a failed supplement cannot manufacture headers');
     assert.equal(attempted,4,'the expired budget must not schedule another header batch');
@@ -125,6 +164,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
   const picture=await sharp({create:{width:1200,height:800,channels:3,background:'#89cdb1'}}).png().toBuffer();
   let imageReads=0;
   Object.assign(runtime, {
+    ...nativeProjects(dir),
     create: async (input: any) => { created = input; return {threadId:'thread-1',status:'idle'}; },
     saveModelDefaults: async (cwd:string,model:string,effort:string,expectedVersion:string) => {modelDefaults={cwd,model,effort,expectedVersion};return {model,effort,effectiveModel:model,effectiveEffort:effort};},
     list: async (_cursor:string,archived=false) => {archiveFilter=archived;return { data:[{id:'thread-1',cwd:created?.cwd}],nextCursor:null };},
@@ -150,6 +190,8 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal((await app.inject({url:'/api/projects',headers:{host:'localhost:3000'}})).statusCode,401);
     assert.equal((await app.inject({method:'POST',url:'/api/sessions/thread-1/turns/turn-1/items/question-1/answer',headers:{host:'localhost:3000'},payload:{answers:['Yes'],clientRequestId:'answer-old-123'}})).statusCode,403);
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png',headers:{host:'localhost:3000'}})).statusCode,401);
+    assert.equal((await app.inject({url:'/api/sessions/thread-1/files/entry?path=.',headers:{host:'localhost:3000'}})).statusCode,401);
+    assert.equal((await app.inject({url:'/api/sessions/thread-1/git/repositories',headers:{host:'localhost:3000'}})).statusCode,401);
     assert.equal((await app.inject({url:'/%61pi/sessions/thread-1/events',headers:{host:'localhost:3000'}})).statusCode,401);
     const csrf=await app.inject({url:'/api/auth/session',headers:{host:'localhost:3000'}});
     const headers:any={host:'localhost:3000',origin:'http://localhost:3000','x-csrf-token':csrf.json().csrfToken,cookie:csrf.headers['set-cookie'].split(';')[0]};
@@ -198,7 +240,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal((await app.inject({url:'/api/sessions?archived=true',headers})).statusCode,200);assert.equal(archiveFilter,true);
     await app.inject({url:'/api/sessions',headers});assert.equal(archiveFilter,false);
     allowHistory=false;
-    for(const route of ['git/status','git/files','git/diff','git/log','files']){const response=await app.inject({url:'/api/sessions/thread-1/'+route,headers});assert.equal(response.statusCode,200,response.body);}
+    for(const route of ['git/status','git/files','git/diff','git/log','git/repositories','files']){const response=await app.inject({url:'/api/sessions/thread-1/'+route,headers});assert.equal(response.statusCode,200,response.body);}
     await writeFile(join(root,'test','junit.xml'),'<testsuite><testcase name="ok"/></testsuite>');
     const reportUrl='/api/sessions/thread-1/test-reports',reportInput={turnId:'turn-1',commandItemId:'command-1',relativePath:'junit.xml',format:'junit'};
     const report=await app.inject({method:'POST',url:reportUrl,headers,payload:reportInput});assert.equal(report.statusCode,200,report.body);assert.equal(report.json().summary.passed,1);
@@ -220,6 +262,21 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png&revision=HEAD',headers})).statusCode,400);
     execFileSync('git',['add','picture.png'],{cwd:join(root,'test'),windowsHide:true});
     const content=await app.inject({url:'/api/sessions/thread-1/files/content?path=picture.png',headers});assert.equal(content.statusCode,200,content.body);
+    const entryUrl='/api/sessions/thread-1/files/entry';
+    assert.deepEqual((await app.inject({url:entryUrl+'?path=.',headers})).json(),{path:'',type:'directory'});
+    assert.deepEqual((await app.inject({url:entryUrl+'?path=picture.png',headers})).json(),{path:'picture.png',type:'file'});
+    await mkdir(join(root,'test','named.xml'));
+    assert.deepEqual((await app.inject({url:entryUrl+'?path=named.xml',headers})).json(),{path:'named.xml',type:'directory'});
+    assert.equal((await app.inject({url:'/api/sessions/thread-1/files/content?path=named.xml',headers})).statusCode,400);
+    for(const query of ['', '?path=', '?path=.&cwd='+encodeURIComponent(root),'?path='+encodeURIComponent('../test')])assert.equal((await app.inject({url:entryUrl+query,headers})).statusCode,400,query);
+    const colonEntry=entryUrl+'?path='+encodeURIComponent('picture.png:stream');
+    assert.equal((await app.inject({url:colonEntry,headers})).statusCode,process.platform==='win32'?400:404);
+    if(process.platform==='linux'){
+      await writeFile(join(root,'test','picture.png:stream'),'isolated colon filename');
+      assert.deepEqual((await app.inject({url:colonEntry,headers})).json(),{path:'picture.png:stream',type:'file'});
+    }
+    assert.equal((await app.inject({url:entryUrl+'?path=missing.xml',headers})).statusCode,404);
+    assert.equal((await app.inject({url:entryUrl+'?path=.git/config',headers})).statusCode,403);
     const stagedImage=await app.inject({url:'/api/sessions/thread-1/files/image?path=picture.png&revision=index',headers});
     assert.equal(stagedImage.statusCode,200,stagedImage.body);
     assert.deepEqual(stagedImage.rawPayload,image.rawPayload);
@@ -239,6 +296,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     const snapshot=await app.inject({url:'/api/sessions/thread-1',headers});
     assert.equal(snapshot.json().project.id,projectId);
     created.cwd=dir;assert.equal((await app.inject({url:'/api/sessions/thread-1/files/content?path=picture.png',headers})).statusCode,404,'Must not trust stale project metadata');created.cwd=join(root,'test');
+    created.cwd=dir;assert.equal((await app.inject({url:entryUrl+'?path=.',headers})).statusCode,404,'Entry must use the current server-owned cwd');created.cwd=join(root,'test');
     if (process.platform === 'linux') {
       const other = await app.inject({ method:'POST', url:'/api/projects', headers, payload:{name:'Case-sensitive',folderName:'Test'} });
       assert.equal(other.statusCode,200,other.body);
@@ -271,9 +329,9 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.equal(JSON.parse(Buffer.from(hiddenPage.json().nextCursor.slice(5),'base64url').toString()).native,'5');
     const nextHiddenPage=await app.inject({url:'/api/sessions?cursor='+encodeURIComponent(hiddenPage.json().nextCursor),headers});assert.equal(nextHiddenPage.json().nextCursor,null);
     runtime.list=async(cursor:string|undefined)=>cursor?{data:[{id:'parent'}],nextCursor:null}:{data:[],nextCursor:'after-subagents'};
-    assert.deepEqual((await app.inject({url:'/api/sessions',headers})).json().data.map((thread:any)=>thread.id),['parent'],'Continue past a page containing only filtered subagents');
+    assert.deepEqual((await app.inject({url:'/api/sessions?refresh=true',headers})).json().data.map((thread:any)=>thread.id),['parent'],'Continue past a page containing only filtered subagents');
     runtime.list=async()=>({data:[{id:'hidden-0'}],nextCursor:'repeated'});
-    assert.equal((await app.inject({url:'/api/sessions',headers})).statusCode,503,'Repeated native cursor must fail instead of looping');
+    assert.equal((await app.inject({url:'/api/sessions?refresh=true',headers})).statusCode,503,'Repeated native cursor must fail instead of looping');
     runtime.list=originalList;
 
     assert.equal((await app.inject({url:'/api/sessions/thread-1/files',headers})).statusCode,200);
@@ -314,12 +372,12 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     const queryResponse=await new Promise<any>(resolve=>get(address+'/api/sessions/thread-1/events?cursor=epoch:7',{headers},resolve));
     assert.equal(queryResponse.statusCode,200); assert.equal(replayCursor,'epoch:7');
     assert.doesNotThrow(() => eventStream.emit('error', Object.assign(new Error('connection reset'), { code: 'ECONNRESET' })));
-    assert.equal(runtime.listenerCount('change'),0, 'Broken SSE must release its runtime listener');
+    assert.equal(runtime.listenerCount('change'),1, 'Broken SSE must release its own listener; the shared cache listener remains');
     queryResponse.destroy();
     const malformedResponse=await new Promise<any>(resolve=>get(address+'/api/sessions/thread-1/events',{headers},resolve));
     const circular: any = { threadId: 'thread-1', kind: 'change' }; circular.patch = circular;
     assert.doesNotThrow(() => runtime.emit('change', circular));
-    assert.equal(runtime.listenerCount('change'),0, 'Unserializable SSE must close only its connection');
+    assert.equal(runtime.listenerCount('change'),1, 'Unserializable SSE must close only its connection; the shared cache listener remains');
     malformedResponse.destroy();
     assert.equal((await app.inject({url:'/api/sessions/thread-1/status',headers})).statusCode,200, 'HTTP remains usable after stream failures');
     const response=await new Promise<any>(resolve=>get(address+'/api/sessions/thread-1/events?cursor=epoch:7',{headers:{...headers,'last-event-id':'epoch:9'}},resolve));
@@ -330,7 +388,7 @@ test('authenticated project/session routes keep cwd server-owned and SSE closes 
     assert.match(String((await reader.next()).value),/event: resync/);
     await app.inject({method:'POST',url:'/api/auth/logout',headers});
     while (!(await reader.next()).done) { /* drain queued heartbeat */ }
-    assert.equal(runtime.listenerCount('change'),0);
+    assert.equal(runtime.listenerCount('change'),1);
   } finally {
     await app?.close(); assert.equal(dirname(dir),tmpdir()); await rm(dir,{recursive:true,force:true});
   }

@@ -1,8 +1,10 @@
 import {memo,useEffect,useId,useLayoutEffect,useMemo,useRef,useState} from 'react';
+import {PreviewShell} from './PreviewShell.tsx';
 import {ImageDiff} from './ImagePreview.tsx';
 import {api,type Json} from './api.ts';
 import {cacheEntry,type PanelState} from './panelState.ts';
 import {layoutGitGraph} from './gitGraph.ts';
+import {previewFilePath} from './fileLinks.ts';
 
 export const DiffView=memo(function DiffView({content,split=false}:{content:Json;split?:boolean}){return content.binary?<p>二进制文件，仅显示元数据。</p>:<div className={'diff-view '+(split?'split':'')}>{(content.hunks??[]).map((hunk:Json,index:number)=><section key={index}><div className="hunk-header">@@ −{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@</div>{hunk.lines.map((line:Json,n:number)=><div key={n} className={'diff-line '+(line.kind==='add'?'addition':line.kind==='delete'?'deletion':'')}><span className="unified-cell"><span className="line-number">{line.oldLine??''}</span><span className="line-number">{line.newLine??''}</span><code>{line.kind==='add'?'+':line.kind==='delete'?'-':' '} {line.text}</code></span><span className="split-cell"><span className="line-number">{line.oldLine??''}</span><code>{line.kind!=='add'?line.text:''}</code></span><span className="split-cell"><span className="line-number">{line.newLine??''}</span><code>{line.kind!=='delete'?line.text:''}</code></span></div>)}</section>)}</div>;});
 
@@ -13,7 +15,23 @@ type Failure={key:string;message:string};
 const rowHeight=48;
 const colors=['#82d9b4','#87b7ec','#d8a4e8','#e6c47a','#e8999a'];
 const date=(value:string)=>Number.isNaN(Date.parse(value))?value:new Date(value).toLocaleString();
-export function GitHistory({id,tick,visible,state,onChange,onScroll=onChange}:{id:string;tick:number;visible:boolean;state:PanelState['history'];onChange:(next:Partial<PanelState['history']>)=>void;onScroll?:(next:Partial<PanelState['history']>)=>void}){
+export function GitHistory({id,projectRoot,tick,visible,state,onChange,onScroll=onChange}:{id:string;projectRoot?:string;tick:number;visible:boolean;state:PanelState['history'];onChange:(next:Partial<PanelState['history']>)=>void;onScroll?:(next:Partial<PanelState['history']>)=>void}){
+  const repository=state.repository??'';
+  const [repositoryList,setRepositoryList]=useState<SavedResult|null>(null),[repositoryError,setRepositoryError]=useState<Failure|null>(null),[repositoryNotice,setRepositoryNotice]=useState<Failure|null>(null);
+  const repositories:Json[]=repositoryList?.key===id?repositoryList.data.repositories??[]:[];
+  const repositoryLabel=(entry:Json)=>(entry.path||entry.name)+' · '+(entry.kind==='main'?'主仓库':entry.kind==='submodule'?'子模块':'嵌套仓库')+(entry.available?'':' · '+(entry.reason||'不可用'));
+  const selectRepository=(next:string)=>onChange({repository:next,ref:'HEAD',commit:'',parent:'',path:'',scroll:0,listScroll:0,pages:1,filesScroll:0});
+  useEffect(()=>{
+    if(!visible)return;let disposed=false;const controller=new AbortController();setRepositoryError(null);
+    void api('/sessions/'+id+'/git/repositories',undefined,controller.signal).then(data=>{if(!disposed)setRepositoryList({key:id,data});}).catch(error=>{if(!disposed)setRepositoryError({key:id,message:error.message});});
+    return()=>{disposed=true;controller.abort();};
+  },[id,tick,visible]);
+  useEffect(()=>{
+    if(!repository||repositoryList?.key!==id)return;
+    const selected=repositories.find(entry=>entry.path===repository);
+    if(selected?.available||!selected&&!repositoryList.data.complete)return;
+    setRepositoryNotice({key:id,message:'仓库 '+repository+' 已不可用，已返回主仓库。'});selectRepository('');
+  },[id,repository,repositoryList]);
   const [log,setLog]=useState<SavedResult|null>(null),[detail,setDetail]=useState<SavedResult|null>(null),[diff,setDiff]=useState<SavedResult|null>(null);
   const [listError,setListError]=useState<Failure|null>(null),[detailError,setDetailError]=useState<Failure|null>(null),[diffError,setDiffError]=useState<Failure|null>(null),[busy,setBusy]=useState(false);
   const listRef=useRef<HTMLDivElement>(null),previewRef=useRef<HTMLDivElement>(null),filesRef=useRef<HTMLDivElement>(null),infoRef=useRef<HTMLDivElement>(null);
@@ -22,7 +40,7 @@ export function GitHistory({id,tick,visible,state,onChange,onScroll=onChange}:{i
   useEffect(()=>{infoRef.current?.hidePopover();},[id,visible,state.commit,state.filesCollapsed]);
   const loaded=useRef<{signature:string;pages:number;data:Json}|null>(null);
   const detailCache=useRef<Record<string,Json>>({}),diffCache=useRef<Record<string,Json>>({});
-  const listKey=id+'|'+state.ref,detailKey=id+'|'+state.commit+'|'+state.parent,diffKey=detailKey+'|'+state.path,pages=state.pages??1;
+  const repositoryKey=JSON.stringify([id,repository]),listKey=repositoryKey+'|'+state.ref,detailKey=repositoryKey+'|'+state.commit+'|'+state.parent,diffKey=detailKey+'|'+state.path,pages=state.pages??1;
   const update=onChange;
   useEffect(()=>{
     if(!visible)return;
@@ -33,7 +51,7 @@ export function GitHistory({id,tick,visible,state,onChange,onScroll=onChange}:{i
       const reuse=cached?.signature===signature;let count=reuse?cached.pages:0,result:Json=reuse?cached.data:{commits:[],nextCursor:null},commits:Json[]=reuse?[...result.commits]:[];
       while(count<pages){
         if(count&&!result.nextCursor)break;
-        const query=new URLSearchParams({ref:state.ref});if(count)query.set('cursor',result.nextCursor);
+        const query=new URLSearchParams({ref:state.ref,repository});if(count)query.set('cursor',result.nextCursor);
         result=await api('/sessions/'+id+'/git/log?'+query,undefined,controller.signal);if(disposed)return;
         commits.push(...result.commits);++count;
       }
@@ -43,13 +61,13 @@ export function GitHistory({id,tick,visible,state,onChange,onScroll=onChange}:{i
   },[id,listKey,tick,visible,state.ref,pages]);
   useEffect(()=>{
     if(!visible||!state.commit)return;const cacheKey=detailKey+'|'+tick,cached=detailCache.current[cacheKey];if(cached){setDetailError(null);setDetail(current=>current?.key===detailKey&&current.data===cached?current:{key:detailKey,data:cached});return;}let disposed=false;const controller=new AbortController();setDetailError(null);
-    const query=new URLSearchParams({commit:state.commit});if(state.parent)query.set('parent',state.parent);
+    const query=new URLSearchParams({commit:state.commit,repository});if(state.parent)query.set('parent',state.parent);
     void api('/sessions/'+id+'/git/commit?'+query,undefined,controller.signal).then(data=>{if(!disposed){detailCache.current=cacheEntry(detailCache.current,cacheKey,data);setDetail({key:detailKey,data});}}).catch(e=>{if(!disposed)setDetailError({key:detailKey,message:e.message});});
     return()=>{disposed=true;controller.abort();};
   },[id,visible,detailKey,state.commit,state.parent,tick]);
   useEffect(()=>{
     if(!visible||!state.commit||!state.path)return;const cacheKey=diffKey+'|'+tick,cached=diffCache.current[cacheKey];if(cached){setDiffError(null);setDiff(current=>current?.key===diffKey&&current.data===cached?current:{key:diffKey,data:cached});return;}let disposed=false;const controller=new AbortController();setDiffError(null);
-    const query=new URLSearchParams({commit:state.commit,path:state.path});if(state.parent)query.set('parent',state.parent);
+    const query=new URLSearchParams({commit:state.commit,path:state.path,repository});if(state.parent)query.set('parent',state.parent);
     void api('/sessions/'+id+'/git/commit/diff?'+query,undefined,controller.signal).then(data=>{if(!disposed){diffCache.current=cacheEntry(diffCache.current,cacheKey,data);setDiff({key:diffKey,data});}}).catch(e=>{if(!disposed)setDiffError({key:diffKey,message:e.message});});
     return()=>{disposed=true;controller.abort();};
   },[id,visible,diffKey,state.commit,state.parent,state.path,tick]);
@@ -66,10 +84,13 @@ export function GitHistory({id,tick,visible,state,onChange,onScroll=onChange}:{i
     <div className="panel-list-section">
     <button className="panel-section-toggle" aria-expanded={!state.listCollapsed} aria-controls={sectionId+'-log'} onClick={()=>update({listCollapsed:!state.listCollapsed})}><span aria-hidden="true">{state.listCollapsed?'▸':'▾'}</span><span>提交记录 · {state.ref==='HEAD'?'当前分支':state.ref==='all'?'全部分支':state.ref.replace(/^refs\/(heads|remotes|tags)\//,'')}</span></button>
     <div id={sectionId+'-log'} className="panel-list-body" hidden={state.listCollapsed}>
-    <div className="git-history-controls"><select aria-label="Git 分支" value={state.ref} onChange={e=>update({ref:e.target.value,commit:'',parent:'',path:'',scroll:0,listScroll:0,pages:1,filesScroll:0})}><option value="HEAD">当前分支</option><option value="all">全部分支</option>{(currentLog?.branches??[]).map((branch:Json)=><option key={branch.ref} value={branch.ref}>{branch.name}</option>)}{state.ref!=='HEAD'&&state.ref!=='all'&&!currentLog?.branches?.some((b:Json)=>b.ref===state.ref)?<option value={state.ref}>{state.ref.replace(/^refs\/(heads|remotes|tags)\//,'')}</option>:null}</select></div>
+    <div className="git-history-controls"><label>仓库{repositories.length>1||repository&&!repositories.some(entry=>entry.path===repository)?<select aria-label="Git 仓库" value={repository} onChange={e=>{setRepositoryNotice(null);selectRepository(e.target.value);}}>{repositories.map(entry=><option key={entry.path} value={entry.path} disabled={!entry.available}>{repositoryLabel(entry)}</option>)}{repository&&!repositories.some(entry=>entry.path===repository)?<option value={repository}>{repository}</option>:null}</select>:<span className="git-repository-name" title={repositories[0]?repositoryLabel(repositories[0]):'主仓库'}>{repositories[0]?repositoryLabel(repositories[0]):'主仓库'}</span>}</label><label>分支<select aria-label="Git 分支" value={state.ref} onChange={e=>update({ref:e.target.value,commit:'',parent:'',path:'',scroll:0,listScroll:0,pages:1,filesScroll:0})}><option value="HEAD">当前分支</option><option value="all">全部分支</option>{(currentLog?.branches??[]).map((branch:Json)=><option key={branch.ref} value={branch.ref}>{branch.name}</option>)}{state.ref!=='HEAD'&&state.ref!=='all'&&!currentLog?.branches?.some((b:Json)=>b.ref===state.ref)?<option value={state.ref}>{state.ref.replace(/^refs\/(heads|remotes|tags)\//,'')}</option>:null}</select></label></div>
+    {repositoryError?.key===id?<p className="notice error git-repository-notice" role="alert">仓库列表读取失败：{repositoryError.message}</p>:null}
+    {repositoryList?.key===id&&repositoryList.data.complete===false?<p className="notice small git-repository-notice" role="status">仓库扫描不完整，部分仓库可能未显示。</p>:null}
+    {repositoryNotice?.key===id?<p className="notice small git-repository-notice" role="status">{repositoryNotice.message}</p>:null}
     {failure(listError,listKey,!!currentLog)}{busy?<p className="muted small" role="status">正在更新历史…</p>:null}
     {currentLog?.repository===false?<p className="muted">当前项目不是 Git 仓库。</p>:currentLog&&!commits.length?<p className="muted">仓库还没有提交。</p>:null}
-    <div className="git-graph-list" ref={listRef} onScroll={event=>{if(visible&&!state.listCollapsed){scrolls.current.list=event.currentTarget.scrollTop;onScroll({listScroll:scrolls.current.list});}}}>{commits.length?<svg className="git-graph" width={Math.max(24,graph.columns*16+12)} height={commits.length*rowHeight} aria-hidden="true">{graph.rows.flatMap((row,index)=>[...row.lines.map((line,n)=>{const y=line.incoming?index*rowHeight:index*rowHeight+rowHeight/2,y2=line.incoming?index*rowHeight+rowHeight/2:(index+1)*rowHeight,x=line.from*16+8,x2=line.to*16+8;return <path key={index+'-'+n} d={'M '+x+' '+y+' C '+x+' '+((y+y2)/2)+', '+x2+' '+((y+y2)/2)+', '+x2+' '+y2} fill="none" stroke={colors[line.from%colors.length]}/>;}),<circle key={'node-'+index} cx={row.column*16+8} cy={index*rowHeight+rowHeight/2} r="4" fill={colors[row.column%colors.length]}/>])}</svg>:null}<div className="git-commit-rows">{commits.map(commit=><button className={'git-commit '+(state.commit===commit.id?'active':'')} title={commit.subject+'\n'+commit.id} key={commit.id} onClick={()=>{if(state.commit!==commit.id)update({commit:commit.id,parent:commit.parents[0]??'',path:'',scroll:0,filesScroll:0,filesCollapsed:false});}}><span className="commit-summary"><span className="commit-refs" title={(commit.refs??[]).join('\n')}>{(commit.refs??[]).map((ref:string)=><span key={ref} className={'git-ref '+(ref.startsWith('refs/remotes/')?'remote':ref.startsWith('refs/tags/')?'tag':'local')} title={ref}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">{ref.startsWith('refs/tags/')?<><path d="M2 2h6l6 6-6 6-6-6Z"/><circle cx="5" cy="5" r="1"/></>:ref.startsWith('refs/remotes/')?<><circle cx="8" cy="8" r="6"/><ellipse cx="8" cy="8" rx="2.5" ry="6"/><path d="M2 8h12"/></>:<><circle cx="4" cy="3" r="1.5"/><circle cx="12" cy="3" r="1.5"/><circle cx="4" cy="13" r="1.5"/><path d="M4 4.5v7M12 4.5C12 8 4 7 4 10"/></>}</svg>{ref.replace(/^refs\/(heads|remotes|tags)\//,'')}</span>)}</span>{commit.subject||'(无标题)'}</span><small>{commit.id.slice(0,8)} · {commit.author} · {date(commit.date)}</small></button>)}</div></div>
+    <div className="git-graph-list" ref={listRef} onScroll={event=>{if(visible&&!state.listCollapsed){scrolls.current.list=event.currentTarget.scrollTop;onScroll({listScroll:scrolls.current.list});}}}>{commits.length?<svg className="git-graph" width={Math.max(24,graph.columns*16+12)} height={commits.length*rowHeight} aria-hidden="true">{graph.rows.flatMap((row,index)=>[...row.lines.map((line,n)=>{const y=line.incoming?index*rowHeight:index*rowHeight+rowHeight/2,y2=line.toRow!==undefined?line.toRow*rowHeight+rowHeight/2:line.incoming?index*rowHeight+rowHeight/2:(index+1)*rowHeight,x=line.from*16+8,x2=line.to*16+8;const path=line.via!==undefined?'M '+x+' '+y+' C '+(line.via*16+8)+' '+y+', '+(line.via*16+8)+' '+y+', '+(line.via*16+8)+' '+(y-rowHeight/2)+' L '+(line.via*16+8)+' '+(y2+rowHeight/2)+' C '+(line.via*16+8)+' '+y2+', '+(line.via*16+8)+' '+y2+', '+x2+' '+y2:'M '+x+' '+y+' C '+x+' '+((y+y2)/2)+', '+x2+' '+((y+y2)/2)+', '+x2+' '+y2;return <path key={index+'-'+n} d={path} fill="none" stroke={colors[line.from%colors.length]}/>;}),<circle key={'node-'+index} cx={row.column*16+8} cy={index*rowHeight+rowHeight/2} r="4" fill={colors[row.column%colors.length]}/>])}</svg>:null}<div className="git-commit-rows">{commits.map(commit=><button className={'git-commit '+(state.commit===commit.id?'active':'')} title={commit.subject+'\n'+commit.id} key={commit.id} onClick={()=>{if(state.commit!==commit.id)update({commit:commit.id,parent:commit.parents[0]??'',path:'',scroll:0,filesScroll:0,filesCollapsed:false});}}><span className="commit-summary"><span className="commit-refs" title={(commit.refs??[]).join('\n')}>{(commit.refs??[]).map((ref:string)=><span key={ref} className={'git-ref '+(ref.startsWith('refs/remotes/')?'remote':ref.startsWith('refs/tags/')?'tag':'local')} title={ref}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">{ref.startsWith('refs/tags/')?<><path d="M2 2h6l6 6-6 6-6-6Z"/><circle cx="5" cy="5" r="1"/></>:ref.startsWith('refs/remotes/')?<><circle cx="8" cy="8" r="6"/><ellipse cx="8" cy="8" rx="2.5" ry="6"/><path d="M2 8h12"/></>:<><circle cx="4" cy="3" r="1.5"/><circle cx="12" cy="3" r="1.5"/><circle cx="4" cy="13" r="1.5"/><path d="M4 4.5v7M12 4.5C12 8 4 7 4 10"/></>}</svg>{ref.replace(/^refs\/(heads|remotes|tags)\//,'')}</span>)}</span>{commit.subject||'(无标题)'}</span><small>{commit.id.slice(0,8)} · {commit.author} · {date(commit.date)}</small></button>)}</div></div>
     <div className="git-history-footer">{graph.pending.length?<p className="muted small">{graph.pending.length} 条连线延续至尚未加载的历史。</p>:null}
     {currentLog?.nextCursor?<button disabled={busy||pages>=100} onClick={()=>update({pages:pages+1})}>{pages>=100?'已加载 10000 条，请筛选分支':'加载更早的 100 条'}</button>:null}
     </div></div></div>
@@ -85,7 +106,7 @@ export function GitHistory({id,tick,visible,state,onChange,onScroll=onChange}:{i
       <button className="commit-info-close" popoverTarget={infoId} popoverTargetAction="hide" aria-label="关闭提交信息">×</button>
       {currentDetail?<><h3>{currentDetail.commit.subject||'(无标题)'}</h3><code className="commit-hash">{currentDetail.commit.id}</code><p className="small muted">{currentDetail.commit.author} · {date(currentDetail.commit.date)}</p><p className="commit-message">{currentDetail.commit.message}</p>{currentDetail.commit.parents?.length>1?<label>比较父提交<select aria-label="比较父提交" value={currentDetail.parent??''} onChange={e=>update({parent:e.target.value,path:'',filesScroll:0})}>{currentDetail.commit.parents.map((parent:string,index:number)=><option value={parent} key={parent}>父提交 {index+1} · {parent.slice(0,8)}</option>)}</select></label>:<p className="muted small">{currentDetail.parent?'比较父提交 '+currentDetail.parent.slice(0,8):'根提交 · 与空树比较'}</p>}</>:null}
       </div></div>
-      {state.path?<section className="file-preview"><h3>{state.path}</h3><div className="preview-content" ref={previewRef} tabIndex={0} aria-label="提交差异" onScroll={event=>{if(event.target===event.currentTarget){scrolls.current.preview=event.currentTarget.scrollTop;onScroll({scroll:scrolls.current.preview});}}}>{failure(diffError,diffKey,!!currentDiff)}{currentDiff?<>{currentDiff.images?<ImageDiff id={id} images={currentDiff.images} version={String(tick)}/>:<DiffView content={currentDiff}/>}{!currentDiff.images&&!currentDiff.binary&&!currentDiff.hunks?.length?<p className="muted">没有文本差异（可能仅重命名或权限变更）。</p>:null}{currentDiff.truncated?<p className="notice">差异超过显示上限，已截断。</p>:null}</>:diffError?.key!==diffKey?<p className="muted">读取差异…</p>:null}</div></section>:<p className="muted small">选择文件查看差异。</p>}
+      {state.path?<PreviewShell label={repository?repository+'/'+state.path:state.path} filePath={previewFilePath(projectRoot,state.path,repository)} active={visible} resetKey={id+'|'+repository+'|'+state.commit}><div className="preview-content" ref={previewRef} tabIndex={0} aria-label="提交差异" onScroll={event=>{if(event.target===event.currentTarget){scrolls.current.preview=event.currentTarget.scrollTop;onScroll({scroll:scrolls.current.preview});}}}>{failure(diffError,diffKey,!!currentDiff)}{currentDiff?<>{currentDiff.images?<ImageDiff id={id} images={currentDiff.images} repository={repository} version={String(tick)}/>:<DiffView content={currentDiff}/>}{!currentDiff.images&&!currentDiff.binary&&!currentDiff.hunks?.length?<p className="muted">没有文本差异（可能仅重命名或权限变更）。</p>:null}{currentDiff.truncated?<p className="notice">差异超过显示上限，已截断。</p>:null}</>:diffError?.key!==diffKey?<p className="muted">读取差异…</p>:null}</div></PreviewShell>:<p className="muted small">选择文件查看差异。</p>}
     </section>:commits.length?<p className="muted small">选择一条提交，查看详情和文件变更。</p>:null}
   </section>;
 }

@@ -1,10 +1,19 @@
 export const relativeFile=(currentPath:string,url:string,decoded=false)=>{
-  if(!decoded&&(/^[a-z][a-z0-9+.-]*:/i.test(url)||url.startsWith('#')||url.startsWith('//')))return '';
+  if(!url||!decoded&&(/^[a-z][a-z0-9+.-]*:/i.test(url)||url.startsWith('#')||url.startsWith('//')))return '';
   let path:string;try{path=decoded?url:decodeURIComponent(url.split(/[?#]/,1)[0]);}catch{return '';}
+  if(!path||/[\x00-\x1f\x7f]/.test(path)||path.startsWith('//'))return '';
   const parts=[...(path.startsWith('/')?[]:currentPath.split('/').slice(0,-1)),...path.split('/')],safe:string[]=[];
   for(const part of parts){if(!part||part==='.')continue;if(part==='..'){if(!safe.length)return '';safe.pop();}else safe.push(part);}
-  return safe.join('/');
+  return safe.join('/')||'.';
 };
+export function previewFilePath(root:string|undefined,path:string,repository=''):string{
+  if(!root||!path||!/^(?:[a-z]:[\\/]|\/|\\\\)/i.test(root)||/[\x00-\x1f\x7f]/.test(root))return '';
+  const windows=/^[a-z]:[\\/]|^\\\\|^\/\//i.test(root),separator=windows&&root.includes('\\')?'\\':'/';
+  const parts=[repository,path].filter(Boolean).map(part=>windows?part.replaceAll('\\','/'):part);
+  if(parts.some(part=>part.startsWith('/')||/^[a-z]:\//i.test(part)))return '';
+  const relative=relativeFile('',parts.join('/'),true);
+  return relative&&relative!=='.'?root.replace(/[\\/]+$/,'')+separator+relative.replaceAll('/',separator):'';
+}
 export const linkedFile=(id:string,currentPath:string,url:string,origin=location.origin)=>{try{const parsed=new URL(url,origin),prefix='/api/sessions/'+encodeURIComponent(id)+'/files/content';if(parsed.origin===origin&&parsed.pathname===prefix)return relativeFile('',parsed.searchParams.get('path')??'',true);}catch{}return relativeFile(currentPath,url);};
 export const linkFragment=(url:string)=>{try{const fragment=url.includes('#')?decodeURIComponent(url.slice(url.indexOf('#')+1)):'';return /[\x00-\x1f\x7f]/.test(fragment)?'':fragment;}catch{return '';}};
 const referenceFragment=(url:string)=>{const line=/:(\d+)(?::\d+)?$/.exec(url.split(/[?#]/,1)[0]);return linkFragment(url)||(line?'L'+line[1]:'');};
@@ -20,13 +29,13 @@ export const fileImageUrl=(id:string,currentPath:string,url:string,origin=locati
   let path:string;try{path=decodeURIComponent(url.trim().split(/[?#]/,1)[0]).replace(/\\/g,'/');}catch{return '';}
   if(!path||/[\x00-\x1f\x7f]/.test(path)||path.startsWith('//'))return '';
   const root=projectRoot.replace(/\\/g,'/').replace(/\/$/,'');
-  if(/^\/?[a-z]:\//i.test(path)||(root.startsWith('/')&&path.startsWith(root+'/'))){
+  if(/^\/?[a-z]:\//i.test(path)||(root.startsWith('/')&&(path.replace(/\/+$/,'')===root||path.startsWith(root+'/')))){
     const local=chatFileUrl(id,projectRoot,encodeURIComponent(path),origin);
-    return local?local.replace('/files/content?','/files/image?'):'';
+    return local&&new URL(local).searchParams.get('path')!=='.'?local.replace('/files/content?','/files/image?'):'';
   }
   if(path.includes(':'))return '';
   const relative=relativeFile(currentPath,path,true);
-  return relative?origin+'/api/sessions/'+encodeURIComponent(id)+'/files/image?path='+encodeURIComponent(relative):'';
+  return relative&&relative!=='.'?origin+'/api/sessions/'+encodeURIComponent(id)+'/files/image?path='+encodeURIComponent(relative):'';
 };
 
 // Local links are translated to the existing authenticated project API, never file:// navigation.
@@ -39,11 +48,11 @@ export function chatFileUrl(id:string,projectRoot:string,url:string,origin=locat
     path=decodeURIComponent(url.split(/[?#]/,1)[0]).replace(/\\/g,'/').replace(/:\d+(?::\d+)?$/,'').replace(/^\/([a-z]:\/)/i,'$1');
   }catch{return '';}
   if(path.startsWith('//')||/[\x00-\x1f]/.test(path))return '';
-  const root=projectRoot.replace(/\\/g,'/').replace(/\/$/,''),windows=/^[a-z]:\//i.test(root);
+  const root=projectRoot.replace(/\\/g,'/').replace(/\/+$/,''),windows=/^[a-z]:\//i.test(root);
   if(path.startsWith('/')||/^[a-z]:\//i.test(path)){
-    const prefix=root+'/',matches=windows?path.toLowerCase().startsWith(prefix.toLowerCase()):path.startsWith(prefix);
-    if(!matches)return '';
-    path=path.slice(prefix.length);
+    const withoutSlash=path.replace(/\/+$/,''),same=windows?withoutSlash.toLowerCase()===root.toLowerCase():withoutSlash===root;
+    if(same)path='.';
+    else{const prefix=root+'/',matches=windows?path.toLowerCase().startsWith(prefix.toLowerCase()):path.startsWith(prefix);if(!matches)return '';path=path.slice(prefix.length);}
   }
   if(/^[a-z][a-z0-9+.-]*:/i.test(path))return '';
   const relative=relativeFile('',path,true);

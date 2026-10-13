@@ -32,7 +32,7 @@ test('all-branch history interleaves commit dates while preserving parents and a
       const id=(await exec('git',['commit-tree',tree,...parents.flatMap(parent=>['-p',parent]),'-m',subject],{cwd:repo,encoding:'utf8',env:{...process.env,GIT_AUTHOR_NAME:'Original Author',GIT_AUTHOR_EMAIL:'author@example.test',GIT_AUTHOR_DATE:authorDate,GIT_COMMITTER_NAME:'History Committer',GIT_COMMITTER_EMAIL:'committer@example.test',GIT_COMMITTER_DATE:date}})).stdout.trim();
       dates.set(id,date);return id;
     }
-    // A future-dated root still belongs below its children, so a global date sort is invalid.
+    // A future-dated parent must precede its children under strict committer-date order.
     const base=await dated('shared root','2026-10-10T00:00:00+00:00');
     const main=await dated('old main tip','2026-10-02T12:00:00+00:00',[base]);
     const topicParent=await dated('topic parent','2026-10-06T12:00:00+00:00',[base]);
@@ -41,19 +41,37 @@ test('all-branch history interleaves commit dates while preserving parents and a
     for(const [branch,id] of [['main',main],['topic',topic],['merged',merge]])await git(repo,'update-ref','refs/heads/'+branch,id);
     const projects=new Projects(root),project=(await projects.list())[0];
     const history=await projects.gitLog(project.id,'all'),ids=history.commits.map(item=>item.id);
-    assert.ok(ids.indexOf(topic)<ids.indexOf(main),'new topic tip must precede the old main branch block');
+    assert.deepEqual(ids,[base,merge,topic,topicParent,main]);
     assert.equal(new Set(ids).size,5);assert.equal(history.nextCursor,null);
     for(const item of history.commits){
       assert.equal(Date.parse(item.date),Date.parse(dates.get(item.id)!));assert.equal(item.author,'Original Author');
-      for(const parent of item.parents)assert.ok(ids.indexOf(item.id)<ids.indexOf(parent),'children must precede their parents even with clock skew');
       const detail=(await projects.gitCommit(project.id,item.id)).commit;
       assert.equal(detail.date,item.date);assert.equal(detail.author,item.author);assert.deepEqual(detail.parents,item.parents);
     }
     assert.deepEqual(history.commits.find(item=>item.id===merge)?.parents,[main,topicParent]);
     const graph=layoutGitGraph(history.commits);
     assert.deepEqual(graph.pending,[]);assert.equal(graph.rows.length,5);
-    for(let i=0;i<history.commits.length;i++)assert.equal(graph.rows[i].lines.filter(line=>!line.incoming&&line.from===graph.rows[i].column).length,history.commits[i].parents.length);
   } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test('strict date order is global across pages, deterministic on ties, and freezes tips',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'codex-history-strict-pages-')),repo=join(root,'repo');
+ try{
+  await mkdir(repo);await git(repo,'init','-b','main');
+  const tree=execFileSync('git',['mktree'],{cwd:repo,input:'',encoding:'utf8'}).trim(),ids:string[]=[],times=new Map<string,number>();
+  async function dated(index:number,time:number,parent?:string){const id=(await exec('git',['commit-tree',tree,...(parent?['-p',parent]:[]),'-m','dated '+index],{cwd:repo,encoding:'utf8',env:{...process.env,GIT_AUTHOR_NAME:'Author',GIT_AUTHOR_EMAIL:'author@example.test',GIT_COMMITTER_NAME:'Committer',GIT_COMMITTER_EMAIL:'committer@example.test',GIT_AUTHOR_DATE:'2020-01-01T00:00:00Z',GIT_COMMITTER_DATE:`${time} +0000`}})).stdout.trim();times.set(id,time);return id;}
+  for(let i=0;i<105;i++)ids.push(await dated(i,1800000000+Math.floor((104-i)/2),ids.at(-1)));
+  await git(repo,'update-ref','refs/heads/main',ids.at(-1)!);
+  const projects=new Projects(root),project=(await projects.list())[0],first=await projects.gitLog(project.id,'all');
+  assert.equal(first.commits.length,100);assert.ok(first.nextCursor);
+  const late=await dated(106,1900000000,ids.at(-1));await git(repo,'update-ref','refs/heads/new',late);
+  const second=await projects.gitLog(project.id,'all',first.nextCursor!),combined=[...first.commits,...second.commits];
+  assert.equal(second.commits.length,5);assert.equal(second.nextCursor,null);assert.equal(new Set(combined.map(c=>c.id)).size,105);assert.ok(!combined.some(c=>c.id===late));
+  for(let i=1;i<combined.length;i++){const a=combined[i-1],b=combined[i],at=times.get(a.id)!,bt=times.get(b.id)!;assert.ok(at>bt||at===bt&&ids.indexOf(a.id)>ids.indexOf(b.id),'global timestamp order with stable child-before-parent ties');}
+  assert.deepEqual((await projects.gitLog(project.id,'all',first.nextCursor!)).commits,second.commits);
+  const old=deflateRawSync(JSON.stringify({ref:'all',tips:[ids.at(-1)],skip:100})).toString('base64url');
+  await assert.rejects(()=>projects.gitLog(project.id,'all',old),(e:any)=>e.statusCode===400&&/refresh/.test(e.message));
+ }finally{await rm(root,{recursive:true,force:true});}
 });
 
 test('remote tracking refs decorate commits, can be selected, and contribute remote-only history', async () => {
@@ -78,7 +96,7 @@ test('remote tracking refs decorate commits, can be selected, and contribute rem
     const all=await projects.gitLog(project.id,'all');
     assert.ok(all.commits.some(item=>item.id===remote));assert.equal(new Set(all.commits.map(item=>item.id)).size,all.commits.length);
     const selected=await projects.gitLog(project.id,'refs/remotes/origin/topic');
-    assert.equal(selected.commits[0].id,remote);assert.ok(!selected.commits.some(item=>item.id===local));
+    assert.deepEqual(new Set(selected.commits.map(item=>item.id)),new Set([remote,base]));assert.ok(!selected.commits.some(item=>item.id===local));
     assert.ok((await projects.gitCommit(project.id,base)).commit.refs.includes('refs/remotes/origin/main'));
     await git(repo,'update-ref','-d','refs/remotes/origin/topic');
     assert.ok(!(await projects.gitLog(project.id,'all')).commits.some(item=>item.id===remote));

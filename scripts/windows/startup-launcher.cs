@@ -8,11 +8,13 @@ using System.Reflection;
 [assembly: AssemblyCompany("sxcooler")]
 internal static class StartupLauncher {
     [STAThread]
-    private static int Main() {
+    private static int Main(string[] args) {
+        if (args.Length > 1 || (args.Length == 1 && args[0] != "--diagnostics")) { return 1; }
         try {
             string root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", ".."));
             var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"));
             start.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + Path.Combine(root, @"scripts\windows\start-server.ps1") + "\" -Background";
+            if (args.Length == 1) { start.Arguments += " --diagnostics"; }
             start.WorkingDirectory = root;
             start.UseShellExecute = false;
             start.CreateNoWindow = true;

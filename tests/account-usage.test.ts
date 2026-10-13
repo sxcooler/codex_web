@@ -42,12 +42,31 @@ function fixture(t: TestContext) {
   return {runtime, db, service};
 }
 
-test('usage reads coalesce, cache for 30 seconds, and forced refresh waits for a genuinely fresh read', async t => {
+test('multiple tabs reuse a verified usage snapshot without more native identity reads',async t=>{
+  const {runtime,service}=fixture(t);let identities=0;
+  runtime.accountIdentity=async()=>{identities++;return {identity:runtime.identity,resetProtocol:runtime.resetProtocol};};
+  const first=await service.read();
+  assert.deepEqual(await Promise.all(Array.from({length:8},()=>service.read())),Array(8).fill(first));
+  assert.equal(identities,2,'only before/after checks for the shared successful snapshot');
+  runtime.identity='identity-b';runtime.raw.accountId='native-account-b';runtime.emit('accountChanged',{method:'account/updated'});
+  assert.notEqual((await service.read()).accountId,first.accountId);
+});
+
+test('rate-limit notifications emitted by a usage read do not invalidate its account generation',async t=>{
+  const {runtime,service}=fixture(t);
+  runtime.readAccountUsage=async()=>{runtime.reads++;runtime.emit('accountChanged',{method:'account/rateLimits/updated'});return rawUsage();};
+  assert.equal((await service.read()).accountId,accountId);
+  assert.equal(runtime.reads,1);
+  assert.equal((await service.read()).accountId,accountId);
+  assert.equal(runtime.reads,1);
+});
+
+test('usage reads coalesce, cache for one shared minute, and forced refresh waits for a genuinely fresh read', async t => {
   let now = 1_800_000_000_000;
   t.mock.method(Date, 'now', () => now);
   const {runtime, service} = fixture(t);
   const first = await service.read();
-  now += 29_999;
+  now += 59_999;
   assert.equal((await service.read()).updatedAt, first.updatedAt);
   assert.equal(runtime.reads, 1);
   now++;
@@ -77,6 +96,7 @@ test('identity changes discard cached data and reject a snapshot spanning an acc
   await service.read();
   runtime.identity = 'identity-b';
   runtime.raw.accountId = 'native-account-b';
+  runtime.emit('accountChanged',{method:'account/updated'});
   assert.notEqual((await service.read()).accountId, accountId);
   assert.equal(runtime.reads, 2);
   runtime.emit('accountChanged');
@@ -123,6 +143,7 @@ test('usage projects credit balance strings without rounding, merging buckets or
  for(const raw of [null,undefined,[],42,'62500']){runtime.raw.rateLimits.credits=raw;assert.equal((await service.read(true)).rateLimits.credits,null);}
  for(const balance of [0,Infinity,'unknown','',{},null]){runtime.raw.rateLimits.credits={hasCredits:'true',unlimited:0,balance};assert.deepEqual((await service.read(true)).rateLimits.credits,{hasCredits:null,unlimited:null,balance:typeof balance==='string'?balance:null});}
  runtime.identity='identity-b';runtime.raw.accountId='native-account-b';runtime.raw.rateLimits.credits={hasCredits:false,unlimited:false,balance:'0'};
+ runtime.emit('accountChanged',{method:'account/updated'});
  assert.deepEqual((await service.read()).rateLimits.credits,{hasCredits:false,unlimited:false,balance:'0'});
 });
 
@@ -259,12 +280,14 @@ test('account usage API enforces authentication, CSRF, strict inputs, and return
     app = await buildServer({dataDir: join(dir, 'data'), origin: 'http://localhost:3000', projects: new Projects(join(dir, 'work')), runtime: runtime as any});
     const url = '/api/account/usage', resetUrl = url + '/reset';
     assert.equal((await app.inject({url, headers: {host: 'localhost:3000'}})).statusCode, 401);
+    for(const stream of ['/api/state/events','/%61pi/state/events'])assert.equal((await app.inject({url:stream,headers:{host:'localhost:3000'}})).statusCode,401);
     const session = await app.inject({url: '/api/auth/session', headers: {host: 'localhost:3000'}});
     const headers = {host: 'localhost:3000', origin: 'http://localhost:3000', 'x-csrf-token': session.json().csrfToken, cookie: String(session.headers['set-cookie']).split(';')[0]};
     assert.equal((await app.inject({method: 'POST', url: resetUrl, headers, payload: operation()})).statusCode, 401);
     const login = await app.inject({method: 'POST', url: '/api/auth/login', headers, payload: {password: 'account-usage-test-password'}});
     assert.equal(login.statusCode, 200, login.body);
     headers.cookie += '; ' + String(login.headers['set-cookie']).split(';')[0];
+    assert.equal((await app.inject({url:'/api/state/events?unexpected=1',headers})).statusCode,400);
     for (const change of [{'x-csrf-token': ''}, {origin: 'https://evil.example'}]) {
       assert.equal((await app.inject({method: 'POST', url: resetUrl, headers: {...headers, ...change}, payload: operation()})).statusCode, 403);
     }

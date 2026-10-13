@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {applyChange,prependHistory} from '../src/web/sessionSync.ts';
+import {applyChange,mergeSnapshot,prependHistory} from '../src/web/sessionSync.ts';
 const baseline=()=>({thread:{id:'thread',turns:[{id:'old',status:'completed',items:[{id:'history',type:'agentMessage',text:'old history'}]},{id:'turn',status:'inProgress',items:[{id:'item',type:'agentMessage',text:'hello'}]}]},epoch:'epoch',revision:5,phase:'RUNNING',activeTurnId:'turn',pending:[]});
 const event=(revision=6,patch:any={})=>({id:'epoch:'+revision,threadId:'thread',revision,patch});
 const delta=(offset:number,text:string)=>({delta:{turnId:'turn',itemId:'item',field:'text',offset,text}});
+test('fresh recent snapshots retain expanded history and its exhausted cursor with fresh state authoritative',()=>{
+ const before={...baseline(),history:{nextCursor:null},attachmentPreviews:[{path:'old',url:'old'},{path:'same',url:'stale'}],inputAnswers:{older:{status:'accepted'},same:{status:'old'}}};
+ const recent={...baseline(),revision:9,syncCursor:'epoch:9',phase:'IDLE',history:{nextCursor:'turn'},thread:{id:'thread',turns:[{id:'turn',status:'completed',items:[{id:'item',text:'fresh'}]},{id:'new',status:'inProgress',items:[]}]},attachmentPreviews:[{path:'same',url:'fresh'}],inputAnswers:{same:{status:'fresh'}}};
+ const next=mergeSnapshot(before,recent);
+ assert.deepEqual(next.thread.turns.map((t:any)=>t.id),['old','turn','new']);assert.equal(next.thread.turns[0],before.thread.turns[0]);assert.equal(next.thread.turns[1].items[0].text,'fresh');assert.equal(next.history.nextCursor,null);assert.equal(next.revision,9);assert.equal(next.phase,'IDLE');assert.deepEqual(next.attachmentPreviews,[{path:'old',url:'old'},{path:'same',url:'fresh'}]);assert.deepEqual(next.inputAnswers,{older:{status:'accepted'},same:{status:'fresh'}});
+ assert.equal(mergeSnapshot(before,{...recent,epoch:'new'}).thread.turns.length,2);
+ assert.equal(mergeSnapshot(before,{...recent,thread:{id:'different',turns:recent.thread.turns}}).thread.turns.length,2);
+ assert.equal(mergeSnapshot(before,{...recent,thread:{id:'thread',turns:[{id:'unknown',items:[]}]}}).thread.turns.length,1);
+ const complete={...recent,history:undefined};assert.equal(mergeSnapshot(before,complete),complete);
+});
 test('delta keeps unchanged history identity and rejects missing or conflicting bytes',()=>{const before=baseline(),next=applyChange(before,event(6,delta(5,' world')))!;assert.equal(next.thread.turns[1].items[0].text,'hello world');assert.equal(next.thread.turns[0],before.thread.turns[0]);assert.equal(before.thread.turns[1].items[0].text,'hello');assert.equal(applyChange(before,event(6,delta(10,'missing'))),null);assert.equal(applyChange(before,event(6,delta(1,'wrong'))),null);});
 test('snapshot overlap and repeated events do not duplicate text; gaps and restarts resync',()=>{const before=baseline();assert.equal(applyChange(before,event(6,delta(0,'hello')))?.thread.turns[1].items[0].text,'hello');assert.equal(applyChange(before,event(6,delta(3,'lo!')))?.thread.turns[1].items[0].text,'hello!');assert.equal(applyChange(before,event(5,delta(5,'duplicate'))),before);assert.equal(applyChange(before,event(7,delta(5,'gap'))),null);assert.equal(applyChange(before,{...event(),id:'restart:1'}),null);});
 test('authoritative item completion replaces text; late deltas cannot modify it',()=>{const finished=applyChange(baseline(),event(6,{item:{turnId:'turn',item:{id:'item',type:'agentMessage',text:'Final corrected'},completed:true}}))!;assert.equal(finished.thread.turns[1].items[0].text,'Final corrected');const late=applyChange(finished,event(7,delta(15,' late')))!;assert.equal(late.thread.turns[1].items[0].text,'Final corrected');const completed=applyChange(late,event(8,{turn:{id:'turn',status:'completed',items:[]},state:{phase:'IDLE',activeTurnId:null,pending:[],error:null}}))!;assert.equal(completed.thread.turns[1].items.length,1);assert.equal(completed.phase,'IDLE');assert.equal(completed.activeTurnId,null);});

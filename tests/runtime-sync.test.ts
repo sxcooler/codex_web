@@ -107,12 +107,23 @@ test('status checks reuse terminal history and detect external changes',async t=
   const {threadId}=await runtime.create({cwd,clientRequestId:'create',prompt:'done'});
   const snapshot=await runtime.snapshot(threadId);
   const before=await (runtime as any).call('fixture/stats',{});
-  for(let i=0;i<3;i++) assert.deepEqual(await (runtime as any).status(threadId,snapshot.epoch),{resync:false});
+  const status=await runtime.status(threadId,snapshot.epoch);
+  assert.equal(status.epoch,snapshot.epoch);assert.equal(status.revision,snapshot.revision);
+  for(let i=0;i<3;i++) assert.equal((await (runtime as any).status(threadId,snapshot.epoch)).resync,false);
   const after=await (runtime as any).call('fixture/stats',{});
   assert.equal(after.itemLists,before.itemLists);
   await (runtime as any).call('fixture/external-change',{threadId});
-  assert.deepEqual(await (runtime as any).status(threadId,snapshot.epoch),{resync:true});
-  assert.deepEqual(await (runtime as any).status(threadId,'old-epoch'),{resync:true});
+  assert.equal((await (runtime as any).status(threadId,snapshot.epoch)).resync,true);
+  assert.equal((await (runtime as any).status(threadId,'old-epoch')).resync,true);
+});
+
+test('read-only status exposes a queued release version missed by the browser',async t=>{
+  const runtime=start(t),{threadId}=await runtime.create({cwd,clientRequestId:'release-version',prompt:'hold'}),baseline=await runtime.snapshot(threadId);
+  await runtime.requestRelease(threadId);
+  const before=await (runtime as any).call('fixture/stats',{}),status=await runtime.status(threadId,baseline.epoch),after=await (runtime as any).call('fixture/stats',{});
+  assert.equal(status.epoch,baseline.epoch);assert.ok(status.revision>baseline.revision);assert.equal(status.resync,false);
+  assert.equal(after.resumes,before.resumes);assert.equal(after.unsubscribes,before.unsubscribes);
+  const current=await runtime.snapshot(threadId);assert.equal(current.phase,'RUNNING');assert.equal(current.release.requested,true);
 });
 
 test('oversized changes demand resync and never enter the byte bounded replay journal', async t => {
@@ -146,10 +157,10 @@ test('native active text seeds delta offsets and status stays light across local
   const runtime=start(t,'sync-history');
   const {threadId,turnId}=await runtime.create({cwd,clientRequestId:'create',prompt:'hold'});
   const baseline=await runtime.snapshot(threadId);
-  assert.deepEqual(await runtime.status(threadId,baseline.epoch),{resync:false});
+  assert.equal((await runtime.status(threadId,baseline.epoch)).resync,false);
   await runtime.abort(threadId);
-  assert.deepEqual(await runtime.status(threadId,baseline.epoch),{resync:false});
-  assert.deepEqual(await runtime.status(threadId,baseline.epoch),{resync:false});
+  assert.equal((await runtime.status(threadId,baseline.epoch)).resync,false);
+  assert.equal((await runtime.status(threadId,baseline.epoch)).resync,false);
   const native={id:'external',status:{type:'active'},turns:[{id:'active',status:'inProgress',items:[{id:'message',type:'agentMessage',text:'prefix'}]}]};
   t.mock.method(runtime as any,'readThread',async()=>structuredClone(native));
   await runtime.snapshot('external');
@@ -175,7 +186,7 @@ test('status preserves the same-epoch unmaterialized empty-thread fallback',asyn
     const {threadId}=await runtime.create({cwd,clientRequestId:'empty'});
     const snapshot=await runtime.snapshot(threadId);
     assert.equal(snapshot.unmaterialized,true);
-    assert.deepEqual(await runtime.status(threadId,snapshot.epoch),{resync:false});
+    assert.equal((await runtime.status(threadId,snapshot.epoch)).resync,false);
     await runtime.send(threadId,{text:'hold',clientRequestId:'first-message'});
     assert.equal(typeof (await runtime.status(threadId,snapshot.epoch)).resync,'boolean');
   }
@@ -188,7 +199,7 @@ test('bounded status baselines evict to authoritative resync instead of stale ca
   const oldest=await runtime.snapshot('history-0');
   for(let i=1;i<9;i++) await runtime.snapshot('history-'+i);
   t.mock.method(runtime as any,'call',async(method:string,params:any)=>method==='thread/read'?{thread:{id:params.threadId,status:{type:'idle'},turns:[]}}:{data:[{id:'old',status:'completed',error:{message:'x'.repeat(1100000)}}],nextCursor:null});
-  assert.deepEqual(await runtime.status('history-0',oldest.epoch),{resync:true});
+  assert.equal((await runtime.status('history-0',oldest.epoch)).resync,true);
   assert.equal((await runtime.snapshot('history-0')).thread.turns[0].error.message.length,1100000);
 });
 

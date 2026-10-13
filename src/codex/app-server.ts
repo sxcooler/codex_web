@@ -4,6 +4,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import {diagnosticCode,diagnosticId,type DiagnosticEvent} from '../server/diagnostics.ts';
 
 type Id = string | number;
+export type LateOutcome<T=unknown> = {result:T;error?:never}|{error:Error;result?:never};
 type Options = { executable: string; args?: string[]; cwd?: string; timeoutMs?: number; maxMessageBytes?: number; diagnostic?:(event:DiagnosticEvent)=>void };
 type Pending = { resolve: (result: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; method:string;threadId?:string;started:number };
 const isId = (value: unknown): value is Id => typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value));
@@ -14,6 +15,7 @@ export class AppServer extends EventEmitter {
   private timeoutMs: number;
   private maxMessageBytes: number;
   private pending = new Map<Id, Pending>();
+  private lateOutcomes = new Map<Id,(outcome:LateOutcome<any>)=>void>();
   private approvals = new Set<Id>();
   private nextId = 0;
   private parts: Buffer[] = [];
@@ -66,22 +68,23 @@ export class AppServer extends EventEmitter {
   initialize(): Promise<unknown> {
     return this.initialization ??= this.request('initialize', {
       clientInfo: { name: 'codex_remote_web', title: 'Codex Web', version: '0.1.0' },
-      capabilities: { experimentalApi: false },
+      capabilities: { experimentalApi: true },
     }).then((result) => { this.notify('initialized', {}); return result; });
   }
 
-  request<T = unknown>(method: string, params: unknown, timeoutMs=this.timeoutMs): Promise<T> {
+  request<T = unknown>(method: string, params: unknown, timeoutMs=this.timeoutMs,onLateOutcome?:(outcome:LateOutcome<T>)=>void): Promise<T> {
     if(!Number.isSafeInteger(timeoutMs)||timeoutMs<1)return Promise.reject(new Error('timeoutMs must be a positive integer'));
     if (this.stopped) return Promise.reject(this.stopped);
     const id = this.nextId++;
     const started=performance.now(),threadId=diagnosticId(isObject(params)?params.threadId:undefined);
-    const finish=(outcome:string,error?:any)=>{const elapsedMs=Math.round(performance.now()-started);if(elapsedMs>=1000||outcome!=='ok')this.record({event:'rpc_end',id,method,threadId,elapsedMs,outcome,errorCode:diagnosticCode(error?.code)});};
+    const finish=(outcome:string,error?:any)=>{const originalThread=isObject(params)?params.threadId:undefined,errorClass=error?.code===-32600&&method==='thread/turns/list'&&typeof originalThread==='string'&&error.message===`thread ${originalThread} is not materialized yet; thread/turns/list is unavailable before first user message`?'history-not-materialized':error?.code===-32601&&['thread/read','thread/turns/list'].includes(method)&&error.message==='list_turns is not supported yet'?'history-unsupported':'rpc-error';const elapsedMs=Math.round(performance.now()-started);if(elapsedMs>=1000||outcome!=='ok')this.record({event:'rpc_end',id,method,threadId,elapsedMs,outcome,errorCode:diagnosticCode(error?.code),...(outcome!=='ok'?{errorClass}:{})});};
     let timedOut=false;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         timedOut=true;
         this.pending.delete(id);
-        reject(new Error(`RPC ${method} timed out; outcome is uncertain, do not automatically retry`));
+        if(onLateOutcome)this.lateOutcomes.set(id,onLateOutcome);
+        reject(Object.assign(new Error(`RPC ${method} timed out; outcome is uncertain, do not automatically retry`),onLateOutcome?{outcomeUnknown:true}:{}));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer,method,threadId,started });
       try { this.send({ id, method, params }); }
@@ -94,7 +97,13 @@ export class AppServer extends EventEmitter {
   }
 
   private record(event:DiagnosticEvent){try{this.diagnostic?.({...event,nativePid:this.child.pid});}catch{/* Diagnostics cannot change RPC outcomes. */}}
-  diagnosticState(){return {nativePid:this.child.pid,pendingCount:this.pending.size,receivedBytes:this.receivedBytes,lastReceivedAgoMs:Math.round(performance.now()-this.lastReceived),pending:[...this.pending.entries()].slice(0,10).map(([id,pending])=>({id,method:pending.method,threadId:pending.threadId,elapsedMs:Math.round(performance.now()-pending.started)}))};}
+  diagnosticState(){return {nativePid:this.child.pid,pendingCount:this.pending.size,lateOutcomeCount:this.lateOutcomes.size,receivedBytes:this.receivedBytes,lastReceivedAgoMs:Math.round(performance.now()-this.lastReceived),pending:[...this.pending.entries()].slice(0,10).map(([id,pending])=>({id,method:pending.method,threadId:pending.threadId,elapsedMs:Math.round(performance.now()-pending.started)}))};}
+
+  private settleLate(id:Id,outcome:LateOutcome<any>):void {
+    const observer=this.lateOutcomes.get(id);
+    this.lateOutcomes.delete(id);
+    try{observer?.(outcome);}catch{/* An opt-in cleanup observer cannot change RPC transport outcomes. */}
+  }
 
   notify(method: string, params: unknown): void { this.send({ method, params }); }
 
@@ -163,7 +172,10 @@ export class AppServer extends EventEmitter {
     if (!hasId || Object.hasOwn(message, 'result') === Object.hasOwn(message, 'error')) throw new Error('Invalid response');
     if ('error' in message && (!isObject(message.error) || !Number.isSafeInteger(message.error.code) || typeof message.error.message !== 'string')) throw new Error('Invalid RPC error');
     const pending = this.pending.get(message.id);
-    if (!pending) return; // A timed-out request can still finish; never send it again.
+    if (!pending) {
+      this.settleLate(message.id,'error' in message?{error:Object.assign(new Error(message.error.message),message.error)}:{result:message.result});
+      return; // A timed-out request can still finish; never send it again.
+    }
     this.pending.delete(message.id);
     clearTimeout(pending.timer);
     if ('error' in message) pending.reject(Object.assign(new Error(message.error.message), message.error));
@@ -174,6 +186,7 @@ export class AppServer extends EventEmitter {
     this.stopped ??= error;
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
     this.pending.clear();
+    for(const id of this.lateOutcomes.keys())this.settleLate(id,{error:this.stopped});
     this.approvals.clear();
     this.parts = [];
     this.frameBytes = 0;

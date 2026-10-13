@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
 import { parsePort, portAvailable } from '../scripts/portable.ts';
 import { runtimeAllowed, runtimeFiles, sourceAllowed } from '../scripts/package-portable.ts';
+import { appFile } from '../scripts/portable-manifest.ts';
+import { readFileSync } from 'node:fs';
+import { resolve, relative } from 'node:path';
 import { configuredOrigins, optionalDomain } from '../src/server/origins.ts';
 
 test('origin allowlist rejects malformed or ambiguous inputs and normalizes optional domains',()=>{
@@ -31,6 +34,11 @@ test('release exports exclude local state, credentials and history', () => {
   for (const path of ['.git/config', '.local/web/config.json', '.worktrees/a/README.md', '.superpowers/plan.md', '.env', '.env.production', 'secret.pem', 'a.sqlite-wal', 'releases/a.zip', 'nested/auth.json', 'vapid.json', 'credentials.json']) assert.equal(sourceAllowed(path), false, path);
   for (const path of ['.gitignore', '.env.example', 'README.md', 'src/server/auth.ts', 'tests/auth.test.ts']) assert.equal(sourceAllowed(path), true, path);
   assert.ok(runtimeFiles.every(path => sourceAllowed(path) || path === 'dist'));
+  const sharedImport = readFileSync(new URL('../src/server/push.ts', import.meta.url), 'utf8').match(/from '([^']+notificationTarget\.ts)'/)![1];
+  const sharedPath = relative(resolve('src'), resolve('src/server', sharedImport)).replaceAll('\\', '/');
+  const packagedPath = 'src/' + sharedPath;
+  assert.ok(appFile(packagedPath), 'Shared notification helper must be accepted by the existing portable updater');
+  assert.ok(runtimeFiles.some(base => packagedPath === base || packagedPath.startsWith(base + '/')) && runtimeAllowed(packagedPath), 'Portable server must include its shared notification target import');
   for (const path of ['src/server/debug.log', 'src/codex/.env', 'dist/.local/auth.json']) assert.equal(runtimeAllowed(path), false, path);
   assert.equal(runtimeAllowed('dist/assets/index.js'), true);
   for (const path of ['scripts/windows/install-startup.ps1', 'scripts/windows/startup-launcher.cs', 'scripts/windows/codex-web.ico']) {

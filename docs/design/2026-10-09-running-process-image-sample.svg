@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">
+  <rect width="720" height="360" fill="#182024"/>
+  <rect x="0" y="0" width="720" height="44" fill="#252e33"/>
+  <g font-family="Microsoft YaHei, sans-serif" font-size="15" fill="#c5ced3">
+    <text x="20" y="28">读回验证 · 示例截图</text>
+    <text x="20" y="86">设备状态</text>
+    <text x="20" y="126" fill="#99c6ad">连接正常</text>
+    <text x="20" y="166">读回值　0.00</text>
+    <text x="20" y="206">计数　88</text>
+  </g>
+  <rect x="235" y="66" width="462" height="263" rx="3" fill="#131a1e" stroke="#3a484f"/>
+  <g stroke="#2a363d" stroke-width="1">
+    <path d="M255 120H680M255 170H680M255 220H680M255 270H680M320 85V310M420 85V310M520 85V310M620 85V310"/>
+  </g>
+  <path d="M255 260L285 250L325 262L365 225L405 227L445 205L485 200L525 173L565 176L605 152L645 151L680 132" fill="none" stroke="#95bfa8" stroke-width="2"/>
+  <text x="255" y="96" font-family="Microsoft YaHei, sans-serif" font-size="13" fill="#9da9b0">读回记录</text>
+</svg>

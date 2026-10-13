@@ -7,6 +7,7 @@ A lightweight web client for Codex running on your development machine, accessib
 ## Features
 
 - Select an existing project, use no-project mode, create a Git project or clone a repository; continue conversations, steer running tasks, interrupt, and release for handoff.
+- Group conversations by their project directory; automatically register native projects and fill missing historical affiliations after upgrades.
 - Live incremental synchronization, paginated history, on-demand command output, safe Markdown, and original-text copying.
 - Resizable, remembered three-pane layout; text, Markdown, and image previews, unified/split diffs, read-only Git history, and JUnit reports.
 - Native model, reasoning, and approval choices; rename, favorite, hide from Web, and clear Web metadata.
@@ -37,7 +38,7 @@ A lightweight web client for Codex running on your development machine, accessib
 
 Running from source requires Node **>=24.20.0**, npm, the official standalone Codex CLI **>=0.160.1**, and Git for project/Git features. `.node-version` declares the baseline; it does not switch Node automatically. Install and sign in using the [official Codex instructions](https://learn.chatgpt.com/docs/codex/cli). Linux/WSL must use the Linux CLI and its own environment's login. Do not rely on binaries inside the VS Code extension's private directory.
 
-**Codex Web 0.1.7 requires Codex CLI >=0.160.1 (the development and verified baseline)** and a recognizable stable version. Before updating an existing 0.1.6 installation, upgrade Codex CLI separately and check `codex --version`, then apply the 0.1.7 update. App updates do not upgrade the CLI. Older, prerelease, or unrecognized versions prevent startup; the updater preserves or rolls back the app under its existing rules.
+**Codex Web 0.1.8 requires Codex CLI >=0.160.1 (the development and verified baseline)** and a recognizable stable version. Before updating an older installation, upgrade Codex CLI separately if needed and check `codex --version`, then apply the 0.1.8 update. App updates do not upgrade the CLI. Older, prerelease, or unrecognized versions prevent startup; the updater preserves or rolls back the app under its existing rules.
 
 ## Run from source
 
@@ -152,13 +153,13 @@ The Linux package targets x64 glibc systems, with WSL2 Ubuntu 22.04 as the verif
 
 Conversation menus support native archiving; switch the sidebar to Archived to restore a thread. Hide from Web only changes Web preferences. User message blocks align right, with available native turn start/completion times beside role names. Missing timestamps and individual steering-message times are not inferred. Long filenames, commit entries, source and diffs scroll horizontally within their panels; Markdown prose still wraps.
 
-Opening or manually refreshing a conversation checks native write ownership before sending. Web holds the conversation after a successful resume; another app holding the writer triggers an early notice and Retry button while history remains readable. The check sends no model message; automatic history synchronization does not reacquire ownership. Switching conversations or opening a new task requests release of the previous conversation, deferred until completion if it is running or awaiting approval. Manual “Release and close” leaves the page only after release is confirmed. Use one writer per Thread at a time. VS Code may retain ownership after a response completes; close the corresponding project window before returning to Web. The app does not forcibly take ownership. An empty Thread may not persist before its first message; releasing or restarting can lose the empty Thread while retaining project files.
+Viewing, refreshing, returning to the foreground, and leaving a read-only view do not change native ownership. Foreground recovery verifies status first. Explicit sending or Continue conversation checks writer identity and permissions; conflicts leave history readable. Only conversations explicitly operated on by this page request release on navigation, deferred until completion for running tasks. Returning to read-only history does not cancel that release. Recent dialogue ordering uses the native dialogue clock, so viewing and settings changes do not move completed conversations first. Manual “Release and close” leaves the page only after release is confirmed. Use one writer per Thread at a time. VS Code may retain ownership after a response completes; close the corresponding project window before returning to Web. The app does not forcibly take ownership. An empty Thread may not persist before its first message; releasing or restarting can lose the empty Thread while retaining project files.
 
 A timeout or lost connection can leave a submission's outcome unknown. Check native history before explicitly retrying; refreshing never resends a task. Drafts survive within the current page lifecycle, but a full reload does not guarantee retention. Project context does not replace native Codex permissions. Web file and Git APIs remain restricted to validated project boundaries; there is no arbitrary shell/RPC REST endpoint. See the [session guide](docs/guides/sessions.md).
 
 Web Push requires HTTPS, browser support, and explicit user permission. Physical-phone background delivery and real VS Code handoff for phase-two features still have verification gaps. The PWA does not cache APIs, conversations, or credentials; tasks cannot be submitted offline.
 
-For the 0.1.7 release scope and checks, see the [release record](docs/verification/2026-10-07-release-017.md). Portable updates require matching platform/runtime fingerprints and file checks; see the [portable guide](docs/guides/portable.md#数据与升级).
+For the 0.1.8 release scope and checks, see the [release record](docs/verification/2026-10-14-release-018.md). Portable updates require matching platform/runtime fingerprints and file checks; see the [portable guide](docs/guides/portable.md#数据与升级).
 
 ## Documentation and verification
 

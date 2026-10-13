@@ -29,7 +29,7 @@ test('mobile Enter keeps multiline drafts and desktop Enter still submits',async
  await input.pressSequentially('换行');await expect(send).toBeEnabled();await input.press('Enter');
  await expect.poll(()=>sent).toEqual(['第一行\n第二行','桌面\n换行']);
 });
-test('pane drag persists ratios and navigating releases old session while preserving its draft',async({page})=>{
+test('pane drag persists ratios and read-only navigation preserves drafts without release',async({page})=>{
   const releases:string[]=[];
   await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
   await page.route('**/api/**',async route=>{
@@ -57,7 +57,7 @@ test('pane drag persists ratios and navigating releases old session while preser
   expect(saved).toBeTruthy();
   await page.getByRole('link',{name:'会话 B',exact:true}).click();
   await expect(page.locator('h1')).toHaveText('会话 B');
-  expect(releases.some(x=>x.includes('/a/'))).toBe(true);
+  expect(releases).toEqual([]);
   await page.getByRole('link',{name:'会话 A',exact:true}).click();
   await expect(page.locator('#message')).toHaveValue('保留的草稿');
   await page.reload();expect(await page.evaluate(()=>localStorage.getItem('codex-web:layout:v1'))).toBe(saved);
@@ -87,7 +87,7 @@ test('release waits for confirmation and reconnect never resubmits an uncertain 
   else if(path==='/api/sessions')data={data:[{id,name:'恢复测试'}],nextCursor:null};
   else if(path==='/api/models')data={data:[]};
   else if(path==='/api/permission-modes')data={modes:[],current:'custom'};
-  else if(path==='/api/sessions/'+id)data={thread:{id,name:'恢复测试',turns:[]},phase:'IDLE',project:null,pending:[],retry:{message:'暂时断线，正在重试'}};
+  else if(path==='/api/sessions/'+id)data={thread:{id,name:'恢复测试',turns:[]},phase:releases?'RELEASED':'IDLE',release:{requested:releases>0,handoffReady:false,inProgress:false},project:null,pending:[],retry:{message:'暂时断线，正在重试'}};
   else if(path.endsWith('/messages')){sends++;body=route.request().postDataJSON();status=504;data={error:'结果未知'};}
   else if(path.endsWith('/release')){releases++;data={status:'released',handoffReady:releases>1,warning:'仍在等待释放占用'};}
   await route.fulfill({json:data,status});
@@ -99,9 +99,9 @@ test('release waits for confirmation and reconnect never resubmits an uncertain 
  const sourceCount=await page.evaluate(()=>(window as any).sources.length);
  await page.clock.fastForward(50_000);
  expect(await page.evaluate(()=>(window as any).sources.length)).toBeGreaterThan(sourceCount);expect(sends).toBe(1);
- await page.getByRole('button',{name:'操作',exact:true}).click();await page.getByRole('button',{name:'释放',exact:true}).click();
- await expect(page).toHaveURL(/\/sessions\/recovery$/);await expect(page.getByText('仍在等待释放占用')).toBeVisible();
- await page.getByRole('button',{name:'操作',exact:true}).click();await page.getByRole('button',{name:'释放',exact:true}).click();await expect(page).toHaveURL(/\/$/);expect(sends).toBe(1);
+ await page.getByRole('button',{name:'操作',exact:true}).click();await page.getByRole('button',{name:'释放会话占用',exact:true}).click();
+ await expect(page).toHaveURL(/\/sessions\/recovery$/);await expect(page.locator('.connection')).toHaveText('正在释放占用');await expect(page.locator('.notice').filter({hasText:'正在释放占用'})).toHaveCount(0);
+ await page.getByRole('button',{name:'操作',exact:true}).click();await page.getByRole('button',{name:'释放会话占用',exact:true}).click();await expect(page).toHaveURL(/\/$/);expect(sends).toBe(1);
 });
 
 test('file diff and an attachment-only task use the selected options',async({page})=>{
@@ -109,13 +109,13 @@ test('file diff and an attachment-only task use the selected options',async({pag
  await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
  await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;let data:any={};
   if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
-  else if(path==='/api/projects')data={projects:[{id:'p',name:'project'}]};
+  else if(path==='/api/projects')data={projects:[{id:'p',name:'project',path:'C:/project'}]};
   else if(path==='/api/sessions'&&route.request().method()==='GET')data={data:[],nextCursor:null};
   else if(path==='/api/sessions'){sent=route.request().postDataJSON();data={threadId:'files'};}
   else if(path==='/api/models')data={data:[{id:'m',model:'m',displayName:'测试模型',supportedReasoningEfforts:[{reasoningEffort:'high'}],isDefault:true}]};
   else if(path==='/api/permission-modes')data={current:'ask',modes:[{id:'ask',available:true}]};
   else if(path==='/api/uploads')data={uploadId:'00000000-0000-4000-8000-000000000011',name:'note.txt',size:5,kind:'file'};
-  else if(path==='/api/sessions/files')data={thread:{name:'文件测试',turns:[],status:{type:'notLoaded'}},project:{id:'p'},phase:'IDLE',pending:[]};
+  else if(path==='/api/sessions/files')data={thread:{id:'files',name:'文件测试',turns:[],status:{type:'notLoaded'}},project:{id:'p',path:'C:/project'},phase:'IDLE',pending:[]};
   else if(path.endsWith('/git/files'))data={files:[{path:'note.txt',status:'M',added:1,deleted:1}]};
   else if(path.endsWith('/git/diff'))data={hunks:[{oldStart:1,oldLines:1,newStart:1,newLines:1,lines:[{kind:'delete',text:'before',oldLine:1},{kind:'add',text:'after',newLine:1}]}]};
   await route.fulfill({json:data});
@@ -141,7 +141,7 @@ test('file diff and an attachment-only task use the selected options',async({pag
  await page.getByRole('button',{name:'开始任务 →'}).click();
  await expect(page.getByRole('heading',{name:'文件测试'})).toBeVisible();
  await expect(page.locator('.connection')).toContainText('历史浏览');
- await expect(page.getByRole('status').filter({hasText:/会话已从运行时卸载/})).toBeVisible();
+ await expect(page.getByRole('status').filter({hasText:/会话已从运行时卸载/})).toHaveCount(0);
  expect(sent.model).toBe('m');expect(sent.effort).toBe('high');expect(sent.attachmentIds).toHaveLength(1);expect(sent.prompt).toBeUndefined();
  await page.getByRole('button',{name:/note.txt/}).click();
  await expect(page.locator('.unified-cell code').filter({hasText:'before'})).toBeVisible();
@@ -157,10 +157,10 @@ test('file diff and an attachment-only task use the selected options',async({pag
  await expect(page.getByText('Invalid request',{exact:true})).toHaveCount(0);
  await page.screenshot({path:'output/playwright/mobile-project-drawer.png'});
  await page.getByRole('button',{name:'收起右侧栏'}).click();
- await expect(page.getByRole('status').filter({hasText:/会话已从运行时卸载/})).toBeVisible();
+ await expect(page.getByRole('status').filter({hasText:/会话已从运行时卸载/})).toHaveCount(0);
 });
 
-test('rapid return cancels release only after the delayed leave request completes',async({page})=>{
+test('only an explicit write on rapid return cancels release after delayed leave completes',async({page})=>{
  let completeLeave:(()=>void)|undefined;const calls:string[]=[];
  await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
  await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;let data:any={};
@@ -170,16 +170,17 @@ test('rapid return cancels release only after the delayed leave request complete
   else if(/\/sessions\/[ab]$/.test(path))data={thread:{name:path.endsWith('a')?'甲':'乙',turns:[]},phase:'IDLE',pending:[]};
   else if(path==='/api/sessions/a/release-on-leave'){calls.push('leave-start');await new Promise<void>(resolve=>{completeLeave=resolve;});calls.push('leave-done');}
   else if(path==='/api/sessions/a/cancel-release')calls.push('cancel');
+  else if(path==='/api/sessions/a/messages')calls.push('write');
   await route.fulfill({json:data});
  });
- await page.goto('/sessions/a');await expect(page.locator('h1')).toHaveText('甲');calls.length=0;
+ await page.goto('/sessions/a');await expect(page.locator('h1')).toHaveText('甲');await page.locator('#message').fill('明确写入');await page.getByRole('button',{name:'发送',exact:true}).click();await expect.poll(()=>calls.includes('write')).toBe(true);calls.length=0;
  await page.getByRole('link',{name:'乙',exact:true}).click();await expect(page.locator('h1')).toHaveText('乙');
  await expect.poll(()=>!!completeLeave).toBe(true);
  await page.getByRole('link',{name:'甲',exact:true}).click();await expect(page).toHaveURL(/sessions\/a$/);
  await page.getByRole('button',{name:'操作',exact:true}).click();await page.getByRole('button',{name:'刷新当前会话'}).click();await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
- await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
+ expect(calls).toEqual(['leave-start']);await page.locator('#message').fill('明确再次写入');await page.getByRole('button',{name:'发送',exact:true}).click();await expect(page.locator('.composer button.primary:visible')).toBeDisabled();
  expect(calls).toEqual(['leave-start']);completeLeave!();
- await expect(page.locator('h1')).toHaveText('甲');expect(calls).toEqual(['leave-start','leave-done','cancel']);
+ await expect.poll(()=>calls).toEqual(['leave-start','leave-done','cancel','write']);await expect(page.locator('h1')).toHaveText('甲');
 });
 
 test('creation context survives navigation and late-created tasks are automatically released',async({page})=>{
@@ -187,16 +188,17 @@ test('creation context survives navigation and late-created tasks are automatica
  await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
  await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;let data:any={};
   if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
-  else if(path==='/api/projects')data={projects:[{id:'p',name:'正确项目'}]};
+  else if(path==='/api/projects')data={projects:[{id:'p',name:'正确项目',path:'C:/project'}]};
+  else if(path==='/api/project-catalog')data={state:'ready',projects:[{id:'native-p',name:'正确项目',roots:[{path:'C:/project',workspaceId:'p',available:true}]}],workspaces:[{workspaceId:'p',nativeProjectId:'native-p',status:'synced'}]};
   else if(path==='/api/sessions'&&route.request().method()==='GET')data={data:[{id:'other',name:'其他会话'}],nextCursor:null};
-  else if(path==='/api/sessions'){sent=route.request().postDataJSON();await new Promise<void>(resolve=>{finishCreate=resolve;});data={threadId:'late'};}
+  else if(path==='/api/sessions'){sent=route.request().postDataJSON();await new Promise<void>(resolve=>{finishCreate=resolve;});data={threadId:'late',status:'idle'};}
   else if(path==='/api/sessions/other')data={thread:{name:'其他会话',turns:[]},phase:'IDLE',pending:[]};
   else if(path.endsWith('/release-on-leave'))released.push(path);
   await route.fulfill({json:data});
  });
- await page.goto('/');await page.getByRole('combobox',{name:'项目',exact:true}).selectOption('p');await page.getByRole('textbox',{name:'任务',exact:true}).fill('项目任务');
+ await page.goto('/');await page.getByRole('combobox',{name:'项目',exact:true}).selectOption('native:native-p');await page.getByRole('textbox',{name:'任务',exact:true}).fill('项目任务');
  await page.getByRole('link',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');
- await page.getByRole('button',{name:'＋ 新任务'}).click();await expect(page.getByRole('combobox',{name:'项目',exact:true})).toHaveValue('p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toHaveValue('项目任务');
+ await page.getByRole('button',{name:'＋ 新任务'}).click();await expect(page.getByRole('combobox',{name:'项目',exact:true})).toHaveValue('native:native-p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toHaveValue('项目任务');
  await page.getByRole('button',{name:'开始任务 →'}).click();await expect.poll(()=>!!finishCreate).toBe(true);expect(sent.projectId).toBe('p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toBeDisabled();
  await page.getByRole('link',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');finishCreate!();
  await expect.poll(()=>released.includes('/api/sessions/late/release-on-leave')).toBe(true);await expect(page).toHaveURL(/sessions\/other$/);

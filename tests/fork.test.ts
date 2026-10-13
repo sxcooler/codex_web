@@ -100,7 +100,8 @@ for(const mode of ['fork-missing-approvalPolicy','fork-missing-model','fork-miss
   const pending=runtime.fork('source',input);
   await assert.rejects(pending,(error:any)=>{assert.deepEqual(error.partial,{threadId:'fork-1'});return true;});
   assert.equal((await stats(runtime)).resumes,0,'failed fork must not resume the source');
-  assert.deepEqual(await runtime.open('fork-1'),{phase:'IDLE'});
+  const openedState=await runtime.open('fork-1');
+  assert.deepEqual(openedState,{phase:'IDLE',epoch:(runtime as any).epoch});
   const opened=await stats(runtime);
   assert.equal(opened.resumes,1,'partial thread must acquire effective config before becoming owned');
   assert.deepEqual(opened.lastResume,{threadId:'fork-1',excludeTurns:true});

@@ -65,7 +65,7 @@ for(const entry of ['/', '/sessions/model-refresh'])test(`model menu refresh pre
     await page.evaluate(()=>window.scrollTo(0,1000));expect(await page.evaluate(()=>window.scrollY)).toBe(0);
     expect(await page.locator('.session-toolbar').evaluate(el=>el.getBoundingClientRect().top)).toBe(0);
     expect(await page.locator('.composer').evaluate(el=>el.getBoundingClientRect().bottom<=innerHeight)).toBe(true);
-    running=true;await page.reload();await expect(picker.locator('option[value="old"]')).toHaveJSProperty('disabled',true);await expect(effort).toBeDisabled();
+    running=true;await page.reload();await page.getByRole('button',{name:'展开输入',exact:true}).click();await expect(picker.locator('option[value="old"]')).toHaveJSProperty('disabled',true);await expect(effort).toBeDisabled();
     const selected=await picker.inputValue();await picker.selectOption({label:'刷新模型列表'});await expect(notice).toContainText('已从 Codex');await expect(picker).toHaveValue(selected);
   }
   expect(errors).toEqual([]);

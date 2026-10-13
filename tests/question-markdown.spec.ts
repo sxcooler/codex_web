@@ -17,6 +17,7 @@ for(const kind of ['async','sync'])for(const width of [1280,390])test(`${kind} q
     else if(path==='/api/permission-modes')data={modes:[]};
     else if(path==='/api/sessions/question-markdown')data={thread:{id:'question-markdown',turns:[{id:'turn',status:'completed',items:kind==='async'?[{id:'question',type:'agentMessage',delivery:'async',text:title,questions:[question]}]:[]}]},project:{id:'project',name:'project',path:'C:/project'},phase:kind==='sync'&&!answered?'WAITING_INPUT':'IDLE',pending:kind==='sync'&&!answered?[{requestId:'request',method:'item/tool/requestUserInput',params:{questions:[question]}}]:[],inputAnswers:answered?{'turn:question':{status:'accepted'}}:{}};
     else if(path.endsWith('/files/image')){imageRequests.push(url.searchParams.get('path')!);return route.fulfill({contentType:'image/png',path:'public/assets/icon-mobile-v1-512.png'});}
+    else if(path.endsWith('/files/entry'))data={path:url.searchParams.get('path'),type:'file'};
     else if(path.endsWith('/files/content'))data={path:url.searchParams.get('path'),content:'# Details\n\n说明文件',kind:'text'};
     else if(path.endsWith('/answer')||path.endsWith('/respond')){posted.push(route.request().postDataJSON());answered=true;data={status:'accepted'};}
     await route.fulfill({json:data});

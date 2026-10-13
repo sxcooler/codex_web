@@ -113,7 +113,7 @@ test('window history reads only selected bodies and keeps the full lightweight s
   assert.equal(command.outputChars, output.length);
   assert.equal(command.outputBytes, Buffer.byteLength(output));
   assert.equal(command.outputDeferred, true);
-  assert.deepEqual(await runtime.status('thread', snapshot.epoch), { resync: false });
+  assert.equal((await runtime.status('thread', snapshot.epoch)).resync,false);
   const state = (runtime as any).state('thread'), baseline = structuredClone(state.syncTurns), revision = state.revision;
   const first = await runtime.history('thread', snapshot.history.nextCursor);
   assert.equal(first.turns.length,20,'Explicit history loading keeps its existing page size');
@@ -124,7 +124,7 @@ test('window history reads only selected bodies and keeps the full lightweight s
   assert.equal(first.turns[0].items[0].outputDeferred, true);
   assert.deepEqual(state.syncTurns, baseline);
   assert.equal(state.revision, revision);
-  assert.deepEqual(await runtime.status('thread', snapshot.epoch), { resync: false });
+  assert.equal((await runtime.status('thread', snapshot.epoch)).resync,false);
   const count = calls.filter(call => call.method === 'thread/items/list').length;
   await assert.rejects(runtime.history('thread', 'missing'), (error: any) => error.statusCode === 409 && error.code === 'RUNTIME_HISTORY_CURSOR_INVALID');
   assert.equal(calls.filter(call => call.method === 'thread/items/list').length, count);

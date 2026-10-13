@@ -41,8 +41,11 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       break;
     case 'ignore': calls++; break;
     case 'lateRead': calls++;setTimeout(()=>send({id:message.id,result:'late read'}),80);break;
+    case 'lateOutcome': calls++;setTimeout(()=>send({id:message.id,...(message.params.error?{error:{code:-32000,message:'late denial'}}:{result:message.params.value})}),message.params.delay??80);break;
     case 'count': send({ id: message.id, result: calls }); break;
     case 'rpcError': send({ id: message.id, error: { code: -32000, message: 'denied', data: { reason: 'fixture' } } }); break;
+    case 'thread/turns/list':
+    case 'thread/read': send({id:message.id,error:message.params.fixtureError});break;
     case 'exit': process.exit(7); break;
     case 'malformed': process.stdout.write('{broken\n'); break;
     case 'sensitiveMalformed': process.stdout.write('secret-protocol-sentinel\n'); break;

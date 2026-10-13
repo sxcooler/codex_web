@@ -13,7 +13,12 @@ try { $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.Ge
 $name = "CodexWeb-$hash"
 $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $existing = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).$name
-if ($existing -and $existing -ne $command -and $existing -ne $legacyCommand) { throw 'A different startup command uses this name; nothing was changed.' }
+if ($existing -and @($command, "$command --diagnostics", $legacyCommand, "$legacyCommand --diagnostics") -cnotcontains $existing) { throw 'A different startup command uses this name; nothing was changed.' }
+$diagnosticArgs = @()
+if ($existing -ceq "$command --diagnostics" -or $existing -ceq "$legacyCommand --diagnostics") {
+    $command += ' --diagnostics'
+    $diagnosticArgs = @('--diagnostics')
+}
 $task = Get-ScheduledTask -TaskName 'Codex Remote Web' -ErrorAction SilentlyContinue
 if ($task) {
     $legacyScript = Join-Path $projectRoot 'scripts\start-server.ps1'
@@ -36,5 +41,5 @@ if ($Remove) {
     New-ItemProperty -LiteralPath $key -Name $name -Value $command -PropertyType String -Force | Out-Null
     if ($task) { Unregister-ScheduledTask -TaskName 'Codex Remote Web' -Confirm:$false }
     Write-Output 'Installed logon startup for the current user. No scheduled task or service is required.'
-    if ($Start) { & $script -Background }
+    if ($Start) { & $script -Background @diagnosticArgs }
 }

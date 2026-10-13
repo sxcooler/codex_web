@@ -1,14 +1,14 @@
 import {appendFile,rename,stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {monitorEventLoopDelay,performance} from 'node:perf_hooks';
-import type {FastifyInstance} from 'fastify';
+import type {FastifyInstance,FastifyRequest} from 'fastify';
 
 export type DiagnosticEvent=Record<string,unknown>;
 export const diagnosticId=(value:unknown)=>typeof value==='string'&&/^[a-f0-9-]{36}$/i.test(value)?value:undefined;
 export const diagnosticCode=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)?value:typeof value==='string'&&/^[A-Z0-9_]{1,64}$/.test(value)?value:undefined;
 const FILE_BYTES=1024*1024,QUEUE_BYTES=64*1024;
 
-// Local, bounded metadata only. Callers must never pass request bodies or raw errors.
+// Local, bounded records; API exception fields are explicit, never request bodies or raw error objects.
 export class Diagnostics {
   private file:string;
   private queue:string[]=[];
@@ -24,7 +24,8 @@ export class Diagnostics {
   private sampledAt=performance.now();
   private timer:ReturnType<typeof setInterval>;
   private sequence=0;
-  private http=new Map<number,{id:number;method:string;route:string;threadId?:string;started:number}>();
+  private http=new Map<number,{id:number;requestId:string;method:string;route:string;threadId?:string;recovery?:string;started:number}>();
+  private httpRequests=new WeakMap<FastifyRequest,{id:number;requestId:string;method:string;route:string;threadId?:string;recovery?:string}>();
   private active=0;
   private streams=0;
   private runtime:()=>unknown;
@@ -71,11 +72,17 @@ export class Diagnostics {
     this.cpu=cpu;this.sampledAt=now;this.loop.reset();
     } catch {this.dropped++;}
   };
+  recordHttpError(request:FastifyRequest,exception:DiagnosticEvent){
+    const metadata=this.httpRequests.get(request);
+    if(metadata)this.record({...exception,...metadata,event:'http_error'});
+  }
   attach(app:FastifyInstance){
     app.addHook('onRequest',async(request,reply)=>{
       const route=request.routeOptions.url;if(!route?.startsWith('/api/'))return;
       const stream=route.endsWith('/events'),id=++this.sequence,started=performance.now();
-      const metadata={id,method:request.method,route,threadId:diagnosticId((request.params as any)?.threadId)};
+      const hint=(request.query as any)?.recovery,recovery=route==='/api/sessions'&&request.method==='GET'&&typeof hint==='string'&&['foreground','stream-ready','shared-update','manual'].includes(hint)?hint:undefined;
+      const metadata={id,requestId:request.id,method:request.method,route,threadId:diagnosticId((request.params as any)?.threadId),...(recovery?{recovery}:{})};
+      this.httpRequests.set(request,metadata);
       if(stream)this.streams++;else{this.active++;if(this.http.size<256)this.http.set(id,{...metadata,started});}
       let ended=false;
       const finish=(outcome:string)=>{

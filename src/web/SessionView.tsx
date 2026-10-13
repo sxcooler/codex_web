@@ -1,28 +1,40 @@
+import {emptyCatalog,type ProjectCatalog,type Workspace} from './ProjectPicker.tsx';
+import {sessionGroups} from './sessionGroups.ts';
 import {QuestionContext} from './Questions.tsx';
 import {useCallback,useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {api,setCsrfToken,type Json} from './api.ts';
-import {applyChange,prependHistory} from './sessionSync.ts';
+import {applyChange,mergeSnapshot,prependHistory} from './sessionSync.ts';
+import {modelOverloadNotice} from './turnActivity.ts';
 import {reconcileMessages,type Outgoing,type Submission} from './submission.ts';
 import {drafts} from './drafts.ts';
-import {cancelReleaseOnReturn} from './handoff.ts';
+import {writeSession,markSessionWrite} from './handoff.ts';
 import {Attachments,type Attachment} from './Attachments.tsx';
 import {TurnOptions,type TurnSettings} from './TurnOptions.tsx';
 import {PaneSeparator,PaneToolbar,usePanes} from './PaneLayout.tsx';
 import {Message,Pending,TurnMessages} from './Conversation.tsx';
 import {GitPanel} from './GitPanel.tsx';
 import {readSendShortcut,shouldSubmit} from './preferences.ts';
+import {forwardSharedState} from './sharedState.ts';
+import type {NotificationTarget} from '../codex/notificationTarget.ts';
+const cwdKey=(path='')=>{const normal=path.replaceAll('\\','/').replace(/^\/\/\?\/UNC\//i,'//').replace(/^\/\/\?\//,'').replace(/\/+$/,'');return /^[a-z]:\//i.test(normal)||normal.startsWith('//')?normal.toLowerCase():normal;};
 const phases:Record<string,string>={IDLE:'空闲',RUNNING:'运行中',WAITING_APPROVAL:'等待审批',WAITING_INPUT:'等待输入',RELEASED:'已释放',EXTERNAL:'被占用',UNKNOWN:'待核实'};
-export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promise<void>;onReleased:(result:Json)=>void}){
+export function Session({catalog=emptyCatalog,projects=[],workRoot=null,desktopProjectlessRoot=null,id,onChanged,onReleased,notification,onNotificationHandled}:{catalog?:ProjectCatalog;projects?:Workspace[];workRoot?:string|null;desktopProjectlessRoot?:string|null;id:string;onChanged:()=>Promise<void>;onReleased:(result:Json)=>void;notification?:NotificationTarget&{token:number};onNotificationHandled:(target:NotificationTarget&{token:number})=>void}){
   const saved=useRef(drafts.get(id));
   const [outgoing,setOutgoing]=useState<Outgoing[]>(saved.current?.outgoing??[]),outgoingRef=useRef(outgoing);
-  const [snapshot,setSnapshot]=useState<Json|null>(null),[error,setError]=useState(''),[readError,setReadError]=useState(''),[reading,setReading]=useState(false),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[draft,setDraft]=useState(saved.current?.text??''),[settings,setSettings]=useState<TurnSettings>(saved.current?.settings??{}),[attachments,setAttachments]=useState<Attachment[]>(saved.current?.attachments??[]),[gitTick,setGitTick]=useState(0),[aborting,setAborting]=useState(false),[uncertain,setUncertain]=useState(saved.current?.uncertain??false);
+  const initial=saved.current?.initialSnapshot?.thread?.id===id?saved.current.initialSnapshot:null;
+  const [snapshot,setSnapshot]=useState<Json|null>(initial),[error,setError]=useState(''),[readError,setReadError]=useState(''),[reading,setReading]=useState(false),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[draft,setDraft]=useState(saved.current?.text??''),[settings,setSettings]=useState<TurnSettings>(saved.current?.settings??{}),[attachments,setAttachments]=useState<Attachment[]>(saved.current?.attachments??[]),[gitTick,setGitTick]=useState(0),[aborting,setAborting]=useState(false),[uncertain,setUncertain]=useState(saved.current?.uncertain??false);
+  const [contextTick,setContextTick]=useState(0);
   const [openFile,setOpenFile]=useState<{path:string;fragment?:string}>();
   const [historyLoading,setHistoryLoading]=useState(false),[historyError,setHistoryError]=useState('');
-  const [opening,setOpening]=useState(true),[openError,setOpenError]=useState('');
+  const [opening,setOpening]=useState(false),[checking,setChecking]=useState(!initial),[openError,setOpenError]=useState('');
   const [subagent,setSubagent]=useState(false);
   const [optionsError,setOptionsError]=useState(''),[attachmentError,setAttachmentError]=useState('');
-  const earlier=useRef<()=>void>(()=>{}),prepend=useRef<{top:number;height:number}|null>(null);
-  const intent=useRef<Submission['current']>(saved.current?.intent??null),submitting=useRef(false),mounted=useRef(true),refresh=useRef<()=>void>(()=>{}),recheck=useRef<()=>void>(()=>{}),pause=useRef<()=>void>(()=>{}),scroll=useRef<HTMLDivElement>(null),follow=useRef(saved.current?.follow??true),restored=useRef(false),panes=usePanes();
+  const earlier=useRef<(signal?:AbortSignal)=>Promise<boolean>>(async()=>false),prepend=useRef<{top:number;height:number}|null>(null);
+  const resume=useRef<()=>void>(()=>{});
+  const waitForRead=useRef<(signal:AbortSignal)=>Promise<void>>(async()=>{});
+  const snapshotRef=useRef<Json|null>(null),notificationHold=useRef(false);
+  const [notificationNotice,setNotificationNotice]=useState(''),[reveal,setReveal]=useState<{turnId?:string;itemId?:string;token:number}>();
+  const intent=useRef<Submission['current']>(saved.current?.intent??null),submitting=useRef(false),mounted=useRef(true),refresh=useRef<(restartHistory?:boolean)=>void>(()=>{}),recheck=useRef<()=>void>(()=>{}),pause=useRef<()=>void>(()=>{}),scroll=useRef<HTMLDivElement>(null),follow=useRef(saved.current?.follow??true),restored=useRef(false),panes=usePanes();
   const openDocument=useCallback((path:string,fragment?:string)=>{setOpenFile({path,fragment});if(!panes.rightVisible)panes.toggle('right');},[panes.rightVisible,panes.toggle]);
   const collapsed=panes.composerCollapsed,composerId=useId(),menuId=useId(),menu=useRef<HTMLDivElement>(null),menuButton=useRef<HTMLButtonElement>(null),[menuOpen,setMenuOpen]=useState(false),input=useRef<HTMLTextAreaElement>(null),expandButton=useRef<HTMLButtonElement>(null);
   const shortcutLabel=readSendShortcut()==='mod-enter'?'Ctrl/Cmd+Enter':'Enter';
@@ -43,29 +55,37 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
   useEffect(()=>{saveDraft();},[draft,settings,attachments,uncertain]);
   useEffect(()=>{panes.setRightAvailable(!!snapshot?.project);return()=>panes.setRightAvailable(false);},[snapshot?.project?.id,panes.setRightAvailable]);
   useEffect(()=>{
-    mounted.current=true;let disposed=false,entryReady=false,inflight=false,paused=false,lastEvent=Date.now(),lastPhase='',baseline:Json|null=null,source:EventSource|undefined,controller:AbortController|undefined,statusController:AbortController|undefined,historyController:AbortController|undefined,timer:ReturnType<typeof setTimeout>|undefined;
-    const accept=(next:Json)=>{baseline=next;setSnapshot(next);updateOutgoing(messages=>reconcileMessages(messages,(next.thread?.turns??[]).flatMap((turn:Json)=>turn.items??[])),false);if(next.phase!==lastPhase&&['IDLE','RELEASED'].includes(next.phase)){setGitTick(n=>n+1);if(lastPhase)void onChanged();}lastPhase=next.phase;};
-    const disconnect=()=>{source?.close();source=undefined;};
-    const schedule=()=>{disconnect();if(!disposed&&!paused&&!timer)timer=setTimeout(()=>{timer=undefined;void load();},200);};
+    mounted.current=true;let disposed=false,entryReady=true,inflight=false,paused=false,foregroundCheck=false,lastEvent=Date.now(),lastPhase='',baseline:Json|null=initial,source:EventSource|undefined,controller:AbortController|undefined,statusController:AbortController|undefined,historyController:AbortController|undefined,timer:ReturnType<typeof setTimeout>|undefined;
+    const readWaiters=new Set<()=>void>(),readIdle=()=>{if(!inflight&&!historyController)for(const finish of [...readWaiters])finish();};
+    waitForRead.current=signal=>{signal.throwIfAborted();if(!inflight&&!historyController)return Promise.resolve();return new Promise((resolve,reject)=>{const cleanup=()=>{readWaiters.delete(finish);signal.removeEventListener('abort',abort);},finish=()=>{cleanup();resolve();},abort=()=>{cleanup();reject(signal.reason);};readWaiters.add(finish);signal.addEventListener('abort',abort,{once:true});});};
+    let startupStopped=false;
+    const accept=(next:Json)=>{if(baseline&&cwdKey(next.thread?.cwd)!==cwdKey(baseline.thread?.cwd)){setOpenFile(undefined);setContextTick(n=>n+1);setGitTick(n=>n+1);}let listChanged=!!baseline&&next.thread.name!==baseline.thread.name;baseline=next;if(!next.historyPending){startupStopped=false;const cached=drafts.get(id);if(cached?.initialSnapshot)drafts.set(id,{...cached,initialSnapshot:undefined});}snapshotRef.current=next;setSnapshot(next);updateOutgoing(messages=>reconcileMessages(messages,(next.thread?.turns??[]).flatMap((turn:Json)=>turn.items??[])),false);if(next.phase!==lastPhase&&['IDLE','RELEASED'].includes(next.phase)){setGitTick(n=>n+1);if(lastPhase)listChanged=true;}if(listChanged)void onChanged();lastPhase=next.phase;};
+    let detachShared:(()=>void)|undefined;
+    const disconnect=()=>{detachShared?.();detachShared=undefined;source?.close();source=undefined;};
+    const schedule=(epoch?:string)=>{if(baseline?.historyPending&&inflight&&(!epoch||epoch===baseline.epoch))return;if(epoch&&epoch!==baseline?.epoch)controller?.abort();disconnect();if(!disposed&&!paused&&!startupStopped&&!timer)timer=setTimeout(()=>{timer=undefined;void load();},200);};
     const connect=()=>{
       disconnect();if(disposed||paused||!entryReady||!baseline)return;
       setConnected(false);lastEvent=Date.now();const stream=new EventSource('/api/sessions/'+id+'/events'+(baseline.syncCursor?'?cursor='+encodeURIComponent(baseline.syncCursor):''));source=stream;
+      detachShared=forwardSharedState(stream);
       const alive=()=>!disposed&&!paused&&source===stream;
       for(const event of ['ready','ping'])stream.addEventListener(event,()=>{if(alive()){lastEvent=Date.now();setConnected(true);}});
-      stream.addEventListener('resync',()=>{if(alive()){lastEvent=Date.now();schedule();}});
-      stream.addEventListener('change',event=>{if(!alive())return;lastEvent=Date.now();try{const next=applyChange(baseline!,JSON.parse((event as MessageEvent).data));if(!next){schedule();return;}setConnected(true);setReadError('');if(next!==baseline)accept(next);}catch{schedule();}});
+      stream.addEventListener('resync',event=>{if(alive()){lastEvent=Date.now();let epoch:string|undefined;try{epoch=JSON.parse((event as MessageEvent).data).id?.split(':')[0];}catch{}schedule(epoch);}});
+      stream.addEventListener('change',event=>{if(!alive())return;lastEvent=Date.now();try{const change=JSON.parse((event as MessageEvent).data);if(inflight)readChanges.push(change);const next=applyChange(baseline!,change);if(!next){schedule(change.id?.split(':')[0]);return;}setConnected(true);if(!startupStopped)setReadError('');if(next!==baseline){const changedCwd=cwdKey(next.thread?.cwd)!==cwdKey(baseline?.thread?.cwd);accept(changedCwd?{...next,project:null}:next);if(changedCwd)schedule();}}catch{schedule();}});
       stream.onerror=()=>{if(!alive())return;setConnected(false);void api('/auth/session').then(state=>{if(!alive())return;setCsrfToken(state.csrfToken);if(!state.authenticated)window.dispatchEvent(new Event('auth-lost'));}).catch(()=>{});};
     };
-    let pendingOpen=false,openFailures=0,openRetry:ReturnType<typeof setTimeout>|undefined;
+    let readChanges:Json[]=[];
+    let pendingOpen=false,historyQueued=false,openFailures=0,openRetry:ReturnType<typeof setTimeout>|undefined;
     const cancelOpenRetry=()=>{if(openRetry)clearTimeout(openRetry);openRetry=undefined;};
-    const load=async(checkOpen=false)=>{
-      if(disposed||paused||!entryReady)return;if(inflight){if(checkOpen)pendingOpen=true;return;}inflight=true;disconnect();statusController?.abort();historyController?.abort();historyController=undefined;setHistoryLoading(false);setHistoryError('');prepend.current=null;controller=new AbortController();const request=controller;setReading(true);
+    const load=async(checkOpen=false,restartHistory=false)=>{
+      if(disposed||paused||!entryReady)return;
+      if(historyController)try{await waitForRead.current(AbortSignal.timeout(30_000));}catch(e:any){if(!disposed){setReadError(e.message);setChecking(false);}return;}
+      if(disposed||paused)return;if(inflight){if(checkOpen)pendingOpen=true;return;}inflight=true;readChanges=[];if(!baseline?.historyPending)disconnect();statusController?.abort();setHistoryError('');controller=new AbortController();const request=controller;setReading(true);
       let retryOpen=false;
       try{
         if(checkOpen){
           cancelOpenRetry();setOpening(true);
           const signal=AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]);
-          try{await api('/sessions/'+id+'/open',{},signal);if(!disposed&&!request.signal.aborted){openFailures=0;setOpenError('');}}
+          try{const opened=await writeSession(id,()=>api('/sessions/'+id+'/open',{},signal));if(baseline?.historyPending&&opened.epoch!==baseline.epoch){baseline=null;setSnapshot(null);disconnect();}if(baseline&&!source)connect();if(!disposed&&!request.signal.aborted){openFailures=0;setOpenError('');setOpening(false);}}
           catch(e:any){
             if(e.data?.code==='RUNTIME_SUBAGENT_THREAD')throw e;
             if(!disposed&&!request.signal.aborted){
@@ -76,57 +96,102 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
           }
         }
         if(disposed||request.signal.aborted||paused)return;
-        let next:Json;try{next=await api('/sessions/'+id,undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));}catch(e:any){if(e.data?.code!=='RUNTIME_SYNC_RESTARTED'||disposed||request.signal.aborted||paused)throw e;next=await api('/sessions/'+id,undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));}if(disposed||request.signal.aborted||paused)return;accept(next);setReadError('');connect();}
-      catch(e:any){if(!disposed&&!request.signal.aborted&&!paused){setReadError(e.message);if(e.data?.code==='RUNTIME_SUBAGENT_THREAD'){paused=true;setSubagent(true);}}}
-      finally{inflight=false;if(!disposed){setReading(false);if(checkOpen)setOpening(false);if(pendingOpen){pendingOpen=false;void load(true);}else if(retryOpen&&!paused&&!request.signal.aborted)openRetry=setTimeout(()=>{openRetry=undefined;void load(true);},3000);}}
+        const snapshotUrl='/sessions/'+id+(restartHistory?'?restartHistory=true':'');let next:Json;try{next=await api(snapshotUrl,undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));}catch(e:any){if(e.data?.code!=='RUNTIME_SYNC_RESTARTED'||disposed||request.signal.aborted||paused)throw e;next=await api('/sessions/'+id,undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));}if(disposed||request.signal.aborted||paused)return;for(const change of readChanges){if(change.id?.split(':')[0]===next.epoch)next=applyChange(next,change)??(baseline?.epoch===next.epoch?baseline!:next);}next=mergeSnapshot(baseline,next);accept(next);setReadError(next.historyPending&&!['EXTERNAL','UNKNOWN'].includes(next.phase)?'任务已启动，历史同步仍未完成，请重新同步。':'');connect();}
+      catch(e:any){if(!disposed&&!request.signal.aborted&&!paused){if(baseline?.historyPending&&e.data?.code==='RUNTIME_HISTORY_NOT_MATERIALIZED')startupStopped=true;setReadError(e.message);if(e.data?.code==='RUNTIME_SUBAGENT_THREAD'){paused=true;setSubagent(true);}}if(baseline&&!source)connect();}
+      finally{inflight=false;foregroundCheck=false;if(!disposed){setChecking(false);setReading(false);if(checkOpen)setOpening(false);if(pendingOpen){pendingOpen=false;void load(true);}else if(retryOpen&&!paused&&!request.signal.aborted)openRetry=setTimeout(()=>{openRetry=undefined;void load(true);},3000);}readIdle();}
     };
-    earlier.current=()=>{void (async()=>{
-      const cursor=baseline?.history?.nextCursor;if(!cursor||historyController||inflight||disposed||paused)return;
-      const request=new AbortController();historyController=request;setHistoryLoading(true);setHistoryError('');follow.current=false;
+    earlier.current=async(signal)=>{
+      signal?.throwIfAborted();
+      if(!baseline?.history?.nextCursor||historyQueued||disposed||paused)return false;
+      historyQueued=true;setHistoryLoading(true);setHistoryError('');follow.current=false;
+      const request=new AbortController(),readSignal=AbortSignal.any([request.signal,AbortSignal.timeout(30_000),...(signal?[signal]:[])]);
       try{
-        const page=await api('/sessions/'+id+'/history?before='+encodeURIComponent(cursor),undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));
-        if(disposed||paused||request.signal.aborted||historyController!==request||!baseline)return;
-        const next=prependHistory(baseline,page,cursor);if(next===baseline)return;
+        await waitForRead.current(readSignal);readSignal.throwIfAborted();if(disposed||paused)return false;
+        const cursor=baseline?.history?.nextCursor;if(!cursor)return false;historyController=request;
+        const page=await api('/sessions/'+id+'/history?before='+encodeURIComponent(cursor),undefined,readSignal);
+        if(disposed||paused||request.signal.aborted||signal?.aborted||historyController!==request||!baseline)return false;
+        const next=prependHistory(baseline,page,cursor);if(next===baseline)return false;
         if(scroll.current)prepend.current={top:scroll.current.scrollTop,height:scroll.current.scrollHeight};accept(next);
-      }catch(e:any){if(!disposed&&!request.signal.aborted)setHistoryError(e.message);}
-      finally{if(historyController===request){historyController=undefined;if(!disposed)setHistoryLoading(false);}}
-    })();};
-    const checkStatus=async()=>{
-      if(disposed||paused||!entryReady||inflight||statusController)return;
+        return true;
+      }catch(e:any){if(!disposed&&!request.signal.aborted&&!signal?.aborted)setHistoryError(e.message);throw e;}
+      finally{if(historyController===request)historyController=undefined;historyQueued=false;if(!disposed)setHistoryLoading(false);readIdle();}
+    };
+    const checkStatus=async(verify=false)=>{
+      if(verify&&!disposed&&!paused&&!startupStopped){foregroundCheck=true;setChecking(true);}
+      if(disposed||paused||startupStopped||!entryReady||inflight||statusController)return;
       if(!baseline?.syncCursor){void load();return;}
       const request=new AbortController();statusController=request;
-      try{const status=await api('/sessions/'+id+'/status?epoch='+encodeURIComponent(baseline.epoch),undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));if(disposed||paused||request.signal.aborted)return;if(status.resync)await load();else setReadError('');}
+      try{const status=await api('/sessions/'+id+'/status?epoch='+encodeURIComponent(baseline.epoch),undefined,AbortSignal.any([request.signal,AbortSignal.timeout(30_000)]));if(disposed||paused||request.signal.aborted)return;const versioned=typeof status.epoch==='string'&&Number.isSafeInteger(status.revision);if(status.resync||versioned&&(status.epoch!==baseline?.epoch||status.revision!==baseline?.revision)||foregroundCheck&&!versioned)await load();else setReadError('');}
       catch(e:any){if(!disposed&&!paused&&!request.signal.aborted)setReadError(e.message);}
-      finally{if(statusController===request)statusController=undefined;}
+      finally{if(statusController===request)statusController=undefined;if(!inflight){foregroundCheck=false;if(!disposed)setChecking(false);}}
     };
-    refresh.current=()=>{paused=false;openFailures=0;cancelOpenRetry();setReadError('');void load(true);};
+    refresh.current=(restartHistory=false)=>{paused=false;if(restartHistory)startupStopped=false;cancelOpenRetry();setChecking(true);setReadError('');void load(false,restartHistory);};
+    resume.current=()=>{paused=false;startupStopped=false;openFailures=0;cancelOpenRetry();void load(true);};
     recheck.current=()=>{paused=false;if(!source&&!inflight)connect();void checkStatus();};
     pause.current=()=>{paused=true;cancelOpenRetry();disconnect();controller?.abort();statusController?.abort();historyController?.abort();if(timer)clearTimeout(timer);timer=undefined;};
-    const wake=()=>{if(document.visibilityState==='visible'&&!paused)recheck.current();};
+    const wake=()=>{if(document.visibilityState==='visible'&&!paused){if(!source&&!inflight)connect();void checkStatus(true);}};
     const watchdog=setInterval(()=>{if(!disposed&&!paused&&document.visibilityState==='visible'&&Date.now()-lastEvent>45_000){connect();void checkStatus();}},5000);
     const poll=setInterval(()=>{if(document.visibilityState==='visible'&&baseline?.syncCursor)void checkStatus();},30_000);
     window.addEventListener('online',wake);window.addEventListener('focus',wake);window.addEventListener('pageshow',wake);document.addEventListener('visibilitychange',wake);
-    let entering:Promise<void>|undefined;const enter=()=>entering??(entering=cancelReleaseOnReturn(id,()=>!disposed).then(()=>{if(!disposed){entryReady=true;void load(true);}}).catch(e=>{if(!disposed)setError(e.message);}).finally(()=>{entering=undefined;}));
-    const normalRefresh=refresh.current;refresh.current=()=>{if(!entryReady){void enter();return;}normalRefresh();};
-    void enter();
-    return()=>{disposed=true;mounted.current=false;cancelOpenRetry();controller?.abort();statusController?.abort();historyController?.abort();disconnect();if(timer)clearTimeout(timer);clearInterval(watchdog);clearInterval(poll);window.removeEventListener('online',wake);window.removeEventListener('focus',wake);window.removeEventListener('pageshow',wake);document.removeEventListener('visibilitychange',wake);};
+    if(initial?.historyPending)connect();void load();
+    return()=>{disposed=true;mounted.current=false;cancelOpenRetry();controller?.abort();statusController?.abort();historyController?.abort();for(const finish of [...readWaiters])finish();disconnect();if(timer)clearTimeout(timer);clearInterval(watchdog);clearInterval(poll);window.removeEventListener('online',wake);window.removeEventListener('focus',wake);window.removeEventListener('pageshow',wake);document.removeEventListener('visibilitychange',wake);};
   },[id,onChanged]);
   useLayoutEffect(()=>{const anchor=prepend.current;if(anchor&&scroll.current){scroll.current.scrollTop=anchor.top+scroll.current.scrollHeight-anchor.height;prepend.current=null;}},[snapshot]);
-  useEffect(()=>{if(!scroll.current||!snapshot)return;if(!restored.current){scroll.current.scrollTop=saved.current?.top??scroll.current.scrollHeight;restored.current=true;}else if(follow.current)scroll.current.scrollTop=scroll.current.scrollHeight;},[snapshot,outgoing]);
+  useEffect(()=>{if(!scroll.current||!snapshot)return;if(!restored.current){const locating=!!(notification?.turnId||notification?.itemId||notification?.requestId);if(locating)follow.current=false;scroll.current.scrollTop=saved.current?.top??(locating?0:scroll.current.scrollHeight);restored.current=true;}else if(follow.current)scroll.current.scrollTop=scroll.current.scrollHeight;},[snapshot,outgoing,notification]);
   useEffect(()=>{const timeline=scroll.current,content=timeline?.firstElementChild;if(!timeline||!content)return;const observer=new ResizeObserver(()=>{if(restored.current&&follow.current)timeline.scrollTop=timeline.scrollHeight;});observer.observe(content);observer.observe(timeline);return()=>observer.disconnect();},[]);
-  const action=async(path:string,payload:Json)=>{if(submitting.current)return;submitting.current=true;setBusy(true);setAborting(path==='/abort');setError('');if(path==='/release')pause.current();
-    try{const result=await api('/sessions/'+id+path,payload);
-      if(mounted.current){if(path==='/release'&&result.handoffReady){onReleased(result);return result;}if(path==='/release')setError(result.warning??'订阅已取消，仍在等待释放占用。');recheck.current();}return result;
+  useEffect(()=>{
+    if(!snapshot||!notification)return;
+    if(!notification.turnId&&!notification.itemId&&!notification.requestId){onNotificationHandled(notification);return;}
+    let disposed=false,highlight:HTMLElement|undefined,timer:ReturnType<typeof setTimeout>|undefined;const controller=new AbortController();
+    notificationHold.current=true;follow.current=false;setNotificationNotice('正在定位通知…');
+    const resolve=():{turnId?:string;itemId?:string;requestId?:string;failed?:boolean}|null=>{
+      const current=snapshotRef.current;if(!current)return null;
+      if(notification.requestId&&current.pending?.some((p:Json)=>p.requestId===notification.requestId))return {requestId:notification.requestId};
+      const turns=(current.thread?.turns??[]).filter((turn:Json)=>!notification.turnId||turn.id===notification.turnId);
+      for(const turn of turns){
+        if(notification.kind==='failed')return {turnId:turn.id,failed:true};
+        if(notification.itemId){if(turn.items?.some((item:Json)=>item.id===notification.itemId))return {turnId:turn.id,itemId:notification.itemId};continue;}
+        if(notification.requestId)continue;
+        const messages=(turn.items??[]).filter((item:Json)=>item.type==='agentMessage'&&item.delivery!=='async');
+        const item=messages.filter((item:Json)=>item.phase==='final_answer').at(-1)??messages.at(-1);
+        return {turnId:turn.id,...(item?{itemId:item.id}:{})};
+      }return null;
+    };
+    void (async()=>{
+      try{
+        const waitSignal=AbortSignal.any([controller.signal,AbortSignal.timeout(30_000)]);
+        let position=resolve();for(let page=0;!position&&page<5&&!disposed;page++){await waitForRead.current(waitSignal);if(disposed)return;position=resolve();if(position)break;if(!await earlier.current(controller.signal))break;if(disposed)return;position=resolve();}
+        if(disposed)return;if(!position){setNotificationNotice('已打开会话，未找到通知对应位置。可加载更早消息继续查看。');return;}
+        setReveal({turnId:position.turnId,itemId:position.itemId,token:notification.token});
+        for(let attempt=0;attempt<10&&!disposed;attempt++){
+          await new Promise(resolve=>setTimeout(resolve,30));if(disposed)return;
+          const timeline=scroll.current;if(!timeline)return;
+          const attribute=position.requestId?'data-request-id':position.itemId?'data-item-id':'data-turn-id',value=position.requestId??position.itemId??position.turnId;
+          const elements=[...timeline.querySelectorAll<HTMLElement>('['+attribute+']')];
+          const target=elements.find(el=>el.getAttribute(attribute)===value&&(!position.failed||el.matches('.notice.error')));
+          if(!target||!target.getClientRects().length)continue;
+          highlight=target;target.classList.add('notification-target');target.scrollIntoView({block:'center'});target.focus({preventScroll:true});layoutScroll.current=timeline.scrollTop;follow.current=false;
+          setNotificationNotice('');timer=setTimeout(()=>{target.classList.remove('notification-target');notificationHold.current=false;},3000);return;
+        }
+        if(!disposed)setNotificationNotice('已打开会话，未找到通知对应位置。可加载更早消息继续查看。');
+      }catch(e:any){if(!disposed)setNotificationNotice('已打开会话，通知定位失败：'+e.message);}
+      finally{if(!disposed){if(!timer)notificationHold.current=false;onNotificationHandled(notification);}}
+    })();
+    return()=>{disposed=true;controller.abort();clearTimeout(timer);highlight?.classList.remove('notification-target');notificationHold.current=false;};
+  },[id,notification,!!snapshot,onNotificationHandled]);
+  const action=async(path:string,payload:Json)=>{if(submitting.current||checking||opening||readError||(reading&&path!=='/abort'))return;if(path==='/abort')markSessionWrite(id);submitting.current=true;setBusy(true);setAborting(path==='/abort');setError('');if(path==='/release')pause.current();
+    try{const result=await (path==='/release'||path==='/abort'?api('/sessions/'+id+path,payload,AbortSignal.timeout(30_000)):writeSession(id,()=>api('/sessions/'+id+path,payload,AbortSignal.timeout(30_000))));
+      if(mounted.current){if(path==='/release'&&result.handoffReady){onReleased(result);return result;}recheck.current();}return result;
     }catch(e:any){if(mounted.current){setError(e.message);recheck.current();}}
     finally{submitting.current=false;if(mounted.current){setBusy(false);setAborting(false);}}};
-  const phase=snapshot?.phase??'UNKNOWN',active=!!snapshot?.activeTurnId||['RUNNING','WAITING_APPROVAL','WAITING_INPUT'].includes(phase),canSteer=phase==='RUNNING'&&!!snapshot?.activeTurnId&&!snapshot?.pending?.length,canSend=!opening&&!openError&&!readError&&(!reading||canSteer)&&!uncertain&&!outgoing.some(m=>m.status==='sending')&&!snapshot?.release?.inProgress&&(['IDLE','RELEASED'].includes(phase)||canSteer),filesReady=attachments.every(a=>a.status==='ready'),items=(snapshot?.thread?.turns??[]).flatMap((turn:Json)=>turn.items??[]);
+  const phase=snapshot?.phase??'UNKNOWN',active=!!snapshot?.activeTurnId||['RUNNING','WAITING_APPROVAL','WAITING_INPUT'].includes(phase),canSteer=phase==='RUNNING'&&!!snapshot?.activeTurnId&&!snapshot?.pending?.length,canSend=!checking&&!opening&&!openError&&!readError&&(!reading||canSteer)&&!uncertain&&!outgoing.some(m=>m.status==='sending')&&!snapshot?.release?.inProgress&&(['IDLE','RELEASED'].includes(phase)||canSteer),filesReady=attachments.every(a=>a.status==='ready'),items=(snapshot?.thread?.turns??[]).flatMap((turn:Json)=>turn.items??[]);
   const sendMessage=async()=>{
     if(submitting.current||!canSend||!filesReady||(!draft.trim()&&!attachments.length))return;
     const message:Outgoing={id:crypto.randomUUID(),text:draft,settings:{...settings},attachments:[...attachments],...(canSteer?{expectedTurnId:snapshot!.activeTurnId}:{}),status:'sending'};
     submitting.current=true;setBusy(true);setError('');follow.current=true;intent.current=null;
     updateOutgoing(messages=>[...messages,message],false);setDraft('');setAttachments([]);if(!canSteer)setSettings({});saveDraft('',canSteer?settings:{},[],false);
     try{
-      await api('/sessions/'+id+'/messages',{text:message.text,clientRequestId:message.id,attachmentIds:message.attachments.map(a=>a.uploadId),...(message.expectedTurnId?{expectedTurnId:message.expectedTurnId}:message.settings)},AbortSignal.timeout(45_000));
+      await writeSession(id,()=>api('/sessions/'+id+'/messages',{text:message.text,clientRequestId:message.id,attachmentIds:message.attachments.map(a=>a.uploadId),...(message.expectedTurnId?{expectedTurnId:message.expectedTurnId}:message.settings)},AbortSignal.timeout(45_000)));
       updateOutgoing(messages=>messages.map(m=>m.id===message.id?{...m,status:'accepted'}:m));
     }catch(e:any){updateOutgoing(messages=>messages.map(m=>m.id===message.id?{...m,status:!e.status||e.status>=500?'unknown':'failed',error:e.message}:m));}
     finally{submitting.current=false;if(mounted.current){setBusy(false);if(message.attachments.length)refresh.current();else recheck.current();}}
@@ -137,41 +202,41 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
     document.title=String(title).replace(/\s+/g,' ').trim()+' - Codex Web';
     return()=>{document.title='Codex Web';};
   },[title]);
-  const projectPath=snapshot?.project?.path??snapshot?.thread?.cwd??'',projectName=snapshot?.project?.name||projectPath.replace(/[\\/]+$/,'').split(/[\\/]/).pop()||'未关联项目';
-  const taskStatus=snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?'历史浏览':phases[phase];
-  const status=readError?'同步失败':!connected?'重连中':opening?'核对中':openError?'待核实':taskStatus,statusDetail=`${connected?'已连接':'正在重连'} · ${taskStatus}${reading?' · 刷新中':''}${busy?aborting?' · 正在中止':' · 操作中':''}`;
+  const projectPath=snapshot?.thread?.cwd??'',projectName=snapshot?sessionGroups([{...snapshot.thread,metadata:snapshot.metadata}],projects,workRoot,desktopProjectlessRoot,catalog)[0]?.name??'项目归属待确认':'读取项目…';
+  const taskStatus=snapshot?.historyPending&&!['EXTERNAL','UNKNOWN'].includes(phase)?'任务已启动 · 同步中':phase==='RELEASED'&&snapshot?.release?.handoffReady!==true?'正在释放占用':snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?'历史浏览':phases[phase];
+  const releaseError=!readError&&!checking&&!opening&&snapshot?.release?.requested&&!snapshot.release.handoffReady?snapshot.release.error??'':'';
+  const status=checking||opening?'核对中':readError?'同步失败':openError?'待核实':taskStatus,statusDetail=`${connected?'已连接':'正在重连'} · ${taskStatus}${reading?' · 刷新中':''}${busy?aborting?' · 正在中止':' · 操作中':''}`;
   const emptyText=readError?'内容同步失败，请重新同步。':openError?'会话状态待核实，请重试。':!snapshot?'正在加载会话…':opening||reading?'正在同步会话内容…':!connected?'连接中断，正在重新连接…':phase==='WAITING_APPROVAL'?'任务需要你的批准，请查看下方请求。':phase==='WAITING_INPUT'?'任务需要你的回答，请查看下方问题。':active?'任务进行中，正在同步内容…':phase==='EXTERNAL'?'会话正在其他应用中使用，暂未同步到消息。':phase==='UNKNOWN'?'会话状态待核实，请重新同步。':'暂无可显示的消息。';
   const emptyLoading=!readError&&!openError&&(!snapshot||opening||reading||!connected||phase==='RUNNING');
-  const notices=[uncertain?'提交结果待核实，请先检查历史。':'',error,openError||(opening?'正在核对会话占用…':phase==='EXTERNAL'?'已在另一个应用中打开，请先关闭该会话。':''),readError,!connected?'正在恢复连接，消息不会自动重发。':'',snapshot?.release?.requested?snapshot.release.error??'等待释放占用':'',snapshot?.retry?`Codex 正在重试：${snapshot.retry.message}`:'',attachmentError,optionsError,snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?'会话已从运行时卸载，可刷新核对最新占用状态。':''].filter(Boolean);
+  const notices=[uncertain?'提交结果待核实，请先检查历史。':'',error,openError||(opening?'正在核对会话占用…':phase==='EXTERNAL'?'已在另一个应用中打开，请先关闭该会话。':''),readError,!connected&&!checking?'正在恢复连接，消息不会自动重发。':'',releaseError,snapshot?.retry?`Codex 正在重试：${snapshot.retry.message}`:'',attachmentError,optionsError].filter(Boolean);
   const attachmentStatus=[attachments.some(file=>file.status==='uploading')?'上传中…':'',attachments.some(file=>file.status==='failed')?'上传失败':''].filter(Boolean).join(' · ');
-  const stopButton=active?<button type="button" className="danger" disabled={busy} onClick={()=>void action('/abort',{})}>{aborting?'正在中止…':'中止'}</button>:null;
+  const stopButton=active?<button type="button" className="danger" disabled={busy||checking||opening||!!readError} onClick={()=>void action('/abort',{})}>{aborting?'正在中止…':'中止'}</button>:null;
   const sendButton=<button className="primary" disabled={busy||!canSend||!filesReady||(!draft.trim()&&!attachments.length)}>{busy&&!aborting?'提交中…':canSteer?'插话':'发送'}</button>;
   if(subagent)return <main className="settings"><PaneToolbar/><h1>{title}</h1><p>请从会话列表打开主会话，查看任务进展和结果。</p><a href="/">返回首页</a></main>;
   return <QuestionContext.Provider value={{canSend:canSend&&!busy,expectedTurnId:canSteer?snapshot.activeTurnId:undefined,states:snapshot?.inputAnswers??{},onSent:()=>refresh.current(),threadId:id,projectRoot:snapshot?.project?.path,onOpenFile:openDocument}}><div className={`session-layout ${snapshot?.project&&panes.rightVisible?'with-git':''}`}><div className="session-center"><PaneToolbar>
-    <span className="session-project muted" title={[projectName,projectPath].filter(Boolean).join('\n')}>{projectName}</span><h1 className="session-title" title={title}>{title}</h1>
-    <button type="button" ref={menuButton} className="session-actions-trigger" aria-label="操作" aria-expanded={menuOpen} aria-controls={menuId} aria-haspopup="true" aria-busy={reading||busy} popoverTarget={menuId} onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();if(menu.current){menu.current.style.top=`${rect.bottom+4}px`;menu.current.style.left=`${Math.max(8,Math.min(rect.right-128,window.innerWidth-136))}px`;}}}>{reading?'刷新中':busy?aborting?'中止中':'操作中':'操作'}<span aria-hidden="true"> ▾</span></button>
+    <span className="session-project muted" title={[projectName,projectPath].filter(Boolean).join('\n')}>项目：{projectName}</span><h1 className="session-title" title={title}>{title}</h1>{snapshot?.titlePending?<span className="muted small" role="status">命名中…</span>:null}
+    <button type="button" ref={menuButton} className="session-actions-trigger" aria-label="操作" aria-expanded={menuOpen} aria-controls={menuId} aria-haspopup="true" aria-busy={reading||busy} popoverTarget={menuId} onClick={event=>{const rect=event.currentTarget.getBoundingClientRect(),width=Math.min(192,window.innerWidth-16);if(menu.current){menu.current.style.top=`${rect.bottom+4}px`;menu.current.style.left=`${Math.max(8,Math.min(rect.right-width,window.innerWidth-width-8))}px`;}}}>{reading?'刷新中':busy?aborting?'中止中':'操作中':'操作'}<span aria-hidden="true"> ▾</span></button>
     <div id={menuId} ref={menu} popover="auto" className="session-actions-menu" onToggle={event=>setMenuOpen(event.newState==='open')}>
-      <button type="button" autoFocus aria-label="刷新当前会话" aria-busy={reading} onClick={()=>{closeMenu();refresh.current();}}>刷新</button>
-      <button type="button" disabled={busy||!snapshot} onClick={()=>{closeMenu();void action('/release',{});}}>释放</button>
+      <button type="button" autoFocus aria-label="刷新当前会话" aria-busy={reading} onClick={()=>{closeMenu();refresh.current(true);}}>刷新当前会话</button>
+      <button type="button" disabled={busy||checking||opening||reading||!snapshot} onClick={()=>{closeMenu();void action('/release',{});}}>释放会话占用</button>
     </div>
     <span role="status" className={`connection ${connected&&!readError?'online':''}`} title={statusDetail} aria-label={`${status} · ${statusDetail}`}>{status}</span>
   </PaneToolbar><main className="session-main" inert={panes.mobile&&panes.drawer!==null}>
-    <div className="timeline" ref={scroll} onScroll={()=>{const el=scroll.current!;if(layoutScroll.current!==null){const expected=layoutScroll.current;layoutScroll.current=null;if(Math.abs(el.scrollTop-expected)<1){saveDraft();return;}}follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<120;saveDraft();}}>
-      <div className="timeline-content">{snapshot?.history?.nextCursor?<div className="history-loader"><button type="button" disabled={historyLoading||reading} onClick={()=>earlier.current()}>{historyLoading?'正在加载更早消息…':'加载更早消息'}</button>{historyError?<p role="alert" className="notice error">{historyError}</p>:null}</div>:null}{snapshot?.warning?<div className="notice">{snapshot.warning}</div>:null}{snapshot?.error?<div role="alert" className="notice error">{snapshot.error.message??JSON.stringify(snapshot.error)}</div>:null}
-      {(snapshot?.thread?.turns??[]).filter((t:Json)=>t.error||t.status==='failed').map((t:Json)=><div className="notice error" role="alert" key={t.id}>{t.error?.message??(t.error?JSON.stringify(t.error):'本轮执行失败')}</div>)}
-      {!items.length&&!outgoing.length?<div className="empty muted session-empty" role="status">{emptyLoading?<progress aria-hidden="true"/>:null}<p>{emptyText}</p>{readError||openError||(!opening&&phase==='UNKNOWN')?<button type="button" className="quiet" onClick={()=>refresh.current()}>重新同步</button>:null}</div>:(snapshot?.thread?.turns??[]).map((turn:Json)=><TurnMessages key={turn.id} turn={turn} threadId={id} attachments={snapshot?.attachmentPreviews} onChanged={onChanged} projectRoot={snapshot?.project?.path} onOpenFile={openDocument} phase={turn.id===snapshot?.activeTurnId?phase:undefined}/>)}
-      {reconcileMessages(outgoing,items).map(message=><div key={message.id} className="outgoing-message" data-client-id={message.id}><Message threadId={id} item={{type:'userMessage',content:[{type:'text',text:message.text},...message.attachments.map(file=>({type:'text',text:'📎 '+file.name}))]}}/><div className="outgoing-status small" role="status">{{sending:'发送中…',accepted:'已发送，等待历史同步',failed:'发送失败',unknown:'提交结果待核实，请先刷新历史'}[message.status]}{message.error?<span>：{message.error}</span>:null}{message.status==='failed'?<button type="button" disabled={!!draft||!!attachments.length} title={draft||attachments.length?'先处理输入框中的草稿，避免覆盖':'恢复原文和附件到输入框'} onClick={()=>editOutgoing(message)}>重新编辑</button>:null}{message.status==='unknown'?<button type="button" onClick={()=>updateOutgoing(messages=>messages.map(m=>m.id===message.id?{...m,status:'failed'}:m))}>已核对历史，允许重新编辑</button>:null}</div></div>)}
-      {(snapshot?.pending??[]).map((pending:Json)=><Pending key={pending.requestId} pending={pending} items={items} busy={busy} respond={async answer=>{await action('/requests/'+encodeURIComponent(pending.requestId)+'/respond',{answer});}}/>)}
+    <div className="timeline" ref={scroll} onScroll={()=>{const el=scroll.current!;if(layoutScroll.current!==null){const expected=layoutScroll.current;layoutScroll.current=null;if(Math.abs(el.scrollTop-expected)<1){saveDraft();return;}}follow.current=!notificationHold.current&&el.scrollHeight-el.scrollTop-el.clientHeight<120;saveDraft();}}>
+      <div className="timeline-content"><p className="muted small session-directory">归属项目：{projectName}</p><p className="muted small session-directory">当前工作目录：{projectPath}</p>{notificationNotice?<p role="status" className="notice">{notificationNotice}</p>:null}{snapshot?.history?.nextCursor?<div className="history-loader"><button type="button" disabled={historyLoading} onClick={()=>void earlier.current().catch(()=>{})}>{historyLoading?'正在加载更早消息…':'加载更早消息'}</button>{historyError?<p role="alert" className="notice error">{historyError}</p>:null}</div>:null}{snapshot?.historyPending&&readError?<button type="button" className="quiet" onClick={()=>refresh.current(true)}>重新同步</button>:null}{snapshot?.warning?<div className="notice">{snapshot.warning}</div>:null}{snapshot?.error?<div role="alert" className="notice error" title={snapshot.error.message}>{modelOverloadNotice(snapshot.error)??snapshot.error.message??JSON.stringify(snapshot.error)}</div>:null}
+      {(snapshot?.thread?.turns??[]).filter((t:Json)=>t.error||t.status==='failed').map((t:Json)=><div className="notice error" role="alert" key={t.id} data-turn-id={t.id} tabIndex={-1} title={t.error?.message}>{modelOverloadNotice(t.error)??t.error?.message??(t.error?JSON.stringify(t.error):'本轮执行失败')}</div>)}
+      {!items.length&&!outgoing.length?<div className="empty muted session-empty" role="status">{emptyLoading?<progress aria-hidden="true"/>:null}<p>{emptyText}</p>{readError||openError||(!opening&&phase==='UNKNOWN')?<button type="button" className="quiet" onClick={()=>refresh.current(true)}>重新同步</button>:null}</div>:(snapshot?.thread?.turns??[]).map((turn:Json)=><TurnMessages key={turn.id} turn={turn} threadId={id} attachments={snapshot?.attachmentPreviews} onChanged={onChanged} projectRoot={snapshot?.project?.path} onOpenFile={openDocument} phase={turn.id===snapshot?.activeTurnId?phase:undefined} revealItemId={reveal?.turnId===turn.id?reveal?.itemId:undefined} revealToken={reveal?.turnId===turn.id?reveal?.token:undefined}/>)}
+      {reconcileMessages(outgoing,items).map(message=><div key={message.id} className="outgoing-message" data-client-id={message.id}><Message threadId={id} item={{type:'userMessage',content:[{type:'text',text:message.text},...message.attachments.map(file=>({type:'text',text:'📎 '+file.name}))]}}/><div className="outgoing-status small" role="status">{{sending:'发送中…',accepted:'已发送，正在同步',failed:'发送失败',unknown:'提交结果待核实，请先刷新历史'}[message.status]}{message.error?<span>：{message.error}</span>:null}{message.status==='failed'?<button type="button" disabled={!!draft||!!attachments.length} title={draft||attachments.length?'先处理输入框中的草稿，避免覆盖':'恢复原文和附件到输入框'} onClick={()=>editOutgoing(message)}>重新编辑</button>:null}{message.status==='unknown'?<button type="button" onClick={()=>updateOutgoing(messages=>messages.map(m=>m.id===message.id?{...m,status:'failed'}:m))}>已核对历史，允许重新编辑</button>:null}</div></div>)}
+      {(snapshot?.pending??[]).map((pending:Json)=><div key={pending.requestId} data-request-id={pending.requestId} tabIndex={-1}><Pending pending={pending} items={items} busy={busy||checking||opening||reading||!!readError} respond={async answer=>{await action('/requests/'+encodeURIComponent(pending.requestId)+'/respond',{answer});}}/></div>)}
       </div>
     </div>
     <form className={'composer'+(collapsed?' is-collapsed':'')} onSubmit={e=>{e.preventDefault();void sendMessage();}}>
-      {collapsed&&notices.length?<div className={'composer-notice notice'+(uncertain||error||readError||openError||attachmentError||optionsError?' error':'')} role="status"><span>{notices[0]}{notices.length>1?`（另有 ${notices.length-1} 条提示）`:''}</span><button type="button" onClick={()=>setCollapsed(false)}>查看详情</button></div>:null}
-      <div id={composerId} hidden={collapsed}>
-      {error||readError?<div role="alert" className="notice error">{[error,readError].filter(Boolean).join('\n')}{readError?<button type="button" onClick={()=>refresh.current()}>重新同步</button>:null}</div>:null}
-      {!connected?<div role="status" className="notice">正在恢复连接，消息不会自动重发。</div>:null}{snapshot?.retry?<div role="status" className="notice">Codex 正在重试：{snapshot.retry.message}</div>:null}
-      {snapshot?.thread?.status?.type==='notLoaded'&&['IDLE','RELEASED'].includes(phase)?<div role="status" className="notice">会话已从运行时卸载，可刷新核对最新占用状态。</div>:null}
-      {openError?<div role="alert" className="notice error">{openError}<button type="button" onClick={()=>refresh.current()}>重试</button></div>:opening?<p role="status" className="muted">正在核对会话占用…</p>:phase==='EXTERNAL'?<div role="status" className="notice session-locked"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2"/><path d="M5 7V4a3 3 0 0 1 6 0v3"/></svg><span><strong>已在另一个应用中打开</strong><br/>请先在那里关闭会话，才能在这里继续。</span><button type="button" onClick={()=>refresh.current()}>重试</button></div>:null}
-      {snapshot?.release?.requested?<div role="status" className="notice">{snapshot.release.error??'等待释放占用'}</div>:null}
+      {collapsed&&notices.length?<div className={'composer-notice notice'+(uncertain||error||readError||openError||attachmentError||optionsError||releaseError?' error':'')} role={releaseError?'alert':'status'}><span>{notices[0]}{notices.length>1?`（另有 ${notices.length-1} 条提示）`:''}</span><button type="button" onClick={()=>setCollapsed(false)}>查看详情</button></div>:null}
+      <div id={composerId} className="composer-notices" hidden={collapsed}>
+      {error||readError?<div role="alert" className="notice error">{[error,readError].filter(Boolean).join('\n')}{readError&&!snapshot?.historyPending?<button type="button" onClick={()=>refresh.current(true)}>重新同步</button>:null}</div>:null}
+      {!connected&&!checking?<div role="status" className="notice">正在恢复连接，消息不会自动重发。</div>:null}{snapshot?.retry?<div role="status" className="notice">Codex 正在重试：{snapshot.retry.message}</div>:null}
+      {openError?<div role="alert" className="notice error">{openError}<button type="button" disabled={checking||opening||reading} onClick={()=>resume.current()}>接续会话</button></div>:opening?<div role="status" className="notice">正在核对会话占用…</div>:phase==='EXTERNAL'?<div role="status" className="notice session-locked"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2"/><path d="M5 7V4a3 3 0 0 1 6 0v3"/></svg><span><strong>已在另一个应用中打开</strong><br/>请先在那里关闭会话，才能在这里继续。</span><button type="button" disabled={checking||opening||reading} onClick={()=>resume.current()}>接续会话</button></div>:phase==='UNKNOWN'?<div className="notice" role="status">当前只读查看，执行权限待确认。<button type="button" disabled={checking||opening||reading} onClick={()=>resume.current()}>接续会话</button></div>:null}
+      {releaseError?<div role="alert" className="notice error">{releaseError}</div>:null}
       </div>
       <div className="composer-input-row">
       <Attachments items={attachments} onChange={next=>{setAttachments(next);saveDraft(draft,settings,next);}} onError={setAttachmentError} disabled={busy} compact={collapsed}><button type="button" className="quiet composer-collapse" aria-label="收起输入区" title="收起输入区" aria-expanded={!collapsed} aria-controls={composerId+' '+composerId+'-options'} onClick={()=>setCollapsed(true)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></Attachments>
@@ -179,11 +244,11 @@ export function Session({id,onChanged,onReleased}:{id:string;onChanged:()=>Promi
       {collapsed?<div className="composer-actions">{stopButton}{sendButton}<button ref={expandButton} type="button" className="quiet composer-expand" aria-label="展开输入" title="展开附件和输入设置" aria-expanded={!collapsed} aria-controls={composerId+' '+composerId+'-options'} onClick={()=>setCollapsed(false)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg></button></div>:null}
       </div>
       <div id={composerId+'-options'} hidden={collapsed}>
-      <TurnOptions value={settings} onChange={next=>{setSettings(next);saveDraft(draft,next);}} onError={setOptionsError} projectId={snapshot?.project?.id} permissions={['RELEASED','EXTERNAL','UNKNOWN'].includes(phase)||snapshot?.thread?.status?.type==='notLoaded'?undefined:snapshot?.permissions} effectiveModel={snapshot?.model??snapshot?.thread?.model??null} effectiveEffort={snapshot?.reasoningEffort!==undefined?snapshot.reasoningEffort:snapshot?.thread?.reasoningEffort??null} disabled={busy||active} hidden={collapsed}/>
+      <TurnOptions refreshKey={contextTick} value={settings} onChange={next=>{setSettings(next);saveDraft(draft,next);}} onError={setOptionsError} projectId={snapshot?.project?.id} permissions={['RELEASED','EXTERNAL','UNKNOWN'].includes(phase)||snapshot?.thread?.status?.type==='notLoaded'?undefined:snapshot?.permissions} effectiveModel={snapshot?.model??snapshot?.thread?.model??null} effectiveEffort={snapshot?.reasoningEffort!==undefined?snapshot.reasoningEffort:snapshot?.thread?.reasoningEffort??null} disabled={busy||active} hidden={collapsed}/>
       {uncertain&&!outgoing.some(m=>m.status==='unknown')?<div className="notice">提交结果待核实，请先检查历史。<button type="button" onClick={()=>{setUncertain(false);saveDraft(draft,settings,attachments,false);}}>已核对历史，允许再次提交</button></div>:null}
       <div className="composer-bottom"><span className="muted small">{openError?'会话状态待核实，请重试':opening?'正在核对会话状态':canSteer&&canSend?(panes.mobile?'回车换行 · 点击插话 · 沿用本轮模型和权限':shortcutLabel+' 插话 · 沿用本轮模型和权限'):canSend?(panes.mobile?'回车换行 · 点击发送':shortcutLabel+' 发送 · Shift+Enter 换行'):active?'任务进行中':'正在核对会话状态'}</span><div className="composer-actions">{!collapsed?<>{stopButton}{sendButton}</>:null}</div></div>
       </div>
       {collapsed&&(attachmentStatus||snapshot?.pending?.length)?<div className="composer-compact"><span className="muted small" role="status">{attachmentStatus}</span>{snapshot?.pending?.length?<button type="button" className="quiet" onClick={()=>{const card=scroll.current?.querySelector<HTMLElement>('.approval');card?.scrollIntoView({block:'nearest'});card?.querySelector<HTMLElement>('button,input,select')?.focus({preventScroll:true});}}>查看待处理</button>:null}</div>:null}
     </form>
-  </main></div>{snapshot?.project?<><PaneSeparator side="right"/><GitPanel key={snapshot.project.id} id={id} projectId={snapshot.project.id} projectRoot={snapshot.project.path} tick={gitTick} visible={panes.rightVisible} openFile={openFile}/></>:null}</div></QuestionContext.Provider>;
+  </main></div>{snapshot?.project?<><PaneSeparator side="right"/><GitPanel key={snapshot.project.id+':'+cwdKey(snapshot.thread?.cwd)} id={id} projectId={snapshot.project.id} projectRoot={snapshot.project.path} tick={gitTick} visible={panes.rightVisible} openFile={openFile}/></>:null}</div></QuestionContext.Provider>;
 }

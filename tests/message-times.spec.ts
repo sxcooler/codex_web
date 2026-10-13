@@ -41,6 +41,9 @@ for(const width of [1280,390])test(`historical item times, older pages and live 
   await expect(page).toHaveTitle(/Codex/);
   const message=(text:string)=>page.locator('article.message').filter({hasText:text});
   await expect(message('历史用户消息').locator('time')).toHaveAttribute('datetime',new Date(base+1000).toISOString());
+  await expect(message('历史完成消息')).toBeVisible();
+  await expect(message('中间进度消息')).toHaveCount(0);
+  await page.locator('[data-turn-id="new"] > .execution-process > summary').click();
   await expect(message('中间进度消息').locator('time')).toHaveAttribute('datetime',new Date(base+3000).toISOString());
   await expect(message('历史完成消息').locator('time')).toHaveAttribute('datetime',new Date(base+9000).toISOString());
   await expect(message('没有记录时间的中间消息').locator('time')).toHaveCount(0);
@@ -61,6 +64,8 @@ for(const width of [1280,390])test(`historical item times, older pages and live 
   expect(errors).toEqual([]);
   await page.screenshot({path:testInfo.outputPath('message-times.png')});
   await page.reload();
+  await expect(message('历史完成消息')).toBeVisible();
+  await page.locator('[data-turn-id="new"] > .execution-process > summary').click();
   await expect(message('中间进度消息').locator('time')).toHaveAttribute('datetime',new Date(base+3000).toISOString());
   expect(errors).toEqual([]);
 });

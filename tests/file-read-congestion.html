@@ -1,0 +1,19 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>文件读取超时回归</title>
+<style>#root{max-width:650px;margin:auto}#right-sidebar{height:calc(100dvh - 50px)}</style><div id="root"></div>
+<script type="module">
+import '/src/web/style.css';import React from 'react';import{createRoot}from'react-dom/client';import{GitPanel}from'/src/web/GitPanel.tsx';
+const timeout=AbortSignal.timeout.bind(AbortSignal);window.budgets=[];AbortSignal.timeout=ms=>{window.budgets.push(ms);return timeout(ms===30000?80:ms)};
+window.mode='hang';window.requests=[];
+window.fetch=async(input,options)=>{
+ const url=String(input);window.requests.push(url);
+ if(url.endsWith('/git/fetch'))return Response.json({skipped:'no-remotes'});
+ if(url.includes('/files/entry?'))return Response.json({path:new URL(url,location.origin).searchParams.get('path'),type:'file'});
+ if(window.mode==='hang')return new Promise((resolve,reject)=>{const signal=options.signal;if(signal.aborted)reject(signal.reason);else signal.addEventListener('abort',()=>reject(signal.reason),{once:true})});
+ if(url.includes('/files?'))return Response.json({files:[{path:'notes.txt',type:'file'}]});
+ if(url.includes('/git/files?'))return Response.json({files:[{path:'notes.txt',status:'M'}]});
+ if(url.includes('/git/diff?'))return Response.json({hunks:[{oldStart:1,oldLines:1,newStart:1,newLines:1,lines:[{kind:'add',newLine:1,text:'diff retry succeeded'}]}]});
+ return Response.json({text:'retry succeeded'});
+};
+localStorage.clear();const root=createRoot(document.querySelector('#root'));
+window.renderPanel=visible=>root.render(React.createElement(GitPanel,{id:'fixture',projectId:'fixture',tick:0,visible,openFile:{path:'notes.txt'}}));window.renderPanel(true);
+</script></html>

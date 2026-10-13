@@ -11,6 +11,7 @@ globalThis.fetch=async input=>{reads++;const url=new URL(String(input),location.
  if(url.pathname.endsWith('/git/commit'))return Response.json({commit:{id:url.searchParams.get('commit'),subject:'Selected commit',message:'Full commit message',parents:[parent,'e'.repeat(40)],author:'QA',date:'2026-09-20T00:00:00Z'},parent:url.searchParams.get('parent')||parent,files});
  if(url.pathname.endsWith('/diff'))return Response.json({hunks:[{oldStart:1,oldLines:200,newStart:1,newLines:200,lines:body.split('\n').map((text,i)=>({kind:'add',text,newLine:i+1}))}]});
  if(url.pathname.endsWith('/files/content'))return Response.json({text:body});
+ if(url.pathname.endsWith('/files/entry'))return Response.json({path:url.searchParams.get('path'),type:'file'});
  return Response.json({files});
 };
 let project='collapse',session='one',visible=true;

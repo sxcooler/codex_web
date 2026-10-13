@@ -18,6 +18,7 @@ window.fetch=async(input)=>{
  if(url.pathname==='/api/projects')return Response.json({projects:[snapshot.project]});
  if(url.pathname==='/api/sessions')return Response.json({data:[snapshot.thread]});
  if(url.pathname==='/api/sessions/'+id)return Response.json(snapshot);
+ if(url.pathname.endsWith('/files/entry'))return Response.json({path:url.searchParams.get('path'),type:'file'});
  if(url.pathname.endsWith('/files'))return Response.json({files:[{path:'docs/方案.md',type:'file'}]});
  if(url.pathname.endsWith('/files/content'))return url.searchParams.get('path')==='docs/missing.md'?Response.json({error:'missing'},{status:404}):Response.json({text:'# 方案预览\n\n文档链接已正常打开。\n\n[同目录文档](next.md)\n\n[项目外文档](file:///C:/private/secret.md)'+diagram});
  if(url.pathname.endsWith('/git/files'))return Response.json({files:[]});

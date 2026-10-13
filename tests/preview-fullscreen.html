@@ -1,0 +1,65 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/icon.svg"><title>文件预览回归</title><div id="root" style="height:90vh;max-width:650px;margin:auto"></div><style>#right-sidebar{height:100%;max-height:none}</style><script type="module">
+import '/src/web/style.css';import React from 'react';import{createRoot}from'react-dom/client';import{GitPanel}from'/src/web/GitPanel.tsx';import{PaneLayout,PaneToolbar,usePanes}from'/src/web/PaneLayout.tsx';
+import{MarkdownView}from'/src/web/MarkdownView.tsx';
+window.renderStandaloneDiagram=()=>{const host=document.body.appendChild(document.createElement('div'));host.id='standalone-diagram';createRoot(host).render(React.createElement(MarkdownView,{text:'```mermaid\nflowchart LR\n A[输入仍可继续] --> B[不抢焦点]\n```'}));};
+const root=createRoot(document.querySelector('#root'));window.requests=0;window.workers=0;window.tasks=0;const WorkerBase=window.Worker;window.Worker=class extends WorkerBase{constructor(...args){super(...args);window.workers++;}postMessage(...args){window.tasks++;return super.postMessage(...args);}};
+const text=Array.from({length:120},(_,i)=>`## Section ${i}\n\nParagraph ${i} with a long sentence repeated to make Markdown wrap. ${'More reading text. '.repeat(12)}\n\n[child](child.md)`).join('\n\n'),diff={hunks:[{oldStart:1,newStart:1,oldLines:0,newLines:600,lines:Array.from({length:600},(_,i)=>({kind:'add',newLine:i+1,text:'const example = '+i+';'}))}]};
+const readingText=`# 阅读列与宽表格
+
+中文正文：${'正文控制行长，阅读下一行时更容易找到起点。'.repeat(8)}
+
+English paragraph: ${'Reading a long document should not require tracking text across the whole screen. '.repeat(8)}
+
+混合正文：${'保持 Markdown / Streamdown 节点稳定，展开和收起无需重复读取文档。'.repeat(6)} 路径：\`C:/workspace/${'long-directory/'.repeat(16)}notes.md\`
+
+## 小表格
+
+| 项目 | 状态 |
+| --- | --- |
+| 文本 | 已读取 |
+| 表格 | 可滚动 |
+
+## 宽表格
+
+| ${Array.from({length:12},(_,i)=>'指标 '+i).join(' | ')} |
+| ${Array(12).fill('---').join(' | ')} |
+${Array.from({length:8},(_,row)=>'| '+Array.from({length:12},(_,col)=>`行 ${row} 列 ${col} `+'保持列关系，检查超宽表格在独立容器中滚动。'.repeat(5)).join(' | ')+' |').join('\n')}
+
+## 嵌套内容
+
+- 列表正文保持缩进和同一阅读起点。
+  - ${'子列表内容不重复居中或缩窄。'.repeat(6)}
+- 列表内的表格：
+
+  | 名称 | 说明 |
+  | --- | --- |
+  | 嵌套条目 | ${'保持父级缩进，表格在自己的区域滚动。'.repeat(8)} |
+
+> 引用正文沿用阅读列与左侧标记。
+>
+> | 名称 | 说明 |
+> | --- | --- |
+> | 引用条目 | ${'引用中的表格保持引用语义。'.repeat(10)} |
+
+## 代码与图片
+
+\`\`\`typescript
+const result = ${JSON.stringify('长代码行使用已有的代码块横向滚动。'.repeat(12))};
+\`\`\`
+
+![预览测试](photo.png)
+
+## 图表
+
+\`\`\`mermaid
+flowchart LR
+  A[读取文件] --> B[正文阅读列] --> C[宽表格]
+\`\`\`
+
+---
+
+${Array.from({length:30},(_,i)=>`## 阅读段 ${i}\n\n正文段 ${i}：${'后续正文用于检查阅读位置保持与连续切换。'.repeat(12)}`).join('\n\n')}`;
+window.fetch=async input=>{window.requests++;const u=new URL(String(input),location.origin),path=u.searchParams.get('path');if(u.pathname.endsWith('/files/entry'))return Response.json({path,type:'file'});if(u.pathname.endsWith('/files/content')){if(path==='slow.md')await new Promise(r=>window.releaseRead=r);if(path==='missing.md')return Response.json({error:'gone'},{status:404});return Response.json({text:path==='reading.md'?readingText:path?.endsWith('.ts')?Array.from({length:400},(_,i)=>'const value'+i+' = '+i+'; // '+ 'long source line '.repeat(30)).join('\n'):text});}if(u.pathname.endsWith('/git/repositories'))return Response.json({repositories:[{path:'',available:true,kind:'main'}],complete:true});if(u.pathname.endsWith('/git/log'))return Response.json({commits:[{id:'abc',parents:[],subject:'commit',author:'QA',date:'2026-10-11'}],branches:[]});if(u.pathname.endsWith('/git/commit'))return Response.json({commit:{id:'abc',subject:'commit',parents:[]},files:[{path:'example.ts'}]});if(u.pathname.endsWith('/diff'))return Response.json(diff);return Response.json({files:[{path:'README.md',type:'file'},{path:'example.ts',type:'file'},{path:'photo.png',type:'file'},{path:'slow.md',type:'file'},{path:'missing.md',type:'file'},{path:'reading.md',type:'file'}]});};
+localStorage.clear();localStorage.setItem('codex.project-panel.fullscreen',JSON.stringify({tab:'files',files:{path:'README.md'}}));window.renderPanel=(visible=true,id='full',projectId='fullscreen')=>root.render(React.createElement(GitPanel,{id,projectId,visible,tick:0}));renderPanel();
+function Drawer(){const panes=usePanes();React.useEffect(()=>panes.setRightAvailable(true),[]);return React.createElement(React.Fragment,null,React.createElement(PaneToolbar),React.createElement(GitPanel,{id:'drawer',projectId:'fullscreen',visible:panes.rightVisible,tick:0}));}window.renderDrawer=()=>root.render(React.createElement(PaneLayout,{className:'shell'},React.createElement(Drawer)));
+</script></html>

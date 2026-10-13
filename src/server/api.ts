@@ -4,12 +4,16 @@ import type { Runtime } from '../codex/runtime.ts';
 import type { Projects } from '../projects.ts';
 import { pathKey } from '../projects.ts';
 import { MetadataStore } from './metadata.ts';
+import {ProjectCatalog} from './project-catalog.ts';
+import {homedir} from 'node:os';
 import { AccountUsage } from './account-usage.ts';
+import {SharedClientState,type SessionQuery} from './shared-client-state.ts';
 import {AsyncInputs} from './async-input.ts';
 import { parseTestReport } from './test-reports.ts';
 import type { UploadService } from './uploads.ts';
 import {renderNativeImage} from './native-images.ts';
 import {settingsError} from '../codex/settings.ts';
+import type {DiagnosticEvent} from './diagnostics.ts';
 
 const text = { type: 'string', minLength: 1, maxLength: 12_000 };
 const short = { type: 'string', minLength: 1, maxLength: 120 };
@@ -27,12 +31,14 @@ function readSignal(reply: FastifyReply): AbortSignal {
 export function registerApi(app: FastifyInstance, options: {
   dataDir: string; runtime: Runtime; projects: Projects; authenticated: (request: FastifyRequest) => () => boolean;
   uploads?: UploadService; uploadOwner?: (request:FastifyRequest)=>string;
+  diagnostic?: (event:DiagnosticEvent)=>void;
 }) {
   const { runtime, projects } = options;
   const empty = { type: 'object', additionalProperties: false, properties: {} };
   app.addHook('onRoute', route => {
-    if (!route.url.startsWith('/api/projects') && !route.url.startsWith('/api/sessions')) return;
+    if (!route.url.startsWith('/api/projects') && !route.url.startsWith('/api/project-catalog') && !route.url.startsWith('/api/sessions')) return;
     const fields: Record<string, unknown> = {};
+    if(route.url.includes(':workspaceId'))fields.workspaceId={type:'string',pattern:'^[a-f0-9]{24}$'};
     if (route.url.includes(':threadId')) fields.threadId = { ...short, pattern: '^[a-zA-Z0-9-]+$' };
     if (route.url.includes(':requestId')) fields.requestId = { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' };
     for (const name of ['turnId', 'itemId']) if (route.url.includes(':' + name)) fields[name] = { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' };
@@ -46,20 +52,33 @@ export function registerApi(app: FastifyInstance, options: {
   const accountUsage=new AccountUsage(runtime,metadata.db);
   const inputs=new AsyncInputs(metadata.db,runtime);
   app.post('/api/sessions/:threadId/turns/:turnId/items/:itemId/answer',{schema:body({answers:{type:'array',minItems:1,maxItems:20,items:text},clientRequestId:requestId,expectedTurnId:short},['answers','clientRequestId'])},async request=>{const p=params(request);return inputs.answer(p.threadId,p.turnId,p.itemId,request.body as any);});
-  app.get('/api/account/usage',{schema:{querystring:{type:'object',additionalProperties:false,properties:{refresh:{type:'string',enum:['true']}}}}},async request=>accountUsage.read((request.query as any).refresh==='true'));
+  app.get('/api/account/usage',{schema:{querystring:{type:'object',additionalProperties:false,properties:{refresh:{type:'string',enum:['true']}}}}},async request=>shared.readUsage((request.query as any).refresh==='true'));
   app.post('/api/account/usage/reset',{schema:{...body({accountId:{type:'string',pattern:'^[a-f0-9]{64}$'},creditId:{type:'string',minLength:1,maxLength:512},idempotencyKey:{type:'string',format:'uuid'}}),querystring:empty}},async request=>accountUsage.reset(request.body as any));
   const readMeta = (threadId: string) => { try { return metadata.get(threadId); } catch { return null; } };
   const saveMeta = (threadId: string, projectPath: string | null, title: string | null) => {
-    try { metadata.save(threadId, projectPath, title); return undefined; }
+    try {
+      const previous=readMeta(threadId),saved=metadata.save(threadId, projectPath, title);
+      const sameProject=previous&&(previous.project_path===null?null:pathKey(previous.project_path))===(saved.project_path===null?null:pathKey(saved.project_path));
+      if(!sameProject||previous!.web_title!==saved.web_title)shared.invalidateSessions();return undefined;
+    }
     catch { return 'Web metadata could not be saved; native thread history remains available.'; }
   };
   const connections = new Set<{ valid: () => boolean; close: () => void }>();
+  const shared=new SharedClientState(runtime,accountUsage,loadSessions,options.diagnostic);
+  const catalog=new ProjectCatalog(runtime,projects,metadata,()=>shared.invalidateProjectCatalog());
+  let catalogTimer:ReturnType<typeof setTimeout>|undefined;
+  const catalogChanged=()=>{if(catalogTimer)return;catalogTimer=setTimeout(()=>{catalogTimer=undefined;void catalog.refreshNative();},100);catalogTimer.unref();};
+  runtime.on('projectCatalogChanged',catalogChanged);
+  app.addHook('onReady',async()=>{catalog.start();});
+  app.get('/api/project-catalog',async()=>catalog.snapshot());
+  app.post('/api/project-catalog/:workspaceId/retry',{schema:body({},[])},async request=>catalog.retry((request.params as any).workspaceId));
+  const saveFork=(thread:any)=>{const change=metadata.registerFork(thread);if(change==='hard')shared.invalidateSessions('metadata');else if(change==='soft')shared.refreshSessions('fork');};
   const closeInvalid = () => { for (const connection of connections) if (!connection.valid()) connection.close(); };
   const expiry = setInterval(closeInvalid, 10_000); expiry.unref();
-  app.addHook('preClose', async () => { for (const connection of [...connections]) connection.close(); });
+  app.addHook('preClose', async () => {clearTimeout(catalogTimer);runtime.off('projectCatalogChanged',catalogChanged);await catalog.close();for (const connection of [...connections]) connection.close();shared.close();accountUsage.close(); });
   app.addHook('onClose', async () => {
     clearInterval(expiry); for (const connection of [...connections]) connection.close();
-    accountUsage.close(); await runtime.close(); metadata.close();
+    shared.close();accountUsage.close();try{await runtime.close();}finally{metadata.close();}
   });
 
   async function projectForCwd(cwd: unknown) {
@@ -67,14 +86,15 @@ export function registerApi(app: FastifyInstance, options: {
       ? (await projects.list()).find(p => pathKey(resolve(p.path)) === pathKey(resolve(cwd))) ?? null : null;
   }
 
-  async function associated(threadId: string, signal?: AbortSignal) {
-    const snapshot = await runtime.snapshot(threadId, { window: true, signal });
+  async function associated(threadId: string, signal?: AbortSignal,restartHistory=false) {
+    const snapshot = await runtime.snapshot(threadId, { window: true, signal,restartHistory });
     inputs.reconcile(threadId,snapshot);
     const project = await projectForCwd(snapshot.thread.cwd);
-    const warning = saveMeta(threadId, project?.path ?? null, null);
-    try{metadata.registerFork(snapshot.thread);}catch{}
-    return { ...snapshot, project, metadata: readMeta(threadId), inputAnswers:inputs.states(threadId), warning };
+    const warning = saveMeta(threadId, readMeta(threadId)?.project_path ?? project?.path ?? null, null);
+    try{saveFork(snapshot.thread);}catch{}
+    return decorateSnapshot(snapshot,project,warning);
   }
+  function decorateSnapshot(snapshot:any,project:any,warning?:string){return {...snapshot,project,metadata:readMeta(snapshot.thread.id),inputAnswers:inputs.states(snapshot.thread.id),warning};}
 
   const turnFields={model:short,effort:short,permissionMode:{type:'string',enum:['ask','auto-review','full-access','custom']},attachmentIds:{type:'array',maxItems:5,uniqueItems:true,items:{type:'string',pattern:'^[a-f0-9-]{36}$'}}};
   async function attachments(input:any,request:FastifyRequest,threadId:string|null){
@@ -89,23 +109,25 @@ export function registerApi(app: FastifyInstance, options: {
   }
   async function createSession(input: any,request:FastifyRequest) {
     const project = input.projectId ? await projects.resolve(input.projectId) : null;
+    const nativeProjectId=await catalog.resolve(project?.id,input.nativeProjectId);
     const nativeInput=await attachments(input,request,null);
     let result:any;
-    try{result=await runtime.create({ cwd: project?.path ?? projects.root, clientRequestId: input.clientRequestId, prompt: input.prompt, model: input.model,effort:input.effort,permissionMode:input.permissionMode,...(nativeInput.length?{nativeInput}:{}) });}
-    catch(error:any){if(error.partial?.threadId&&nativeInput.length)await options.uploads!.bindClaim(options.uploadOwner!(request),input.clientRequestId,error.partial.threadId);else await rollbackRejected(input,request,error);throw error;}
+    try{result=await runtime.create({ cwd: project?.path ?? projects.root, nativeProjectId,clientRequestId: input.clientRequestId, prompt: input.prompt, model: input.model,effort:input.effort,permissionMode:input.permissionMode,...(nativeInput.length?{nativeInput}:{}) });}
+    catch(error:any){if(error.partial?.threadId)shared.invalidateSessions();if(error.partial?.threadId&&nativeInput.length)await options.uploads!.bindClaim(options.uploadOwner!(request),input.clientRequestId,error.partial.threadId);else await rollbackRejected(input,request,error);throw error;}
     if(nativeInput.length)await options.uploads!.bindClaim(options.uploadOwner!(request),input.clientRequestId,result.threadId);
-    const warning = saveMeta(result.threadId, project?.path ?? null, input.prompt?.slice(0, 80) ?? null);
-    return { ...result, warning };
+    const warning = saveMeta(result.threadId, project?.path ?? null, null);
+    return { ...result, warning,...(result.initialSnapshot?{initialSnapshot:decorateSnapshot(result.initialSnapshot,project,warning)}:{}) };
   }
 
-  app.get('/api/projects', async () => ({ projects: await projects.list() }));
+  const desktopProjectlessRoot=process.platform==='win32'?join(homedir(),'Documents','Codex'):null;
+  app.get('/api/projects', async () => ({ projects: await projects.list(), workRoot:projects.root,desktopProjectlessRoot }));
   app.post('/api/model-defaults', { schema: body({ model: short, effort: short, projectId: short,expectedVersion:{type:'string',minLength:1,maxLength:512} }, ['model']) }, async request => {
     const input = request.body as {model:string;effort?:string;projectId?:string;expectedVersion?:string};
     if(!input.expectedVersion)throw settingsError(409,'SETTINGS_VERSION_REQUIRED','缺少读取时的配置版本，请刷新页面后再保存。');
     const cwd = input.projectId ? (await projects.resolve(input.projectId)).path : projects.root;
     return runtime.saveModelDefaults(cwd, input.model, input.effort,input.expectedVersion);
   });
-  app.post('/api/projects/refresh', async () => ({ projects: await projects.refresh() }));
+  app.post('/api/projects/refresh', async () => {const result=await projects.refresh();await catalog.sync();void catalog.maintain();return {projects:result,workRoot:projects.root,desktopProjectlessRoot};});
   app.get('/api/models',{schema:{querystring:{type:'object',additionalProperties:false,properties:{refresh:{type:'string',enum:['true']}}}}},async request=>({...await runtime.models((request.query as any).refresh==='true',true),source:runtime.modelInfo?.()}));
   app.post('/api/models/reload',{schema:body({},[])},async()=>({...await runtime.reloadModels(),source:runtime.modelInfo()}));
   app.get('/api/permission-modes',{schema:{querystring:{type:'object',additionalProperties:false,properties:{projectId:short}}}},async request=>runtime.permissionModes((request.query as any).projectId?(await projects.resolve((request.query as any).projectId)).path:projects.root));
@@ -117,62 +139,76 @@ export function registerApi(app: FastifyInstance, options: {
       const input = request.body as any;
       if (input.initialPrompt && !input.clientRequestId) return reply.code(400).send({ error: 'clientRequestId required with initialPrompt' });
       const project = await projects.create(input);
-      if (!input.clientRequestId) return { project };
       try {
+        if(!input.clientRequestId)return {project,nativeProjectId:await catalog.resolve(project.id)};
         return { project, session: await createSession({ ...input, projectId: project.id, prompt: input.initialPrompt },request) };
       } catch (error: any) {
         const known = typeof error.code === 'string' && error.code.startsWith('RUNTIME_');
         return reply.code(known ? error.statusCode : 500).send({
-          error: error.statusCode === 504 ? 'Project created; session result is uncertain. Check Recent Sessions before retrying.' : 'Project created; session could not be confirmed. Check Recent Sessions before retrying.',
+          error: !input.clientRequestId ? 'Project directory created; native project synchronization failed. Retry adding this directory.' : error.statusCode === 504 ? 'Project created; session result is uncertain. Check Recent Sessions before retrying.' : 'Project created; session could not be confirmed. Check Recent Sessions before retrying.',
           code: known ? error.code : 'SESSION_CREATION_FAILED', project, partial: known ? error.partial : undefined,
         });
       }
     });
   }
-  app.get('/api/sessions', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { ...text, maxLength: 4096 }, sortKey:{type:'string',enum:['updated_at','created_at']},includeHidden:{type:'string',enum:['true','false']},archived:{type:'string',enum:['true','false']} } } } }, async request => {
-    const query=request.query as any,sortKey=query.sortKey??'updated_at',archived=query.archived==='true',includeHidden=query.includeHidden==='true';
+  app.get('/api/sessions', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { ...text, maxLength: 4096 }, searchTerm:{type:'string',maxLength:200}, sortKey:{type:'string',enum:['updated_at','created_at']},includeHidden:{type:'string',enum:['true','false']},archived:{type:'string',enum:['true','false']},refresh:{type:'string',enum:['true']},recovery:{type:'string',enum:['foreground','stream-ready','shared-update','manual']} } } } }, async request => {
+    const query=request.query as any;
+    return shared.readSessions({cursor:query.cursor,sortKey:query.sortKey??'updated_at',archived:query.archived==='true',includeHidden:query.includeHidden==='true',searchTerm:(query.searchTerm??'').trim()},query.refresh==='true',true,request.id);
+  });
+  async function loadSessions(query:SessionQuery,signal:AbortSignal){
+    const {sortKey,archived,includeHidden,searchTerm}=query;
     let nativeCursor:string|null|undefined=query.cursor,forkBefore=Number.MAX_SAFE_INTEGER;
     if(query.cursor){
       try{
-        if(!/^web1:[A-Za-z0-9_-]+$/.test(query.cursor))throw Error();
+        if(!/^web2:[A-Za-z0-9_-]+$/.test(query.cursor))throw Error();
         const page=JSON.parse(Buffer.from(query.cursor.slice(5),'base64url').toString());
-        if(!page||Object.keys(page).sort().join(',')!=='archived,forkBefore,includeHidden,native,sortKey'||page.sortKey!==sortKey||page.archived!==archived||page.includeHidden!==includeHidden||!Number.isSafeInteger(page.forkBefore)||page.forkBefore<1||(page.native!==null&&(typeof page.native!=='string'||!page.native||page.native.length>2048)))throw Error();
+        if(!page||!['archived,forkBefore,includeHidden,native,sortKey','archived,forkBefore,includeHidden,native,searchTerm,sortKey'].includes(Object.keys(page).sort().join(','))||(page.searchTerm??'')!==searchTerm||page.sortKey!==sortKey||page.archived!==archived||page.includeHidden!==includeHidden||!Number.isSafeInteger(page.forkBefore)||page.forkBefore<1||(page.native!==null&&(typeof page.native!=='string'||!page.native||page.native.length>2048)))throw Error();
         nativeCursor=page.native;forkBefore=page.forkBefore;
       }catch{throw Object.assign(new Error('Session cursor is invalid; refresh the list'),{statusCode:400,code:'SESSION_CURSOR_INVALID'});}
     }
-    let result=nativeCursor===null?{data:[],nextCursor:null}:await runtime.list(nativeCursor,archived,sortKey);const wanted=Math.max(1,result.data.length);const data:any[]=[],nativeIds=new Set<string>();
+    signal.throwIfAborted();
+    let result=nativeCursor===null?{data:[],nextCursor:null}:await runtime.list(nativeCursor,archived,sortKey,searchTerm);signal.throwIfAborted();const wanted=Math.max(1,result.data.length);const data:any[]=[],nativeIds=new Set<string>();
     // Keep hidden-heavy histories bounded; the existing Load more action continues at nextCursor.
     const seen=new Set<string>(nativeCursor?[nativeCursor]:[]);
     for(let pages=1;;pages++){
       for(const thread of result.data){nativeIds.add(thread.id);const meta=readMeta(thread.id);if(archived||includeHidden||!meta?.hidden)data.push({...thread,metadata:meta});}
       if(result.nextCursor&&seen.has(result.nextCursor))throw Object.assign(new Error('Native session pagination is invalid'),{statusCode:503,code:'RUNTIME_UNAVAILABLE'});
       if(data.length>=wanted||!result.nextCursor||pages>=5)break;
-      seen.add(result.nextCursor);result=await runtime.list(result.nextCursor,archived,sortKey);
+      signal.throwIfAborted();seen.add(result.nextCursor);result=await runtime.list(result.nextCursor,archived,sortKey,searchTerm);signal.throwIfAborted();
     }
     const candidates=metadata.knownForks(forkBefore),deadline=Date.now()+5000;let processed=0,forkReadsFailed=false;
     // ponytail: two bounded streams, sort all loaded rows in the browser; no whole-history snapshot.
     for(let offset=0;offset<candidates.length&&Date.now()<deadline;offset+=4){
+      signal.throwIfAborted();
       const batch=candidates.slice(offset,offset+4);
       const rows=await Promise.all(batch.map(async candidate=>{if(nativeIds.has(candidate.id))return null;try{return await runtime.forkListHeader(candidate.id,Math.max(1,deadline-Date.now()));}catch{forkReadsFailed=true;return null;}}));
-      for(const row of rows)if(row&&row.archived===archived&&!data.some(thread=>thread.id===row.thread.id)){const meta=readMeta(row.thread.id);if(archived||includeHidden||!meta?.hidden)data.push({...row.thread,metadata:meta});}
+      signal.throwIfAborted();
+      for(const row of rows)if(row&&row.archived===archived&&!data.some(thread=>thread.id===row.thread.id)){const meta=readMeta(row.thread.id);if((archived||includeHidden||!meta?.hidden)&&(!searchTerm||String(row.thread.name||meta?.web_title||'').toLowerCase().includes(searchTerm.toLowerCase())))data.push({...row.thread,metadata:meta});}
       processed+=batch.length;
     }
     if(processed)forkBefore=candidates[processed-1].seq;
     const forksPending=metadata.hasForksBefore(forkBefore),native=result.nextCursor;
-    const nextCursor=native||forksPending?'web1:'+Buffer.from(JSON.stringify({native,forkBefore,sortKey,archived,includeHidden})).toString('base64url'):null;
-    const timeKey=sortKey==='created_at'?'createdAt':'updatedAt';data.sort((a,b)=>(Number(b[timeKey])||0)-(Number(a[timeKey])||0)||String(a.id).localeCompare(String(b.id)));
+    const nextCursor=native||forksPending?'web2:'+Buffer.from(JSON.stringify({native,forkBefore,sortKey,archived,includeHidden,searchTerm})).toString('base64url'):null;
+    const time=(thread:any)=>Number(sortKey==='created_at'?thread.createdAt:thread.recencyAt??thread.createdAt)||0;
+    data.sort((a,b)=>time(b)-time(a)||String(a.id).localeCompare(String(b.id)));
     return { data, nextCursor,forksPending,forkReadsFailed };
+  }
+  app.post('/api/sessions', { schema: body({ projectId: short,nativeProjectId:{...short,type:['string','null']}, clientRequestId: requestId, prompt: {...text,minLength:0}, ...turnFields }, ['clientRequestId']) }, async request => createSession(request.body,request));
+  app.post('/api/sessions/:threadId/cwd',{schema:body({workspaceId:{type:'string',minLength:1,maxLength:120}})},async request=>{
+    const id=params(request).threadId,workspaceId=(request.body as any).workspaceId,workspace=await projects.resolve(workspaceId),thread=await runtime.threadHeaderRead(id);
+    if(typeof thread.projectId!=='string'||!thread.projectId)throw Object.assign(new Error('请选择已归属项目的会话。'),{statusCode:409,code:'RUNTIME_PROJECT_SYNC_FAILED'});
+    await catalog.resolve(workspaceId,thread.projectId);
+    const result=await runtime.setThreadCwd(id,workspace.path,thread.projectId);shared.invalidateSessions('metadata');return {...result,workspaceId};
   });
-  app.post('/api/sessions', { schema: body({ projectId: short, clientRequestId: requestId, prompt: {...text,minLength:0}, ...turnFields }, ['clientRequestId']) }, async request => createSession(request.body,request));
   app.post('/api/sessions/:threadId/fork', { schema: body({ lastTurnId: { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' }, clientRequestId: requestId }) }, async request => {
     const result = await runtime.fork(params(request).threadId, request.body as { lastTurnId: string; clientRequestId: string });
     let warning: string | undefined;
-    try{metadata.registerFork(result.header);}catch{warning='Web fork metadata could not be saved; native thread history remains available.';}
+    try{saveFork(result.header);}catch{warning='Web fork metadata could not be saved; native thread history remains available.';}
     try { const project = await projectForCwd(result.cwd); warning = saveMeta(result.threadId, project?.path ?? null, null)??warning; }
     catch { warning = 'Web metadata could not be saved; native thread history remains available.'; }
     return { threadId: result.threadId, status: result.status, warning };
   });
-  app.get('/api/sessions/:threadId', async (request,reply) => {const id=params(request).threadId;return {...await associated(id,readSignal(reply)),attachmentPreviews:options.uploads&&options.uploadOwner?options.uploads.listForThread(options.uploadOwner(request),id).map(item=>({...item,url:'/api/uploads/'+item.uploadId})):[]};});
+  app.get('/api/sessions/:threadId',{schema:{querystring:{type:'object',additionalProperties:false,properties:{restartHistory:{type:'string',enum:['true']}}}}}, async (request,reply) => {const id=params(request).threadId;return {...await associated(id,readSignal(reply),(request.query as any).restartHistory==='true'),attachmentPreviews:options.uploads&&options.uploadOwner?options.uploads.listForThread(options.uploadOwner(request),id).map(item=>({...item,url:'/api/uploads/'+item.uploadId})):[]};});
   app.get('/api/sessions/:threadId/history', { schema: { querystring: { type: 'object', additionalProperties: false, required: ['before'], properties: { before: { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' } } } } }, async (request,reply) => {
     const id = params(request).threadId;
     const page=await runtime.history(id,(request.query as any).before,readSignal(reply));
@@ -205,14 +241,14 @@ export function registerApi(app: FastifyInstance, options: {
   });
   app.post('/api/sessions/:threadId/messages', { schema: body({ text:{...text,minLength:0}, clientRequestId: requestId, expectedTurnId:short, ...turnFields }, ['text','clientRequestId']) }, async request => {const input=request.body as any;const nativeInput=await attachments(input,request,params(request).threadId);try{const result=await runtime.send(params(request).threadId,{text:input.text,clientRequestId:input.clientRequestId,expectedTurnId:input.expectedTurnId,model:input.model,effort:input.effort,permissionMode:input.permissionMode,...(nativeInput.length?{nativeInput}:{})});if(nativeInput.length)await options.uploads!.bindClaim(options.uploadOwner!(request),input.clientRequestId,params(request).threadId);return result;}catch(error){await rollbackRejected(input,request,error);throw error;}});
   app.post('/api/sessions/:threadId/abort', async request => runtime.abort(params(request).threadId));
-  for(const archived of [true,false])app.post('/api/sessions/:threadId/'+(archived?'archive':'unarchive'),{schema:body({},[])},async request=>runtime.archive(params(request).threadId,archived));
+  for(const archived of [true,false])app.post('/api/sessions/:threadId/'+(archived?'archive':'unarchive'),{schema:body({},[])},async request=>{const result=await runtime.archive(params(request).threadId,archived);shared.invalidateSessions('archive');return result;});
   app.post('/api/sessions/:threadId/open',{schema:body({},[])},async request=>runtime.open(params(request).threadId));
-  app.post('/api/sessions/:threadId/release', async request => runtime.release(params(request).threadId));
-  app.post('/api/sessions/:threadId/release-on-leave', async request => runtime.requestRelease(params(request).threadId));
-  app.post('/api/sessions/:threadId/cancel-release', async request => runtime.cancelRelease(params(request).threadId));
-  app.post('/api/sessions/:threadId/name',{schema:body({name:short},['name'])},async request=>{const id=params(request).threadId;const name=(request.body as any).name.trim();if(!name)throw Object.assign(new Error('Invalid name'),{statusCode:400});await runtime.rename(id,name);const current=readMeta(id);const value=metadata.update(id,{webTitle:name});return {name,metadata:value,warning:current===null?'Web metadata created':undefined};});
-  app.post('/api/sessions/:threadId/metadata',{schema:body({favorite:{type:'boolean'},hidden:{type:'boolean'}},[])},async request=>({metadata:metadata.update(params(request).threadId,request.body as any)}));
-  app.post('/api/sessions/:threadId/metadata/clear',{schema:body({},[])},async request=>{const id=params(request).threadId;metadata.clear(id);runtime.invalidateForkHeader(id);return {metadata:null};});
+  app.post('/api/sessions/:threadId/release', async request => {const result=await runtime.release(params(request).threadId);shared.refreshSessions('release');return result;});
+  app.post('/api/sessions/:threadId/release-on-leave', async request => {const result=await runtime.requestRelease(params(request).threadId);shared.refreshSessions('release');return result;});
+  app.post('/api/sessions/:threadId/cancel-release', async request => {const result=await runtime.cancelRelease(params(request).threadId);shared.refreshSessions('release');return result;});
+  app.post('/api/sessions/:threadId/name',{schema:body({name:short},['name'])},async request=>{const id=params(request).threadId;const name=(request.body as any).name.trim();if(!name)throw Object.assign(new Error('Invalid name'),{statusCode:400});await runtime.rename(id,name);const current=readMeta(id);const value=metadata.update(id,{webTitle:name});shared.invalidateSessions('name');return {name,metadata:value,warning:current===null?'Web metadata created':undefined};});
+  app.post('/api/sessions/:threadId/metadata',{schema:body({favorite:{type:'boolean'},hidden:{type:'boolean'}},[])},async request=>{const value=metadata.update(params(request).threadId,request.body as any);shared.invalidateSessions();return {metadata:value};});
+  app.post('/api/sessions/:threadId/metadata/clear',{schema:body({},[])},async request=>{const id=params(request).threadId;metadata.clear(id);runtime.invalidateForkHeader(id);shared.invalidateSessions();return {metadata:null};});
   app.post('/api/sessions/:threadId/requests/:requestId/respond', { schema: body({ answer: { type: 'object', maxProperties: 8 } }) }, async request => runtime.respond(params(request).threadId, params(request).requestId, (request.body as any).answer));
 
   const boundProject=async(threadId:string)=>{const project=await projectForCwd(await runtime.threadCwd(threadId));if(!project)throw Object.assign(new Error('This thread is not bound to a project in WORK_ROOT'),{statusCode:404,code:'PROJECT_ERROR'});return project;};
@@ -220,21 +256,23 @@ export function registerApi(app: FastifyInstance, options: {
     const project = await boundProject(params(request).threadId);
     return projects.gitStatus(project.id);
   });
-  app.post('/api/sessions/:threadId/git/fetch',{schema:body({},[])},async request=>{const project=await boundProject(params(request).threadId);return projects.fetchRemotes(project.id);});
-  app.get('/api/sessions/:threadId/git/log',{schema:{querystring:{type:'object',additionalProperties:false,properties:{ref:{type:'string',minLength:1,maxLength:512},cursor:{type:'string',minLength:1,maxLength:4096}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return projects.gitLog(project.id,q.ref??'HEAD',q.cursor);});
-  app.get('/api/sessions/:threadId/git/commit',{schema:{querystring:{type:'object',additionalProperties:false,required:['commit'],properties:{commit:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'},parent:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return projects.gitCommit(project.id,q.commit,q.parent);});
-  app.get('/api/sessions/:threadId/git/commit/diff',{schema:{querystring:{type:'object',additionalProperties:false,required:['commit','path'],properties:{commit:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'},parent:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'},path:{type:'string',minLength:1,maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return projects.gitCommitDiff(project.id,q.commit,q.parent,q.path);});
+  const repositoryPath={type:'string',maxLength:1024};
+  app.get('/api/sessions/:threadId/git/repositories',async request=>{const project=await boundProject(params(request).threadId);return projects.gitRepositories(project.id);});
+  app.post('/api/sessions/:threadId/git/fetch',{schema:body({repository:repositoryPath},[])},async request=>{const project=await boundProject(params(request).threadId);return projects.fetchRemotes(project.id,(request.body as any)?.repository);});
+  app.get('/api/sessions/:threadId/git/log',{schema:{querystring:{type:'object',additionalProperties:false,properties:{repository:repositoryPath,ref:{type:'string',minLength:1,maxLength:512},cursor:{type:'string',minLength:1,maxLength:4096}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return projects.gitLog(project.id,q.ref??'HEAD',q.cursor,q.repository);});
+  app.get('/api/sessions/:threadId/git/commit',{schema:{querystring:{type:'object',additionalProperties:false,required:['commit'],properties:{repository:repositoryPath,commit:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'},parent:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return projects.gitCommit(project.id,q.commit,q.parent,q.repository);});
+  app.get('/api/sessions/:threadId/git/commit/diff',{schema:{querystring:{type:'object',additionalProperties:false,required:['commit','path'],properties:{repository:repositoryPath,commit:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'},parent:{type:'string',pattern:'^[0-9a-fA-F]{40,64}$'},path:{type:'string',minLength:1,maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return projects.gitCommitDiff(project.id,q.commit,q.parent,q.path,q.repository);});
   app.get('/api/sessions/:threadId/git/files',{schema:{querystring:{type:'object',additionalProperties:false,properties:{staged:{type:'string',enum:['true','false']}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.gitFiles(project.id,(request.query as any).staged==='true');});
   app.get('/api/sessions/:threadId/git/diff',{schema:{querystring:{type:'object',additionalProperties:false,properties:{staged:{type:'string',enum:['true','false']},path:{type:'string',minLength:1,maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return q.path?projects.gitFileDiff(project.id,q.path,q.staged==='true'):projects.gitDiff(project.id,q.staged==='true');});
   app.get('/api/sessions/:threadId/git/diff/patch',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{staged:{type:'string',enum:['true','false']},path:{type:'string',minLength:1,maxLength:1024}}}}},async(request,reply)=>{const project=await boundProject(params(request).threadId),q=request.query as any;const patch=await projects.gitPatch(project.id,q.path,q.staged==='true');if(Buffer.byteLength(patch)>5*1024*1024)return reply.code(413).send({error:'Patch exceeds 5 MiB'});return reply.type('text/x-diff; charset=utf-8').header('content-disposition','attachment; filename="change.patch"').send(patch);});
   app.get('/api/sessions/:threadId/files',{schema:{querystring:{type:'object',additionalProperties:false,properties:{directory:{type:'string',maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.listFiles(project.id,(request.query as any).directory??'');});
+  app.get('/api/sessions/:threadId/files/entry',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{path:{type:'string',minLength:1,maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.fileEntry(project.id,(request.query as any).path);});
   app.get('/api/sessions/:threadId/files/content',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{path:{type:'string',minLength:1,maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.readFile(project.id,(request.query as any).path);});
-  app.get('/api/sessions/:threadId/files/image',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{path:{type:'string',minLength:1,maxLength:1024},v:{type:'string',maxLength:64},revision:{type:'string',pattern:'^(index|[0-9a-fA-F]{40,64})$'}}}}},async(request,reply)=>{const project=await boundProject(params(request).threadId);const image=await projects.readImage(project.id,(request.query as any).path,(request.query as any).revision);return reply.headers({'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"}).type('image/webp').send(image);});
+  app.get('/api/sessions/:threadId/files/image',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{repository:repositoryPath,path:{type:'string',minLength:1,maxLength:1024},v:{type:'string',maxLength:64},revision:{type:'string',pattern:'^(index|[0-9a-fA-F]{40,64})$'}}}}},async(request,reply)=>{const project=await boundProject(params(request).threadId);const image=await projects.readImage(project.id,(request.query as any).path,(request.query as any).revision,(request.query as any).repository);return reply.headers({'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"}).type('image/webp').send(image);});
   app.post('/api/sessions/:threadId/test-reports',{schema:body({turnId:short,commandItemId:short,relativePath:{type:'string',minLength:1,maxLength:1024},format:{type:'string',enum:['junit']}},['turnId','commandItemId','relativePath','format'])},async request=>{const id=params(request).threadId,input=request.body as any,project=await boundProject(id),command=await runtime.command(id,input.turnId,input.commandItemId);return parseTestReport(projects,project.id,command,input);});
 
   app.get('/api/sessions/:threadId/status', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { epoch: { ...short, pattern: '^[a-zA-Z0-9-]+$' } } } } }, async request => runtime.status(params(request).threadId, (request.query as any).epoch));
-  app.get('/api/sessions/:threadId/events', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { type: 'string', maxLength: 160, pattern: '^[a-zA-Z0-9-]+:[0-9]+$' } } } } }, async (request, reply) => {
-    const threadId = params(request).threadId;
+  function eventStream(request:FastifyRequest,reply:FastifyReply,changed?:(event:any)=>void){
     const valid = options.authenticated(request);
     reply.hijack();
     const stream = reply.raw;
@@ -242,7 +280,7 @@ export function registerApi(app: FastifyInstance, options: {
     let closed = false;
     const close = () => {
       if (closed) return; closed = true;
-      clearInterval(heartbeat); runtime.off('change', changed); connections.delete(connection); stream.end();
+      clearInterval(heartbeat);if(changed)runtime.off('change',changed);unsubscribe();connections.delete(connection);stream.end();
     };
     const write = (kind: string, data: unknown, id?: string) => {
       if (closed) return;
@@ -251,15 +289,24 @@ export function registerApi(app: FastifyInstance, options: {
       try { stream.write(`${id ? `id: ${id}\n` : ''}event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`); }
       catch { close(); }
     };
-    const changed = (event: any) => { if (event.threadId === threadId) write(event.kind === 'resync' ? 'resync' : 'change', event, event.id); };
     const heartbeat = setInterval(() => write('ping', {}), 15_000); heartbeat.unref();
     const connection = { valid, close }; connections.add(connection);
-    stream.on('error', close); stream.on('close', close); runtime.on('change', changed);
+    let unsubscribe=()=>{};
+    stream.on('error', close); stream.on('close', close);if(changed)runtime.on('change',changed);
+    const subscribe=()=>{if(closed)return;unsubscribe=shared.subscribe(valid,write);if(closed)unsubscribe();};
+    return {write,close,subscribe};
+  }
+  app.get('/api/state/events',{schema:{querystring:empty}},async(request,reply)=>{const {write,subscribe}=eventStream(request,reply);write('ready',{});subscribe();});
+  app.get('/api/sessions/:threadId/events', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { cursor: { type: 'string', maxLength: 160, pattern: '^[a-zA-Z0-9-]+:[0-9]+$' } } } } }, async (request, reply) => {
+    const threadId = params(request).threadId;
+    const changed=(event:any)=>{if(event.threadId===threadId)write(event.kind==='resync'?'resync':'change',event,event.id);};
+    const {write,subscribe}=eventStream(request,reply,changed);
     const lastId = request.headers['last-event-id'];
     const replay = runtime.replay(threadId, typeof lastId === 'string' ? lastId : (request.query as any).cursor);
     if (replay.reset) write('resync', {});
     else for (const event of replay.events) write(event.kind === 'resync' ? 'resync' : 'change', event, event.id);
     write('ready', {});
+    subscribe();
   });
   return { closeInvalid };
 }

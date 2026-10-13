@@ -1,10 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { isDeepStrictEqual } from 'node:util';
+import {setTimeout as wait} from 'node:timers/promises';
 import { isAbsolute, resolve, relative, sep } from 'node:path';
 import {realpath,stat} from 'node:fs/promises';
 import { permissionChoices, threadPermissionOptions, type PermissionMode, type PermissionPolicy } from './permissions.ts';
 import { AppServer } from './app-server.ts';
+import {retainWriterLease,type WriterLease} from './writer-lease.ts';
+import {generateNativeTitle,nativeTitleCleanupPending,settleNativeTitleCleanup} from './nativeTitle.ts';
 import {baseUserLayer,readSettings,writeSettings,type SettingsWriteInput} from './settings.ts';
 import {readInstalledPlugins,type InstalledPluginsSnapshot} from './installed-plugins.ts';
 import { itemWithTimes } from './itemTimes.ts';
@@ -12,6 +15,9 @@ import {diagnosticId,type DiagnosticEvent} from '../server/diagnostics.ts';
 
 export type NativeInput = { type: 'text'; text: string; text_elements: [] } | { type: 'localImage'; path: string };
 export type TurnOptions = { model?: string; effort?: string; permissionMode?: PermissionMode; nativeInput?: NativeInput[] };
+export type NativeProjectContext={home:string;epoch:string};
+const directoryKey=(path:string)=>process.platform==='win32'?resolve(path.replaceAll('/','\\').replace(/^\\\\\?\\UNC\\/i,'\\\\').replace(/^\\\\\?\\/,'')).toLowerCase():resolve(path);
+export type NativeProject={id:string;name:string;roots:Array<{path:string}>};
 type Id = string | number;
 type Options = {
   executable: string;
@@ -20,12 +26,17 @@ type Options = {
   sandbox?: 'read-only' | 'danger-full-access';
   args?: string[];
   diagnostic?:(event:DiagnosticEvent)=>void;
+  writerLease?:(home:string,threadId:string)=>Promise<WriterLease>;
 };
 type Patch = { state?: any; thread?: any; turn?: any; item?: { turnId: string; item: any; completed?: boolean }; delta?: { turnId: string; itemId: string; field: 'text' | 'aggregatedOutput' | 'summary' | 'content'; index?: number; offset: number; text: string } };
 type Change = { id: string; threadId: string; kind: string; revision: number; patch: Patch };
 type Waiter = { promise: Promise<'started' | 'completed' | 'failed'>; resolve: (value: 'started' | 'completed' | 'failed') => void };
 type PendingRequest = { requestId: string; nativeId: Id; method: string; params: Record<string, any>; epoch: string; threadId: string; turnId: string; answered: boolean };
 type ThreadState = {
+  titleGeneration?: {controller:AbortController;promise:Promise<void>};
+  nameWrite?: Promise<any>;
+  nameRevision?: number;
+  nativeName?: string | null;
   subagent?: boolean;
   openPromise?: Promise<any>;
   externalWriter?: boolean;
@@ -40,13 +51,25 @@ type ThreadState = {
   releaseError?: string;
   handoffReady?: boolean;
   nativeReleaseStatus?: string;
+  writerLease?:WriterLease;
+  writerLeaseServer?:AppServer;
+  nativeUnloaded?:boolean;
+  unloadReceipt?:ReturnType<typeof Promise.withResolvers<void>>;
+  handoffCheck?:Promise<boolean>;
   completedTurns: Set<string>;
   completedItems: Set<string>;
   completion?: { promise: Promise<void>; resolve: () => void };
   emptyThreadEpoch?: string;
+  initialHistory?: {epoch:string;turnId:string;deadline?:number};
+  historyRead?: {epoch:string;deadline:number;controller:AbortController;users:Set<symbol>;promise:Promise<any>};
+  // History/status reconciliation cannot validate effective cwd and permission grants.
+  contextUnknown?: boolean;
+  pendingCwdIdentity?: {cwd:string;projectId:string};
   error?: string;
   liveTurns: Map<string, any>;
   loaded: boolean;
+  maintenanceOnly?:boolean;
+  identityRevision?:number;
   nativeStatus?: any;
   pending: Map<string, PendingRequest>;
   permissions?: any;
@@ -172,7 +195,10 @@ export class Runtime extends EventEmitter {
   private modelCatalog?: { epoch: string; expiresAt: number; data: any[] };
   private modelLoading?: { epoch: string; promise: Promise<{ data: any[]; nextCursor: null }> };
   private forkHeaders=new Map<string,{thread:any;expiresAt:number}>();
+  private listReads=new Map<string,{epoch:string;promise:Promise<any>}>();
+  private headerReads=new Map<string,{epoch:string;promise:Promise<any>}>();
   private notificationKeys = new Set<string>();
+  private temporaryThreads = new Set<string>();
 
   constructor(options: Options) {
     super();
@@ -182,44 +208,136 @@ export class Runtime extends EventEmitter {
     if (!options.executable || !options.cwd || !Number.isSafeInteger(this.idleMs) || this.idleMs < 1) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'Invalid runtime options');
   }
 
-  async list(cursor?: string, archived = false, sortKey:'updated_at'|'created_at'='updated_at'): Promise<{ data: any[]; nextCursor: string | null }> {
+  async list(cursor?: string, archived = false, sortKey:'updated_at'|'created_at'='updated_at', searchTerm?:string, projectId?:null): Promise<{ data: any[]; nextCursor: string | null }> {
     if(!['updated_at','created_at'].includes(sortKey))throw runtimeError(400,'RUNTIME_INVALID_INPUT','Invalid session sort');
-    const result = await this.call<any>('thread/list', { cursor: cursor ?? null, sourceKinds: SOURCE_KINDS, useStateDbOnly: true, sortKey, sortDirection:'desc', ...(archived?{archived:true}:{}) });
-    return { data: Array.isArray(result?.data) ? result.data.filter((thread:any)=>!isSubagentThread(thread)).map((thread: any) => ({ ...thread, ...(this.states.has(thread.id) ? { release: this.releaseState(this.states.get(thread.id)!) } : {}) })) : [], nextCursor: typeof result?.nextCursor === 'string' ? result.nextCursor : null };
+    const key=JSON.stringify([cursor??null,archived,sortKey,searchTerm||null,projectId===null]);
+    let pending=this.listReads.get(key);
+    if(pending?.epoch!==this.epoch){
+      const promise=this.call<any>('thread/list', { cursor: cursor ?? null, sourceKinds: SOURCE_KINDS, useStateDbOnly: true, sortKey:sortKey==='updated_at'?'recency_at':sortKey, sortDirection:'desc', ...(archived?{archived:true}:{}), ...(searchTerm?{searchTerm}:{}), ...(projectId===null?{projectId:null,limit:100}:{}) }).finally(()=>{if(this.listReads.get(key)?.promise===promise)this.listReads.delete(key);});
+      pending={epoch:this.epoch,promise};this.listReads.set(key,pending);
+    }
+    const result = await pending.promise;
+    return { data: Array.isArray(result?.data) ? result.data.filter((thread:any)=>!thread.ephemeral&&!this.temporaryThreads.has(thread.id)&&!isSubagentThread(thread)).map((thread: any) => ({ ...thread, ...(this.states.has(thread.id) ? { release: this.releaseState(this.states.get(thread.id)!) } : {}) })) : [], nextCursor: typeof result?.nextCursor === 'string' ? result.nextCursor : null };
+  }
+
+  async projectContext():Promise<NativeProjectContext>{
+    const home=await this.configurationHome();
+    if(!home)throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native project home is unavailable');
+    return {home,epoch:this.epoch};
+  }
+  assertProjectContext(context:NativeProjectContext){
+    const home=this.initializeInfo?.codexHome;
+    if(this.closed||!this.server||this.stopping||this.epoch!==context.epoch||typeof home!=='string'||directoryKey(home)!==directoryKey(context.home))throw runtimeError(503,'RUNTIME_SYNC_RESTARTED','Native project process changed during synchronization');
+  }
+  async listProjects(context?:NativeProjectContext):Promise<NativeProject[]>{
+    const bound=context??await this.projectContext();this.assertProjectContext(bound);
+    const data:NativeProject[]=[],ids=new Set<string>(),cursors=new Set<string>(),deadline=Date.now()+30_000;
+    let cursor:string|null=null;
+    for(let page=0;page<100;page++){
+      if(Date.now()>=deadline)throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native project pagination exceeded its deadline');
+      this.assertProjectContext(bound);
+      const result=await this.call<any>('project/list',{cursor,limit:100},false,false,Math.max(1,deadline-Date.now()),bound);
+      this.assertProjectContext(bound);
+      if(!Array.isArray(result?.data))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native project catalog is unavailable');
+      for(const project of result.data){this.requireProject(project);if(ids.has(project.id))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Duplicate native project identity');ids.add(project.id);data.push(project);}
+      cursor=result.nextCursor??null;
+      if(cursor===null)return data;
+      if(typeof cursor!=='string'||!cursor||cursor.length>4096||cursors.has(cursor))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Invalid native project pagination');
+      cursors.add(cursor);
+    }
+    throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native project pagination exceeded its page limit');
+  }
+  private requireProject(project:any):asserts project is NativeProject{
+    if(!isObject(project)||typeof project.id!=='string'||!project.id||typeof project.name!=='string'||!Array.isArray(project.roots)||!project.roots.every((root:any)=>isObject(root)&&typeof root.path==='string'&&isAbsolute(root.path)))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Invalid native project response');
+  }
+  async createProject(input:{idempotencyKey:string;name:string;roots:Array<{path:string}>},context?:NativeProjectContext):Promise<NativeProject>{
+    const bound=context??await this.projectContext();this.assertProjectContext(bound);
+    const result=await this.mutation<any>('project/create',input,bound);this.assertProjectContext(bound);this.requireProject(result?.project);return result.project;
+  }
+  async setThreadProject(threadId:string,projectId:string,expected:{cwd:string;context:NativeProjectContext;assertCurrent?:()=>void}){
+    this.requireString(projectId,'projectId');this.assertProjectContext(expected.context);
+    if(!this.states.has(threadId))this.state(threadId).maintenanceOnly=true;
+    return this.updateThreadIdentity(threadId,async before=>{
+      this.assertProjectContext(expected.context);
+      expected.assertCurrent?.();
+      if(typeof before.cwd!=='string'||directoryKey(before.cwd)!==directoryKey(expected.cwd)||(before.projectId!==null&&before.projectId!==projectId))throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread project or working directory changed before synchronization');
+      const state=this.state(threadId),activity=state.activityRevision,identity=state.identityRevision;
+      const guard=()=>{expected.assertCurrent?.();if(state.releasePromise||state.activeTurnId||state.pending.size||state.contextUnknown||state.error||state.externalWriter||['active','systemError'].includes(state.nativeStatus?.type)||state.activityRevision!==activity||state.identityRevision!==identity)throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread identity or activity changed before synchronization');};
+      if(before.projectId!==projectId)await this.mutation('thread/metadata/update',{threadId,projectId},expected.context,guard);
+      this.assertProjectContext(expected.context);
+      const thread=await this.threadHeaderRead(threadId);
+      this.assertProjectContext(expected.context);
+      if(thread.projectId!==projectId||thread.cwd!==before.cwd)throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native project assignment could not be verified');
+      this.invalidateForkHeader(threadId);this.change(threadId,'thread',{thread:this.threadHeader(thread)});
+      return {threadId,nativeProjectId:thread.projectId,cwd:thread.cwd};
+    });
+  }
+  async setThreadCwd(threadId:string,cwd:string,projectId:string){
+    this.requireString(threadId,'threadId');
+    this.state(threadId).maintenanceOnly=false;
+    this.requireString(cwd,'cwd');
+    return this.updateThreadIdentity(threadId,async before=>{
+      if(before.projectId!==projectId)throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Native project changed; refresh before switching directories');
+      const state=this.state(threadId);
+      // A successful native write can still lose its verification response. Never reuse old grants.
+      state.contextUnknown=true;state.loaded=false;state.permissions=undefined;
+      state.error='Native working directory and permissions require reconciliation';state.recoverOnIdle=false;
+      await this.mutation('thread/settings/update',{threadId,cwd});
+      const thread=await this.threadHeaderRead(threadId);
+      if(thread.cwd!==cwd||thread.projectId!==projectId)throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native working directory change could not be verified');
+      state.cwd=cwd;state.pendingCwdIdentity={cwd,projectId};state.error=undefined;this.invalidateForkHeader(threadId);this.change(threadId,'thread',{thread:this.threadHeader(thread)});
+      return {cwd,nativeProjectId:thread.projectId};
+    });
+  }
+  private async updateThreadIdentity<T>(threadId:string,operation:(before:any)=>Promise<T>):Promise<T>{
+    this.requireString(threadId,'threadId');const state=this.state(threadId);
+    if(state.releasePromise||state.reserved||state.activeTurnId||state.pending.size||state.contextUnknown||state.error||state.externalWriter||['active','systemError'].includes(state.nativeStatus?.type))throw runtimeError(409,'RUNTIME_THREAD_BUSY','Thread already has active or unresolved work');
+    state.reserved=true;
+    try{
+      const revision=state.activityRevision,identity=state.identityRevision;
+      this.headerReads.delete(threadId);const before=await this.threadHeaderRead(threadId);
+      if(!['idle','notLoaded'].includes(before.status?.type)||state.releasePromise||state.activeTurnId||state.pending.size||state.contextUnknown||state.error||state.externalWriter||['active','systemError'].includes(state.nativeStatus?.type)||state.activityRevision!==revision||state.identityRevision!==identity)throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread is active or changed in another client');
+      try{return await operation(before);}
+      catch(error){this.invalidateForkHeader(threadId);this.change(threadId,'resync');throw error;}
+    }finally{state.reserved=false;this.scheduleIdle();}
   }
 
   open(threadId:string):Promise<any>{
     this.requireString(threadId,'threadId');const state=this.state(threadId);
+    state.maintenanceOnly=false;
     if(state.subagent)return Promise.reject(runtimeError(404,'RUNTIME_SUBAGENT_THREAD','子 Agent 会话不单独展示，请返回主会话。'));
     if(state.openPromise)return state.openPromise;
-    if(state.reserved||state.activeTurnId||state.pending.size||(state.loaded&&!state.released&&!state.error&&!state.externalWriter&&state.nativeStatus?.type==='idle'))return Promise.resolve({phase:this.phase(state)});
+    if(state.reserved||state.activeTurnId||state.pending.size||(state.loaded&&!state.contextUnknown&&!state.released&&!state.error&&!state.externalWriter&&state.nativeStatus?.type==='idle'))return Promise.resolve({phase:this.phase(state),epoch:this.epoch});
     state.reserved=true;
     const operation=async()=>{
       try {
-        const owned=state.loaded&&!state.released&&!state.externalWriter;
+        const owned=state.loaded&&!state.contextUnknown&&!state.released&&!state.externalWriter;
         const activityRevision=state.activityRevision;
         const read=owned?{thread:await this.readThread(threadId,{headersOnly:true})}:await this.call<any>('thread/read',{threadId,includeTurns:false});
         if(!isObject(read?.thread))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread status is unavailable');
         this.requireUserThread(read.thread);
+        if(state.pendingCwdIdentity&&(typeof read.thread.cwd!=='string'||directoryKey(read.thread.cwd)!==directoryKey(state.pendingCwdIdentity.cwd)||read.thread.projectId!==state.pendingCwdIdentity.projectId))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native working directory identity changed before resume');
         state.cwd=read.thread.cwd;state.model=read.thread.model;
         if(owned){
           this.reconcile(threadId,read.thread,activityRevision);
-          if(state.activeTurnId||state.pending.size)return {phase:this.phase(state)};
+          if(state.activeTurnId||state.pending.size)return {phase:this.phase(state),epoch:this.epoch};
           if(!this.canUnload(state,read.thread))throw runtimeError(409,'RUNTIME_THREAD_BUSY',UNRECONCILED_ACTIVITY);
           if(read.thread.status?.type!=='notLoaded'){
             state.error=undefined;state.recoverOnIdle=false;
-            return {phase:'IDLE'};
+            return {phase:'IDLE',epoch:this.epoch};
           }
         }
         if(read.thread.status?.type==='active')throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread is active in another client');
         const policy=await this.resolvePermissions(state.selectedPermissionMode,state.cwd!);
+        await this.discardWriterLease(state);
         const resumed=await this.mutation<any>('thread/resume',{threadId,excludeTurns:true,...(policy?threadPermissionOptions(policy):{})});
         if(!isObject(resumed?.thread))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread resume was not confirmed');
+        if(state.contextUnknown&&(typeof resumed.thread.cwd!=='string'||typeof resumed.cwd!=='string'||directoryKey(resumed.thread.cwd)!==directoryKey(state.cwd!)||directoryKey(resumed.cwd)!==directoryKey(state.cwd!)||resumed.thread.projectId!==read.thread.projectId))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native working directory reconciliation was not confirmed');
         if(resumed.thread.status?.type==='active')throw runtimeError(409,'RUNTIME_THREAD_CONFLICT','Thread is active in another client');
         state.loaded=true;state.released=false;state.handoffReady=false;state.externalWriter=false;
         state.nativeStatus=resumed.thread.status;state.model=resumed.model;state.reasoningEffort=resumed.reasoningEffort;
         state.permissions=this.verifyPermissions(resumed,policy,state.cwd!);
-        state.error=undefined;state.recoverOnIdle=false;
+        state.contextUnknown=false;state.pendingCwdIdentity=undefined;state.error=undefined;state.recoverOnIdle=false;
       } catch(error){
         const mapped=this.mapError(error);state.externalWriter=mapped.code==='RUNTIME_THREAD_CONFLICT';
         state.error=state.externalWriter?undefined:mapped.message;state.recoverOnIdle=false;
@@ -229,7 +347,7 @@ export class Runtime extends EventEmitter {
         if(state.releaseRequested&&state.loaded)void this.requestRelease(threadId).catch(()=>{});
         this.scheduleIdle();
       }
-      return {phase:this.phase(state)};
+      return {phase:this.phase(state),epoch:this.epoch};
     };
     state.openPromise=Promise.resolve().then(operation);return state.openPromise;
   }
@@ -241,7 +359,16 @@ export class Runtime extends EventEmitter {
 
   async threadHeaderRead(threadId:string,timeoutMs?:number):Promise<any>{
     this.requireString(threadId, 'threadId');
-    const result = await this.call<any>('thread/read', { threadId, includeTurns: false },false,false,timeoutMs);
+    let result:any;
+    if(timeoutMs!==undefined)result=await this.call<any>('thread/read', { threadId, includeTurns: false },false,false,timeoutMs);
+    else{
+      let pending=this.headerReads.get(threadId);
+      if(pending?.epoch!==this.epoch){
+        const promise=this.call<any>('thread/read', { threadId, includeTurns: false }).finally(()=>{if(this.headerReads.get(threadId)?.promise===promise)this.headerReads.delete(threadId);});
+        pending={epoch:this.epoch,promise};this.headerReads.set(threadId,pending);
+      }
+      result=await pending.promise;
+    }
     if (!isObject(result?.thread)||result.thread.id!==threadId) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread information is unavailable');
     this.requireUserThread(result.thread);
     const {turns,...thread}=result.thread;return thread;
@@ -263,9 +390,10 @@ export class Runtime extends EventEmitter {
     return null;
   }
 
-  async snapshot(threadId: string, options?: { window: boolean; signal?: AbortSignal }): Promise<any> {
+  async snapshot(threadId: string, options?: { window: boolean; signal?: AbortSignal; restartHistory?:boolean }): Promise<any> {
     this.requireString(threadId, 'threadId');
     const state = this.state(threadId);
+    state.maintenanceOnly=false;
     const revision = state.revision;
     const activityRevision = state.activityRevision;
     const snapshotSequence = ++state.snapshotSequence;
@@ -275,7 +403,7 @@ export class Runtime extends EventEmitter {
     const changed = (event: Change) => { if (event.threadId === threadId) changes.push(event); };
     this.on('snapshotChange', changed);
     let thread: any;
-    try { thread = await this.readThread(threadId, options?.window ? {} : undefined, options?.signal); } finally { this.off('snapshotChange', changed); }
+    try { thread = await this.readThread(threadId, options?.window ? {} : undefined, options?.signal,options?.restartHistory); } finally { this.off('snapshotChange', changed); }
     const mergedThread = this.mergeThread(thread, state);
     for (const event of changes) this.mergeSnapshotPatch(mergedThread, event.patch);
     // A read started before a newer operation/notification must not unlock that work.
@@ -288,7 +416,7 @@ export class Runtime extends EventEmitter {
         if(index>=0)mergedThread.turns[index]=structuredClone(recovered);
       }
       if (thread.status?.type === 'notLoaded') state.loaded = false;
-      if (state.error && state.recoverOnIdle && ['idle', 'notLoaded'].includes(thread.status?.type)
+      if (!state.contextUnknown && state.error && state.recoverOnIdle && ['idle', 'notLoaded'].includes(thread.status?.type)
         && !state.activeTurnId && !state.pending.size && !thread.turns.some((turn: any) => turn.status === 'inProgress')) {
         state.error = undefined;
         state.recoverOnIdle = false;
@@ -298,7 +426,12 @@ export class Runtime extends EventEmitter {
     }
     for (const turn of mergedThread.turns) if (turn.status === 'inProgress' && !state.liveTurns.has(turn.id) && !state.completedTurns.has(turn.id)) state.liveTurns.set(turn.id, structuredClone(turn));
     if (state.snapshotSequence === snapshotSequence) this.rememberSync(state, mergedThread);
-    const window = options?.window ? historyWindow(mergedThread.turns) : null;
+    if(state.initialHistory?.epoch===this.epoch&&thread.turns.some((turn:any)=>turn.id===state.initialHistory!.turnId))state.initialHistory=undefined;
+    return this.browserSnapshot(mergedThread,state,!!options?.window);
+  }
+
+  private browserSnapshot(mergedThread:any,state:ThreadState,windowed:boolean):any {
+    const window = windowed ? historyWindow(mergedThread.turns) : null;
     return {
       thread: window ? { ...mergedThread, turns: window.turns.map(browserTurn) } : mergedThread,
       ...(window ? { history: { nextCursor: window.nextCursor } } : {}),
@@ -314,7 +447,8 @@ export class Runtime extends EventEmitter {
       ...(state.permissions ? { permissions: structuredClone(state.permissions) } : {}),
       retry: state.retry ? { ...state.retry } : null,
       release: this.releaseState(state),
-      unmaterialized: state.emptyThreadEpoch === this.epoch,
+      titlePending: !!state.titleGeneration, unmaterialized: state.emptyThreadEpoch === this.epoch,
+      historyPending: state.initialHistory?.epoch === this.epoch,
     };
   }
 
@@ -378,15 +512,16 @@ export class Runtime extends EventEmitter {
     } finally { this.reads--; this.scheduleIdle(); }
   }
 
-  async status(threadId: string, epoch?: string): Promise<{ resync: boolean }> {
+  async status(threadId: string, epoch?: string): Promise<{ resync: boolean; epoch: string; revision: number }> {
     this.requireString(threadId, 'threadId');
     const state = this.state(threadId);
     await this.getServer();
-    if (!state.syncHeader || !state.syncTurns || state.syncEpoch !== this.epoch || (epoch && epoch !== this.epoch)) return { resync: true };
+    const reply=(resync:boolean)=>({resync,epoch:this.epoch,revision:state.revision});
+    if (!state.syncHeader || !state.syncTurns || state.syncEpoch !== this.epoch || (epoch && epoch !== this.epoch)) return reply(true);
     const revision = state.revision;
     const result = await this.call<any>('thread/read', { threadId, includeTurns: false });
     if (!isObject(result?.thread)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread status is unavailable');
-    if (!state.syncHeader || !state.syncTurns) return { resync: true };
+    if (!state.syncHeader || !state.syncTurns) return reply(true);
     const header = this.threadHeader(result.thread);
     // Native clocks change while this client streams. Completion and turn headers
     // below still detect missing terminal notifications without reloading items.
@@ -400,7 +535,7 @@ export class Runtime extends EventEmitter {
       let page: any;
       try { page = await this.call('thread/turns/list', { threadId, cursor, sortDirection: 'asc', itemsView: 'notLoaded' }); }
       catch (error) {
-        if (isObject(error) && error.code === 'RUNTIME_HISTORY_UNSUPPORTED' && state.emptyThreadEpoch === this.epoch && state.syncTurns?.size === 0 && turns.size === 0) break;
+        if (isObject(error) && ['RUNTIME_HISTORY_UNSUPPORTED','RUNTIME_HISTORY_NOT_MATERIALIZED'].includes(error.code) && state.emptyThreadEpoch === this.epoch && state.syncTurns?.size === 0 && turns.size === 0) break;
         if (isObject(error) && error.code === 'RUNTIME_HISTORY_UNSUPPORTED') {
           const full = await this.fullThread(threadId);
           for (const turn of full.turns) if (typeof turn?.id === 'string') turns.set(turn.id, this.turnSignature(turn));
@@ -415,10 +550,10 @@ export class Runtime extends EventEmitter {
       if (cursor) seen.add(cursor);
     } while (cursor);
     // A notification during the probe may be newer than its native response.
-    if (state.syncEpoch !== this.epoch || (epoch && epoch !== this.epoch)) return { resync: true };
-    if (state.revision !== revision) return { resync: false };
+    if (state.syncEpoch !== this.epoch || (epoch && epoch !== this.epoch)) return reply(true);
+    if (state.revision !== revision) return reply(false);
     resync ||= !isDeepStrictEqual(turns, state.syncTurns);
-    return { resync };
+    return reply(resync);
   }
 
   private async acceptedUserItem(threadId: string, turnId: string, clientId: string): Promise<any> {
@@ -498,15 +633,16 @@ export class Runtime extends EventEmitter {
     }
   }
 
-  create(input: { cwd: string; clientRequestId: string; prompt?: string } & TurnOptions): Promise<any> {
+  create(input: { cwd: string; clientRequestId: string; prompt?: string; nativeProjectId?:string|null } & TurnOptions): Promise<any> {
     this.requireString(input?.cwd, 'cwd');
     this.requireRequestId(input?.clientRequestId);
     if (input.prompt !== undefined && typeof input.prompt !== 'string') throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'prompt must be a string');
     if (input.model !== undefined && typeof input.model !== 'string') throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'model must be a string');
-    return this.idempotent(input.clientRequestId, JSON.stringify(['create', input.cwd, input.prompt ?? null, input.model ?? null, input.effort ?? null, input.permissionMode ?? null, input.nativeInput ?? null]), async () => {
+    if(input.nativeProjectId!==undefined&&input.nativeProjectId!==null)this.requireString(input.nativeProjectId,'nativeProjectId');
+    return this.idempotent(input.clientRequestId, JSON.stringify(['create', input.cwd, input.prompt ?? null, input.model ?? null, input.effort ?? null, input.permissionMode ?? null, input.nativeInput ?? null,input.nativeProjectId??null]), async () => {
       if (input.model) await this.validateTurnOptions(input, input.cwd);
       const policy = await this.resolvePermissions(input.permissionMode, input.cwd);
-      const result = await this.mutation<any>('thread/start', { cwd: input.cwd, ...(input.model ? { model: input.model } : {}), ...(policy ? threadPermissionOptions(policy) : {}) });
+      const result = await this.mutation<any>('thread/start', { cwd: input.cwd, ...(input.nativeProjectId?{projectId:input.nativeProjectId}:{}), ...(input.model ? { model: input.model } : {}), ...(policy ? threadPermissionOptions(policy) : {}) });
       const threadId = result?.thread?.id;
       if (typeof threadId !== 'string') throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread creation returned an invalid result');
       const state = this.state(threadId);
@@ -514,15 +650,23 @@ export class Runtime extends EventEmitter {
       state.released = false;
       state.emptyThreadEpoch = input.prompt ? undefined : this.epoch;
       try {
+        if(input.nativeProjectId&&result.thread.projectId!==input.nativeProjectId)throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread project identity was not confirmed; no task was sent');
+        if(typeof result.thread.cwd!=='string'||typeof result.cwd!=='string'||directoryKey(result.thread.cwd)!==directoryKey(input.cwd)||directoryKey(result.cwd)!==directoryKey(input.cwd)){state.contextUnknown=true;state.error='Native working directory was not confirmed';throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread working directory was not confirmed; no task was sent');}
         state.permissions = this.verifyPermissions(result, policy, input.cwd);
         state.selectedPermissionMode = input.permissionMode;
         state.cwd = input.cwd;
         state.model = result.model;
         state.reasoningEffort = result.reasoningEffort;
+        state.nativeName = result.thread.name;
         this.change(threadId, 'thread', { thread: this.threadHeader(result.thread) });
         await this.validateTurnOptions(input, input.cwd, state.model);
         if (!input.prompt && !input.nativeInput?.length) return { threadId, status: 'idle' };
-        return await this.startTurn(threadId, input.prompt ?? '', input, state, state.permissions);
+        const accepted=await this.startTurn(threadId, input.prompt ?? '', input, state, state.permissions);
+        state.initialHistory={epoch:this.epoch,turnId:accepted.turnId};
+        if(input.prompt?.trim()&&!state.nativeName&&!state.nameRevision)this.startTitleGeneration(threadId,input.prompt,result.modelProvider,result.thread.source,state);
+        const initialThread=this.mergeThread({...result.thread,turns:result.thread.turns??[]},state);
+        this.rememberSync(state,initialThread);
+        return {...accepted,initialSnapshot:this.browserSnapshot(initialThread,state,true)};
       } catch (error) {
         throw Object.assign(this.mapError(error), { partial: { threadId } });
       }
@@ -584,11 +728,12 @@ export class Runtime extends EventEmitter {
     if (input.expectedTurnId !== undefined) this.requireString(input.expectedTurnId, 'expectedTurnId');
     return this.idempotent(input.clientRequestId, JSON.stringify(['send', threadId, input.text, input.model ?? null, input.effort ?? null, input.permissionMode ?? null, input.nativeInput ?? null, input.expectedTurnId ?? null]), async () => {
       const state = this.state(threadId);
+      state.maintenanceOnly=false;
       this.requireUserThread({id:threadId});
       if (input.expectedTurnId !== undefined) {
         if (input.model !== undefined || input.effort !== undefined || input.permissionMode !== undefined) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', '插话沿用当前轮次的模型、推理强度和权限');
         await this.validateTurnOptions(input, state.cwd ?? this.options.cwd, state.model);
-        if (!state.loaded || state.released || state.releasePromise || state.reserved || state.pending.size || state.error || state.activeTurnId !== input.expectedTurnId) throw runtimeError(409, 'RUNTIME_STEER_CONFLICT', '当前轮次已变化或无法插话，请刷新后重新发送');
+        if (!state.loaded || state.released || state.releasePromise || state.reserved || state.pending.size || state.contextUnknown || state.error || state.activeTurnId !== input.expectedTurnId) throw runtimeError(409, 'RUNTIME_STEER_CONFLICT', '当前轮次已变化或无法插话，请刷新后重新发送');
         const result = await this.mutation<any>('turn/steer', {
           threadId, expectedTurnId: input.expectedTurnId, clientUserMessageId: input.clientRequestId,
           input: [...(input.text ? [{ type: 'text', text: input.text, text_elements: [] }] : []), ...(input.nativeInput ?? [])],
@@ -602,10 +747,11 @@ export class Runtime extends EventEmitter {
         } catch { this.change(threadId, 'resync'); }
         return { threadId, turnId: result.turnId, status: 'steered' };
       }
-      if (state.releasePromise || state.reserved || state.activeTurnId || state.pending.size || state.error || state.externalWriter || ['active', 'systemError'].includes(state.nativeStatus?.type)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Thread already has active or unresolved work');
+      if (state.releasePromise || state.reserved || state.activeTurnId || state.pending.size || state.contextUnknown || state.error || state.externalWriter || ['active', 'systemError'].includes(state.nativeStatus?.type)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Thread already has active or unresolved work');
       state.releaseRequested = false;
       state.handoffReady = false;
       state.reserved = true;
+      await this.discardWriterLease(state);
       state.waiter = this.waiter();
       state.completion = this.completion();
       this.change(threadId, 'phase');
@@ -644,13 +790,17 @@ export class Runtime extends EventEmitter {
   async abort(threadId: string): Promise<any> {
     this.requireString(threadId, 'threadId');
     const state = this.state(threadId);
-    if (!state.reserved && !state.activeTurnId) return { threadId, status: 'idle' };
-    if (!state.activeTurnId && state.waiter) await state.waiter.promise;
-    const turnId = state.activeTurnId;
-    if (!turnId) return { threadId, status: state.error ? 'unknown' : 'idle' };
-    await this.mutation('turn/interrupt', { threadId, turnId });
-    if (state.activeTurnId && state.completion) await state.completion.promise;
-    return { threadId, turnId, status: state.activeTurnId ? 'interrupting' : 'idle' };
+    const generation=state.titleGeneration;
+    generation?.controller.abort();
+    try {
+      if (!state.reserved && !state.activeTurnId) return { threadId, status: 'idle' };
+      if (!state.activeTurnId && state.waiter) await state.waiter.promise;
+      const turnId = state.activeTurnId;
+      if (!turnId) return { threadId, status: state.error ? 'unknown' : 'idle' };
+      await this.mutation('turn/interrupt', { threadId, turnId });
+      if (state.activeTurnId && state.completion) await state.completion.promise;
+      return { threadId, turnId, status: state.activeTurnId ? 'interrupting' : 'idle' };
+    } finally {await generation?.promise;}
   }
 
   release(threadId: string, automatic = false): Promise<any> {
@@ -666,11 +816,20 @@ export class Runtime extends EventEmitter {
     this.change(threadId, 'release');
     const operation = async () => {
       try {
+        state.titleGeneration?.controller.abort();
+        await state.titleGeneration?.promise;
+        await state.nameWrite?.catch(()=>{});
         if (!state.released) {
           const activityRevision = state.activityRevision;
           const thread = await this.readThread(threadId, { headersOnly: true });
           this.reconcile(threadId, thread, activityRevision);
           if (!this.canUnload(state, thread)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Native thread must be idle or finished before release');
+          await this.discardWriterLease(state);
+          state.nativeUnloaded=false;
+          state.unloadReceipt=Promise.withResolvers<void>();
+          const retain=this.options.writerLease??(process.platform==='win32'&&!this.options.args?retainWriterLease:undefined);
+          if(retain)try{state.writerLease=await retain(this.initializeInfo?.codexHome,threadId);state.writerLeaseServer=this.server;}
+          catch(error){this.writerCheckFailure(threadId,'capture_failed',error);}
           const result = await this.mutation<any>('thread/unsubscribe', { threadId });
           if (!['unsubscribed', 'notSubscribed', 'notLoaded'].includes(result?.status)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native release was not confirmed');
           state.nativeReleaseStatus = result.status;
@@ -680,13 +839,20 @@ export class Runtime extends EventEmitter {
           state.error = undefined;
           state.recoverOnIdle = false;
         }
-        if (!automatic) state.selectedPermissionMode = undefined;
+        if (!automatic) { state.selectedPermissionMode = undefined;state.releaseRequested = true; }
         state.reserved = false;
-        const runtimeStopped = state.handoffReady || await this.closeIdleServer();
-        state.handoffReady = !!runtimeStopped;
-        return { threadId, status: 'released', nativeStatus: state.nativeReleaseStatus ?? null, runtimeStopped: !!runtimeStopped, handoffReady: !!runtimeStopped,
-          ...(!runtimeStopped ? { warning: 'Subscription cancelled; waiting for other runtime work before ownership can be released' } : {}) };
+        if(state.writerLease&&!state.nativeUnloaded){
+          let timer:ReturnType<typeof setTimeout>|undefined;
+          try{await Promise.race([state.unloadReceipt?.promise,new Promise(resolve=>{timer=setTimeout(resolve,2000);})]);}finally{clearTimeout(timer);}
+          if(!state.nativeUnloaded)this.options.diagnostic?.({event:'writer_release_check',threadId:diagnosticId(threadId),outcome:'unconfirmed',reason:'unload_timeout'});
+        }
+        await this.finishThreadHandoff(threadId,state);
+        const runtimeStopped = state.handoffReady ? !this.server&&!this.stopping : await this.closeIdleServer();
+        state.handoffReady ||= !!runtimeStopped;
+        return { threadId, status: 'released', nativeStatus: state.nativeReleaseStatus ?? null, runtimeStopped: !!runtimeStopped,
+          handoffReady:!!state.handoffReady,...(!state.handoffReady ? { warning: 'Subscription cancelled; waiting for ownership release confirmation' } : {}) };
       } catch (error) {
+        await this.discardWriterLease(state);
         state.releaseError = this.mapError(error).message;
         throw error;
       } finally {
@@ -814,7 +980,7 @@ export class Runtime extends EventEmitter {
   diagnosticState(){
     const native=this.server?.diagnosticState(),waiting=new Set(native?.pending.map(request=>request.threadId));
     return {epoch:this.epoch,starting:!!this.starting,stopping:!!this.stopping,inFlight:this.inFlight,reads:this.reads,failures:this.failures,diagnosticsSeen:this.diagnosticsSeen,
-      native,threads:[...this.states.entries()].filter(([id,state])=>state.loaded||state.activeTurnId||state.reserved||waiting.has(id)).sort(([left],[right])=>Number(waiting.has(right))-Number(waiting.has(left))).slice(0,20).map(([id,state])=>({threadId:diagnosticId(id),phase:this.phase(state),projectKey:state.diagnosticProjectKey??(state.cwd?createHash('sha256').update(process.platform==='win32'?state.cwd.toLowerCase():state.cwd).digest('hex').slice(0,24):undefined)}))};
+      native,threads:[...this.states.entries()].filter(([id,state])=>state.loaded||state.activeTurnId||state.reserved||waiting.has(id)||((state.releaseRequested||state.released)&&!state.handoffReady)).sort(([left],[right])=>Number(waiting.has(right))-Number(waiting.has(left))).slice(0,20).map(([id,state])=>({threadId:diagnosticId(id),phase:this.phase(state),projectKey:state.diagnosticProjectKey??(state.cwd?createHash('sha256').update(process.platform==='win32'?state.cwd.toLowerCase():state.cwd).digest('hex').slice(0,24):undefined),release:{requested:!!state.releaseRequested,released:!!state.released,handoffReady:!!state.handoffReady}}))};
   }
 
   replay(threadId: string, lastId?: string): { reset: boolean; events: any[] } {
@@ -831,11 +997,15 @@ export class Runtime extends EventEmitter {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    for(const state of this.states.values()){state.titleGeneration?.controller.abort();state.historyRead?.controller.abort();}
+    await Promise.all([...this.states.values()].map(async state=>{await state.titleGeneration?.promise;await state.nameWrite?.catch(()=>{});}));
+    this.listReads.clear();this.headerReads.clear();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const server = this.server;
     this.server = undefined;
     this.starting = undefined;
-    if (server) await server.close();
+    try{if (server)try{await server.close();}finally{await settleNativeTitleCleanup(server);}}
+    finally{await Promise.all([...this.states.values()].map(state=>this.discardWriterLease(state)));}
   }
 
   private state(threadId: string): ThreadState {
@@ -891,7 +1061,7 @@ export class Runtime extends EventEmitter {
   modelInfo(){return {executable:this.options.executable,version:this.initializeInfo?.userAgent??null,readAt:this.modelCatalog?this.modelCatalog.expiresAt-5*60_000:null};}
 
   assertIdle(){
-    if(this.starting||this.stopping||this.inFlight||this.reads||[...this.states.values()].some(s=>s.reserved||s.activeTurnId||s.pending.size||s.recoverOnIdle||s.releasePromise||['active','systemError'].includes(s.nativeStatus?.type)))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动会话、待处理请求或读取操作。请等待所有任务、审批和输入处理完毕后再操作。');
+    if(this.starting||this.stopping||this.inFlight||this.reads||(this.server&&nativeTitleCleanupPending(this.server))||[...this.states.values()].some(s=>s.reserved||s.activeTurnId||s.pending.size||s.recoverOnIdle||s.releasePromise||s.titleGeneration||s.nameWrite||['active','systemError'].includes(s.nativeStatus?.type)))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动会话、待处理请求或读取操作。请等待所有任务、审批和输入处理完毕后再操作。');
   }
 
   async assertNativeIdle(){
@@ -1058,9 +1228,53 @@ export class Runtime extends EventEmitter {
   async rename(threadId: string, name: string): Promise<any> {
     this.requireString(threadId, 'threadId');
     if (typeof name !== 'string' || !name.trim() || name.trim().length > 120) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'Name must contain 1 to 120 characters');
-    await this.mutation('thread/name/set', { threadId, name: name.trim() });
-    this.change(threadId, 'name', { thread: { name: name.trim() } });
-    return { threadId, name: name.trim() };
+    const state=this.state(threadId);
+    state.maintenanceOnly=false;
+    state.nameRevision=(state.nameRevision??0)+1;
+    state.titleGeneration?.controller.abort();
+    return this.queueName(state,()=>this.writeName(threadId,name.trim()));
+  }
+
+  private queueName(state:ThreadState,operation:()=>Promise<any>):Promise<any>{
+    const next=(state.nameWrite??Promise.resolve()).catch(()=>{}).then(operation);
+    state.nameWrite=next;
+    void next.finally(()=>{if(state.nameWrite===next)state.nameWrite=undefined;}).catch(()=>{});
+    return next;
+  }
+
+  private async writeName(threadId:string,name:string):Promise<any>{
+    try{await this.mutation('thread/name/set',{threadId,name});}
+    catch(error){
+      if(this.mapError(error).code!=='RUNTIME_RESULT_UNKNOWN')throw error;
+      const read=await this.call<any>('thread/read',{threadId,includeTurns:false});
+      if(read.thread.name!==name)throw error;
+    }
+    const state=this.state(threadId);if(state.nativeName!==name){state.nativeName=name;this.change(threadId,'name',{thread:{name}});}
+    return {threadId,name};
+  }
+
+  private startTitleGeneration(threadId:string,prompt:string,provider:string,source:string,state:ThreadState):void {
+    if(typeof provider!=='string'||!SOURCE_KINDS.includes(source))return;
+    const model='gpt-6-luna',effort='low',cwd=state.cwd!;
+    const controller=new AbortController(),epoch=this.epoch,revision=state.nameRevision??0;
+    const generation={controller,promise:Promise.resolve()};
+    state.titleGeneration=generation;
+    this.change(threadId,'title');
+    generation.promise=(async()=>{
+      const server=await this.getServer();
+      const title=await generateNativeTitle(server,{cwd,model,provider,effort,prompt,source},controller.signal,id=>this.temporaryThreads.add(id),this.temporaryThreads);
+      if(!title||controller.signal.aborted)return;
+      await this.queueName(state,async()=>{
+        const writable=()=>!controller.signal.aborted&&!this.closed&&this.epoch===epoch&&state.loaded&&!state.released&&!state.releaseRequested&&!state.releasePromise&&(state.nameRevision??0)===revision&&!state.nativeName;
+        if(!writable())return;
+        const read=await this.call<any>('thread/read',{threadId,includeTurns:false});
+        if(read.thread.name){state.nativeName=read.thread.name;this.change(threadId,'name',{thread:{name:read.thread.name}});return;}
+        if(writable())await this.writeName(threadId,title);
+      });
+    })().catch(()=>{}).finally(()=>{
+      if(state.titleGeneration===generation)state.titleGeneration=undefined;
+      this.change(threadId,'title');this.scheduleIdle();
+    });
   }
 
   async accountIdentity(): Promise<{identity:string;resetProtocol:boolean}> {
@@ -1089,6 +1303,7 @@ export class Runtime extends EventEmitter {
     this.requireString(threadId,'threadId');
     if(archived)await this.open(threadId);
     const state=this.state(threadId);
+    state.maintenanceOnly=false;
     if(state.reserved||state.activeTurnId||state.pending.size||state.releasePromise||(archived&&this.phase(state)!=='IDLE'))throw runtimeError(409,'RUNTIME_THREAD_BUSY','会话仍被占用，请先结束任务或在其他应用中关闭。');
     state.reserved=true;
     try{
@@ -1134,11 +1349,13 @@ export class Runtime extends EventEmitter {
     return promise;
   }
 
-  private async mutation<T = unknown>(method: string, params: unknown): Promise<T> {
-    return this.call<T>(method, params, true);
+  private async mutation<T = unknown>(method: string, params: unknown,context?:NativeProjectContext,guard?:()=>void): Promise<T> {
+    this.listReads.clear();this.headerReads.clear();
+    try{return await this.call<T>(method, params, true,false,undefined,context,guard);}
+    finally{this.listReads.clear();this.headerReads.clear();}
   }
 
-  private async call<T = unknown>(method: string, params: unknown, uncertain = false, rawErrors = false,timeoutMs?:number): Promise<T> {
+  private async call<T = unknown>(method: string, params: unknown, uncertain = false, rawErrors = false,timeoutMs?:number,context?:NativeProjectContext,guard?:()=>void): Promise<T> {
     const deadline=timeoutMs===undefined?undefined:Date.now()+timeoutMs;
     this.inFlight++;
     if (this.idleTimer) clearTimeout(this.idleTimer);
@@ -1156,15 +1373,20 @@ export class Runtime extends EventEmitter {
       for (let attempt = 0; ; attempt++) {
         try {
           if(deadline!==undefined&&Date.now()>=deadline)throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native header read budget expired');
+          if(context)this.assertProjectContext(context);
+          guard?.();
           const result=await server.request<T>(method, params,deadline===undefined?undefined:Math.max(1,deadline-Date.now()));
+          if(context)this.assertProjectContext(context);
+          if(method==='thread/read'&&(!isObject(result)||!isObject(result.thread)||!isObject(params)||typeof result.thread.id!=='string'||result.thread.id!==params.threadId))throw runtimeError(503,'RUNTIME_UNAVAILABLE','Native thread information is unavailable');
           if(isObject(result)&&isObject(result.thread))this.rememberThreadSource(result.thread);
           return result;
         }
         catch (error) {
-          if(rawErrors)throw error;
+          if(context)this.assertProjectContext(context);
+          if(rawErrors||(error as any)?.code==='RUNTIME_SYNC_RESTARTED')throw error;
           const mapped = this.mapError(error, method, params);
           // thread/start may return before its rollout metadata is flushed. Retry only this read race.
-          if (!uncertain && timeoutMs===undefined && mapped.code === 'RUNTIME_HISTORY_NOT_READY' && attempt < 4) {
+          if (!uncertain && mapped.code === 'RUNTIME_HISTORY_NOT_READY' && attempt < 4 && (deadline===undefined||Date.now()+50*2**attempt<deadline)) {
             await new Promise(resolve => setTimeout(resolve, 50 * 2 ** attempt));
             continue;
           }
@@ -1188,11 +1410,13 @@ export class Runtime extends EventEmitter {
     if (this.starting) return this.starting;
     if (this.server) return Promise.resolve(this.server);
     this.epoch = randomUUID();
+    for(const state of this.states.values())state.historyRead?.controller.abort(runtimeError(503,'RUNTIME_SYNC_RESTARTED','会话运行时已切换，请重新读取历史。'));
+    this.listReads.clear();this.headerReads.clear();
     this.forkHeaders.clear();
     this.sequence = 0;
     this.events = [];
     this.eventBytes = 0;
-    const server = new AppServer({ executable: this.options.executable, cwd: this.options.cwd, args: this.options.args,diagnostic:this.options.diagnostic });
+    const server = new AppServer({ executable: this.options.executable, cwd: this.options.cwd, args: this.options.args??(process.platform==='win32'?['-c','thread_unload_delay_secs=0','app-server']:undefined),diagnostic:this.options.diagnostic });
     this.server = server;
     server.on('notification', (message) => { if (this.server === server) this.onNotification(message); });
     server.on('request', (message) => { if (this.server === server) this.onRequest(message); });
@@ -1212,14 +1436,19 @@ export class Runtime extends EventEmitter {
   private onFailure(server: AppServer): void {
     if (this.server !== server) return;
     this.failures++;
+    this.listReads.clear();this.headerReads.clear();
     this.server = undefined;
     this.starting = undefined;
     for (const [threadId, state] of this.states) {
+      const maintenanceOnly=state.maintenanceOnly&&!state.loaded&&state.cwd===undefined&&!state.error&&!state.contextUnknown&&!state.externalWriter&&!state.activeTurnId&&!state.pending.size&&!state.liveTurns.size&&!state.openPromise&&!state.nameWrite&&!state.waiter&&!state.completion&&!state.writerLease&&!state.pendingCwdIdentity&&!['active','systemError'].includes(state.nativeStatus?.type);
+      state.historyRead?.controller.abort(runtimeError(503,'RUNTIME_UNAVAILABLE','Native Codex runtime is unavailable'));
+      void this.discardWriterLease(state);
       state.loaded = false;
       state.waiter?.resolve('failed');
       state.completion?.resolve();
       this.clearLiveState(state);
       if (state.released) continue;
+      if(maintenanceOnly){state.reserved=false;continue;}
       state.error = 'Native runtime stopped; the last operation may have an unknown result';
       state.recoverOnIdle = true;
       state.activeTurnId = null;
@@ -1234,8 +1463,11 @@ export class Runtime extends EventEmitter {
     const method = message?.method;
     const params = message?.params;
     if (!isObject(params)) return;
+    if(method==='project/changed'){this.emit('projectCatalogChanged');return;}
+    if(params.thread?.ephemeral===true){if(typeof params.thread.id==='string')this.temporaryThreads.add(params.thread.id);return;}
+    if(this.temporaryThreads.has(params.threadId))return;
     if(method==='thread/started'&&isObject(params.thread)){this.rememberThreadSource(params.thread);return;}
-    if(method==='account/updated'||method==='account/rateLimits/updated')this.emit('accountChanged');
+    if(method==='account/updated'||method==='account/rateLimits/updated')this.emit('accountChanged',{method});
     if (method === 'serverRequest/resolved') {
       const pending = this.nativeRequests.get(nativeKey(params.requestId));
       if (pending) this.clearPending(pending, 'request');
@@ -1243,8 +1475,29 @@ export class Runtime extends EventEmitter {
     }
     if (typeof params.threadId !== 'string') return;
     const state = this.state(params.threadId);
-    if(['thread/status/changed','thread/closed','turn/started','turn/completed'].includes(method))state.activityRevision++;
+    if(method==='thread/settings/updated'){
+      const settings=params.threadSettings;
+      if(!isObject(settings)||typeof settings.cwd!=='string'||!isAbsolute(settings.cwd))return;
+      state.identityRevision=(state.identityRevision??0)+1;
+      if(typeof state.cwd==='string'&&directoryKey(state.cwd)!==directoryKey(settings.cwd)){state.contextUnknown=true;state.loaded=false;state.permissions=undefined;}
+      state.cwd=settings.cwd;this.headerReads.delete(params.threadId);this.invalidateForkHeader(params.threadId);
+      this.change(params.threadId,'thread',{thread:{cwd:settings.cwd}});return;
+    }
+    if(method==='thread/project/updated'){
+      if(params.projectId!==null&&typeof params.projectId!=='string')return;
+      state.identityRevision=(state.identityRevision??0)+1;
+      this.headerReads.delete(params.threadId);this.invalidateForkHeader(params.threadId);
+      this.change(params.threadId,'thread',{thread:{projectId:params.projectId}});this.emit('projectCatalogChanged');return;
+    }
+    if(method==='thread/name/updated'){
+      if(params.threadName!==undefined&&typeof params.threadName!=='string')return;
+      if(state.nativeName===(params.threadName??null))return;
+      state.nativeName=params.threadName??null;state.nameRevision=(state.nameRevision??0)+1;
+      this.change(params.threadId,'name',{thread:{name:state.nativeName}});return;
+    }
+    if(['thread/status/changed','thread/closed','turn/started','turn/completed'].includes(method)){state.activityRevision++;if(method==='turn/started'||params.status?.type==='active')state.maintenanceOnly=false;}
     if (method === 'thread/status/changed' || method === 'thread/closed') {
+      if(method==='thread/closed'){state.nativeUnloaded=true;state.unloadReceipt?.resolve();}
       state.nativeStatus = method === 'thread/closed' ? { type: 'notLoaded' } : params.status;
       if (state.nativeStatus?.type === 'notLoaded') state.loaded = false;
       this.change(params.threadId, 'status', { thread: { status: state.nativeStatus } });
@@ -1264,9 +1517,11 @@ export class Runtime extends EventEmitter {
       return;
     }
     if (method === 'turn/completed' && isObject(params.turn)) {
-      this.notification(params.threadId, `turn:${params.turn.id}`, params.turn.status === 'failed' ? 'failed' : 'complete');
       if (state.retry?.turnId === params.turn.id) state.retry = undefined;
       const turn = this.mergeLiveTurn(state, params.turn);
+      const finalItem=state.liveTurns.get(params.turn.id)?.items?.findLast((item:any)=>item?.type==='agentMessage'&&item.phase==='final_answer'&&typeof item.id==='string');
+      this.notification(params.threadId, `turn:${params.turn.id}`, params.turn.status === 'failed' ? 'failed' : 'complete',
+        {turnId:params.turn.id,...(finalItem?{itemId:finalItem.id}:{})});
       state.completedTurns.add(params.turn.id);
       if (!state.activeTurnId || state.activeTurnId === params.turn.id) {
         state.activeTurnId = null;
@@ -1341,6 +1596,7 @@ export class Runtime extends EventEmitter {
   private onRequest(message: any): void {
     const server = this.server;
     const params = message?.params;
+    if(this.temporaryThreads.has(params?.threadId)){try{server?.respondError(message.id,-32601,'Title generation does not accept tool interactions');}catch{}return;}
     const supported = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval', 'item/tool/requestUserInput', 'mcpServer/elicitation/request']);
     const turnId = isObject(params) && typeof params.turnId === 'string'
       ? params.turnId
@@ -1366,7 +1622,8 @@ export class Runtime extends EventEmitter {
     const pending: PendingRequest = { requestId, nativeId: message.id, method: message.method, params: structuredClone(params), epoch: this.epoch, threadId: params.threadId, turnId, answered: false };
     state.pending.set(requestId, pending);
     this.nativeRequests.set(nativeKey(message.id), pending);
-    this.notification(params.threadId, `request:${turnId}:${message.method}:${params.approvalId ?? params.itemId ?? nativeKey(message.id)}`, ['item/tool/requestUserInput', 'mcpServer/elicitation/request'].includes(message.method) ? 'input' : 'approval');
+    this.notification(params.threadId, `request:${turnId}:${message.method}:${params.approvalId ?? params.itemId ?? nativeKey(message.id)}`, ['item/tool/requestUserInput', 'mcpServer/elicitation/request'].includes(message.method) ? 'input' : 'approval',
+      {turnId,requestId:String(pending.requestId),...(typeof params.itemId==='string'?{itemId:params.itemId}:{})});
     this.change(params.threadId, 'request');
   }
 
@@ -1431,7 +1688,7 @@ export class Runtime extends EventEmitter {
     return incoming;
   }
 
-  private async readThread(threadId: string, window?: HistoryWindow, signal?: AbortSignal): Promise<any> {
+  private async readThread(threadId: string, window?: HistoryWindow, signal?: AbortSignal,restartHistory=false): Promise<any> {
     this.reads++;
     try {
       signal?.throwIfAborted();
@@ -1446,7 +1703,8 @@ export class Runtime extends EventEmitter {
         finally { signal.removeEventListener('abort', abort); }
       } else await ready;
       signal?.throwIfAborted();
-      const epoch=this.epoch,thread=await this.loadThread(threadId, window, signal);
+      const epoch=this.epoch,state=this.state(threadId),thread=state.initialHistory?.epoch===epoch&&!window?.before&&!window?.headersOnly
+        ?await this.startupHistory(threadId,window,signal,restartHistory):await this.loadThread(threadId, window, signal);
       signal?.throwIfAborted();
       if(epoch!==this.epoch)throw runtimeError(503,'RUNTIME_SYNC_RESTARTED','会话运行时已切换，请重新读取历史。');
       return thread;
@@ -1454,10 +1712,54 @@ export class Runtime extends EventEmitter {
     finally { this.reads--; this.scheduleIdle(); }
   }
 
-  private async loadThread(threadId: string, window?: HistoryWindow, signal?: AbortSignal): Promise<any> {
+  private async startupHistory(threadId:string,window?:HistoryWindow,signal?:AbortSignal,restartHistory=false):Promise<any>{
+    const state=this.state(threadId);
+    let job=state.historyRead;
+    const expired=()=>runtimeError(503,'RUNTIME_HISTORY_NOT_MATERIALIZED','任务已启动，历史同步仍未完成，请重新同步。');
+    if(job&&Date.now()>=job.deadline){job.controller.abort(expired());if(state.historyRead===job)state.historyRead=undefined;job=undefined;}
+    if(!job||job.epoch!==this.epoch||job.controller.signal.aborted){
+      const history=state.initialHistory!;if(restartHistory)history.deadline=undefined;
+      const controller=new AbortController(),epoch=this.epoch,deadline=history.deadline??=Date.now()+15_000;
+      if(Date.now()>=deadline)throw expired();
+      const timer=setTimeout(()=>controller.abort(expired()),deadline-Date.now());
+      job={epoch,deadline,controller,users:new Set(),promise:Promise.resolve()};state.historyRead=job;
+      const owned=job;
+      owned.promise=(async()=>{
+        const delays=[200,500,1000,2000,4000];
+        for(let attempt=0;;attempt++){
+          controller.signal.throwIfAborted();
+          if(epoch!==this.epoch)throw runtimeError(503,'RUNTIME_SYNC_RESTARTED','会话运行时已切换，请重新读取历史。');
+          try{return await this.abortable(this.loadThread(threadId,window,controller.signal,deadline),controller.signal);}
+          catch(error){
+            controller.signal.throwIfAborted();
+            if((error as any)?.code!=='RUNTIME_HISTORY_NOT_MATERIALIZED'||attempt===delays.length)throw error;
+            try{await wait(delays[attempt],undefined,{signal:controller.signal});}
+            catch(error){controller.signal.throwIfAborted();throw error;}
+          }
+        }
+      })().finally(()=>{clearTimeout(timer);if(state.historyRead===owned)state.historyRead=undefined;});
+    }
+    const user=Symbol();job.users.add(user);
+    try{return await this.abortable(job.promise,signal);}
+    finally{job.users.delete(user);if(!job.users.size)job.controller.abort();}
+  }
+
+  private async abortable<T>(promise:Promise<T>,signal?:AbortSignal):Promise<T>{
+    signal?.throwIfAborted();if(!signal)return promise;
+    let abort!:()=>void;
+    try{return await Promise.race([promise,new Promise<never>((_,reject)=>{abort=()=>reject(signal.reason);signal.addEventListener('abort',abort,{once:true});})]);}
+    finally{signal.removeEventListener('abort',abort);}
+  }
+
+  private historyCall<T=any>(method:string,params:unknown,signal?:AbortSignal,deadline?:number):Promise<T>{
+    signal?.throwIfAborted();
+    return this.abortable(this.call<T>(method,params,false,false,deadline===undefined?undefined:Math.max(1,deadline-Date.now())),signal);
+  }
+
+  private async loadThread(threadId: string, window?: HistoryWindow, signal?: AbortSignal,deadline?:number): Promise<any> {
     const state = this.state(threadId);
     let result: any;
-    try { result = await this.call<any>('thread/read', { threadId, includeTurns: false }); }
+    try { result = await this.historyCall('thread/read', { threadId, includeTurns: false },signal,deadline); }
     catch (error) {
       if (isObject(error) && error.code === 'RUNTIME_THREAD_NOT_LOADED' && state.emptyThreadEpoch && state.emptyThreadEpoch !== this.epoch) {
         throw runtimeError(404, 'RUNTIME_EMPTY_THREAD_NOT_PERSISTED', 'Empty thread was not persisted before the runtime stopped');
@@ -1477,15 +1779,15 @@ export class Runtime extends EventEmitter {
     for (;;) {
       let page: any;
       // Full turns can exceed the protocol frame limit; load their items in small pages below.
-      try { page = await this.call<any>('thread/turns/list', { threadId, cursor, sortDirection: 'asc', itemsView: 'notLoaded' }); }
+      try { page = await this.historyCall('thread/turns/list', { threadId, cursor, sortDirection: 'asc', itemsView: 'notLoaded' },signal,deadline); }
       catch (error) {
-        if (isObject(error) && error.code === 'RUNTIME_HISTORY_UNSUPPORTED' && state.emptyThreadEpoch === this.epoch && turns.size === 0) {
+        if (isObject(error) && ['RUNTIME_HISTORY_UNSUPPORTED','RUNTIME_HISTORY_NOT_MATERIALIZED'].includes(error.code) && state.emptyThreadEpoch === this.epoch && turns.size === 0) {
           thread.turns = [];
           return thread;
         }
         if (isObject(error) && error.code === 'RUNTIME_HISTORY_UNSUPPORTED') {
           signal?.throwIfAborted();
-          return this.fullThread(threadId);
+          return this.fullThread(threadId,signal,deadline);
         }
         throw error;
       }
@@ -1499,31 +1801,31 @@ export class Runtime extends EventEmitter {
     }
 
     const selected = window?.headersOnly ? [] : window ? historyWindow([...turns.values()], window.before).turns : [...turns.values()];
-    await this.readTurnBodies(threadId, selected, undefined, Boolean(window?.before), signal);
+    await this.readTurnBodies(threadId, selected, undefined, Boolean(window?.before), signal,deadline);
     thread.turns = [...turns.values()];
     // A turn may finish while history is paginating; confirm the earlier active header.
     if (thread.status?.type === 'active' && !thread.turns.some((turn: any) => turn.status === 'inProgress')) {
-      const latest = await this.call<any>('thread/read', { threadId, includeTurns: false });
+      const latest = await this.historyCall('thread/read', { threadId, includeTurns: false },signal,deadline);
       if (!isObject(latest?.thread)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread status is unavailable');
       thread.status = latest.thread.status;
     }
     return thread;
   }
 
-  private async fullThread(threadId: string): Promise<any> {
+  private async fullThread(threadId: string,signal?:AbortSignal,deadline?:number): Promise<any> {
     // ponytail: full-history reads are bounded by the protocol frame; use native pagination when available.
-    const result = await this.call<any>('thread/read', { threadId, includeTurns: true });
+    const result = await this.historyCall('thread/read', { threadId, includeTurns: true },signal,deadline);
     if (!isObject(result?.thread) || result.thread.id !== threadId || !Array.isArray(result.thread.turns))
       throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native full thread history is unavailable');
     return result.thread;
   }
 
-  private async readTurnBodies(threadId: string, turns: any[], itemId?: string, seek = false, signal?: AbortSignal): Promise<void> {
+  private async readTurnBodies(threadId: string, turns: any[], itemId?: string, seek = false, signal?: AbortSignal,deadline?:number): Promise<void> {
     signal?.throwIfAborted();
     try {
       for (const turn of turns) {
         if (turn.itemsView === 'full') continue;
-        turn.items = await this.readItems(threadId, turn.id, itemId, signal);
+        turn.items = await this.readItems(threadId, turn.id, itemId, signal,deadline);
         turn.itemsView = 'full';
       }
       return;
@@ -1538,7 +1840,7 @@ export class Runtime extends EventEmitter {
       let cursor: string | null = null;
       while (pending.size) {
         const pageCursor = cursor;
-        const page: any = await this.call('thread/turns/list', { threadId, cursor, limit: HISTORY_SIZE, sortDirection: 'desc', itemsView: 'notLoaded' });
+        const page: any = await this.historyCall('thread/turns/list', { threadId, cursor, limit: HISTORY_SIZE, sortDirection: 'desc', itemsView: 'notLoaded' },signal,deadline);
         signal?.throwIfAborted();
         if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn history is unavailable');
         const targets: { index: number; id: string; turn: any }[] = [];
@@ -1550,12 +1852,12 @@ export class Runtime extends EventEmitter {
         for (const target of targets) {
           const gap = target.index - consumed;
           if (gap) {
-            const skipped: any = await this.call('thread/turns/list', { threadId, cursor: bodyCursor, limit: gap, sortDirection: 'desc', itemsView: 'notLoaded' });
+            const skipped: any = await this.historyCall('thread/turns/list', { threadId, cursor: bodyCursor, limit: gap, sortDirection: 'desc', itemsView: 'notLoaded' },signal,deadline);
             signal?.throwIfAborted();
             if (!Array.isArray(skipped?.data) || skipped.data.length !== gap || typeof skipped.nextCursor !== 'string') throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn pagination changed while loading history');
             bodyCursor = skipped.nextCursor;
           }
-          const full: any = await this.call('thread/turns/list', { threadId, cursor: bodyCursor, limit: 1, sortDirection: 'desc', itemsView: 'full' });
+          const full: any = await this.historyCall('thread/turns/list', { threadId, cursor: bodyCursor, limit: 1, sortDirection: 'desc', itemsView: 'full' },signal,deadline);
           signal?.throwIfAborted();
           if (!Array.isArray(full?.data) || full.data.length !== 1 || full.data[0]?.id !== target.id) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native turn pagination changed while loading history');
           const value = full.data[0];
@@ -1577,7 +1879,7 @@ export class Runtime extends EventEmitter {
     const seen = new Set<string>();
     let cursor: string | null = null;
     while (pending.size) {
-      const page: any = await this.call('thread/turns/list', { threadId, cursor, limit: 1, sortDirection: 'desc', itemsView: 'full' });
+      const page: any = await this.historyCall('thread/turns/list', { threadId, cursor, limit: 1, sortDirection: 'desc', itemsView: 'full' },signal,deadline);
       signal?.throwIfAborted();
       if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native full turn history is unavailable');
       for (const value of page.data) {
@@ -1596,12 +1898,12 @@ export class Runtime extends EventEmitter {
     }
   }
 
-  private async readItems(threadId: string, turnId: string, itemId?: string, signal?: AbortSignal): Promise<any[]> {
+  private async readItems(threadId: string, turnId: string, itemId?: string, signal?: AbortSignal,deadline?:number): Promise<any[]> {
     const items = new Map<string, any>();
     let cursor: string | null = null;
     const seen = new Set<string>();
     for (;;) {
-      const page: any = await this.call('thread/items/list', { threadId, turnId, cursor, limit: 10, sortDirection: 'asc' });
+      const page: any = await this.historyCall('thread/items/list', { threadId, turnId, cursor, limit: 10, sortDirection: 'asc' },signal,deadline);
       signal?.throwIfAborted();
       if (!Array.isArray(page?.data)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native item history is unavailable');
       for (const entry of page.data) if (entry?.turnId === turnId && isObject(entry.item) && typeof entry.item.id === 'string') {
@@ -1659,7 +1961,7 @@ export class Runtime extends EventEmitter {
     if (state.reserved || state.activeTurnId) return 'RUNNING';
     if (state.externalWriter) return 'EXTERNAL';
     if (state.nativeStatus?.type === 'active') return state.loaded && !state.released ? 'UNKNOWN' : 'EXTERNAL';
-    if (state.error || state.nativeStatus?.type === 'systemError') return 'UNKNOWN';
+    if (state.contextUnknown || state.error || state.nativeStatus?.type === 'systemError') return 'UNKNOWN';
     if (state.released) return 'RELEASED';
     return 'IDLE';
   }
@@ -1676,7 +1978,7 @@ export class Runtime extends EventEmitter {
     if(this.rememberThreadSource(thread))throw runtimeError(404,'RUNTIME_SUBAGENT_THREAD','子 Agent 会话不单独展示，请返回主会话。');
   }
 
-  private async notification(threadId: string, eventKey: string, kind: 'complete' | 'failed' | 'approval' | 'input'): Promise<void> {
+  private async notification(threadId: string, eventKey: string, kind: 'complete' | 'failed' | 'approval' | 'input', target:{turnId?:string;itemId?:string;requestId?:string}={}): Promise<void> {
     const key = `${threadId}:${eventKey}`;
     if (this.notificationKeys.has(key)) return;
     this.notificationKeys.add(key);
@@ -1687,7 +1989,7 @@ export class Runtime extends EventEmitter {
       try{await this.call('thread/read',{threadId,includeTurns:false});}catch{return;}
     }
     if(state.subagent!==false||this.closed)return;
-    this.emit('notification', { threadId, eventKey, kind });
+    this.emit('notification', { threadId, eventKey, kind, ...target });
   }
 
   private change(threadId: string, kind: string, patch: Patch = {}): void {
@@ -1697,7 +1999,7 @@ export class Runtime extends EventEmitter {
     if (state.syncHeader && patch.thread) Object.assign(state.syncHeader, structuredClone(patch.thread));
     if (state.syncTurns && patch.turn?.status) state.syncTurns.set(patch.turn.id, this.turnSignature(patch.turn));
     if (state.syncHeader && state.syncTurns && (patch.thread || patch.turn?.status)) this.cacheSync(threadId, state);
-    const metadata = { phase: this.phase(state), activeTurnId: state.activeTurnId, pending: [...state.pending.values()].map(({requestId, method, params}) => ({requestId, method, params})), error: state.error ?? null, permissions: state.permissions ?? null, retry: state.retry ?? null, release: this.releaseState(state), model: state.model ?? null, ...(state.reasoningEffort !== undefined ? {reasoningEffort:state.reasoningEffort} : {}), unmaterialized: state.emptyThreadEpoch === this.epoch };
+    const metadata = { phase: this.phase(state), activeTurnId: state.activeTurnId, pending: [...state.pending.values()].map(({requestId, method, params}) => ({requestId, method, params})), error: state.error ?? null, permissions: state.permissions ?? null, retry: state.retry ?? null, release: this.releaseState(state), model: state.model ?? null, ...(state.reasoningEffort !== undefined ? {reasoningEffort:state.reasoningEffort} : {}), titlePending: !!state.titleGeneration, unmaterialized: state.emptyThreadEpoch === this.epoch };
     let change: Change = structuredClone({ id: `${this.epoch}:${sequence}`, threadId, kind, revision: state.revision, patch: { state: metadata, ...patch } });
     this.emit('snapshotChange', change);
     // Keep authoritative snapshot merges complete; only the browser journal is projected.
@@ -1719,12 +2021,12 @@ export class Runtime extends EventEmitter {
       setImmediate(async () => {
         try {
           for (const [id, state] of this.states) if (state.releaseRequested && !state.handoffReady && !state.releaseError && !state.releasePromise && !state.reserved && !state.activeTurnId && !state.pending.size) {
-            try { await this.release(id, true); } catch {}
+            try { if(state.released){if(!await this.finishThreadHandoff(id,state))await this.closeIdleServer();}else await this.release(id, true); } catch {}
           }
         } finally { this.releaseQueued = false; }
       });
     }
-    if (this.closed || !this.server || this.inFlight || this.reads || [...this.states.values()].some((state) => state.reserved || state.activeTurnId || state.pending.size || state.recoverOnIdle)) return;
+    if (this.closed || !this.server || this.inFlight || this.reads || [...this.states.values()].some((state) => state.reserved || state.activeTurnId || state.pending.size || state.recoverOnIdle || state.titleGeneration || state.nameWrite)) return;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const server = this.server;
     this.idleTimer = setTimeout(() => {
@@ -1735,24 +2037,58 @@ export class Runtime extends EventEmitter {
   }
 
   private async closeIdleServer(): Promise<boolean> {
+    // An uncertain temporary start never blocks stopping our otherwise idle child;
+    // AppServer.close settles its retained outcome and the process owns the remaining resource.
     if (this.stopping) { await this.stopping; return true; }
-    const busy = () => [...this.states.values()].some(state => state.reserved || state.activeTurnId || state.pending.size || state.recoverOnIdle || ['active', 'systemError'].includes(state.nativeStatus?.type));
+    const busy = () => [...this.states.values()].some(state => state.reserved || state.activeTurnId || state.pending.size || state.recoverOnIdle || state.titleGeneration || state.nameWrite || ['active', 'systemError'].includes(state.nativeStatus?.type));
     const deadline = Date.now() + 2000;
     while ((this.inFlight || this.reads) && !busy() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     const server = this.server;
     if (!server || this.inFlight || this.reads || busy()) return false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.server = undefined;
-    this.stopping = server.close();
+    this.stopping = server.close().finally(()=>settleNativeTitleCleanup(server));
     try {
       await this.stopping;
       for (const [id, state] of this.states) {
         state.loaded = false;
         this.clearLiveState(state);
-        if (state.released) { state.handoffReady = true; this.change(id, 'release'); }
+        await this.discardWriterLease(state);
+        if (state.released&&!state.handoffReady) { state.handoffReady = true; this.change(id, 'release'); }
       }
     } finally { this.stopping = undefined; }
     return true;
+  }
+
+  private async discardWriterLease(state:ThreadState):Promise<boolean>{
+    const lease=state.writerLease;state.writerLease=undefined;state.writerLeaseServer=undefined;state.nativeUnloaded=false;state.unloadReceipt?.resolve();state.unloadReceipt=undefined;
+    try{await lease?.close();return true;}catch(error){this.writerCheckFailure([...this.states].find(([,value])=>value===state)?.[0]??'','helper_cleanup_failed',error);return false;}
+  }
+
+  private finishThreadHandoff(threadId:string,state:ThreadState):Promise<boolean>{
+    if(state.handoffReady)return Promise.resolve(true);
+    if(state.handoffCheck)return state.handoffCheck;
+    const lease=state.writerLease,server=state.writerLeaseServer;
+    if(!lease||!state.nativeUnloaded||!state.released||state.reserved||state.activeTurnId||state.pending.size||server!==this.server||this.closed)return Promise.resolve(false);
+    const operation=async()=>{
+      let released=false;
+      let failure:unknown;
+      try{released=await lease.released();}catch(error){failure=error;}
+      if(state.writerLease!==lease||server!==this.server||this.closed||!state.released||state.reserved||state.activeTurnId||state.pending.size)return false;
+      if(failure)this.writerCheckFailure(threadId,'probe_failed',failure);
+      else this.options.diagnostic?.({event:'writer_release_check',threadId:diagnosticId(threadId),outcome:released?'released':'unconfirmed',reason:released?'positive_lock':'writer_held'});
+      const cleaned=await this.discardWriterLease(state);
+      if(released&&cleaned&&!this.closed&&server===this.server&&state.released&&!state.reserved&&!state.activeTurnId&&!state.pending.size){state.handoffReady=true;this.change(threadId,'release');return true;}
+      return false;
+    };
+    state.handoffCheck=operation().finally(()=>{state.handoffCheck=undefined;});return state.handoffCheck;
+  }
+
+  private writerCheckFailure(threadId:string,reason:string,error:unknown):void{
+    const exception=error instanceof Error?error:new Error(String(error));
+    const errorMessage=exception.message.slice(0,2048),errorName=exception.name.slice(0,128);
+    this.options.diagnostic?.({event:'writer_release_check',threadId:diagnosticId(threadId),outcome:'unconfirmed',reason,errorName,errorMessage,...(Number.isSafeInteger((error as any)?.win32Error)?{win32Error:(error as any).win32Error}:{})});
+    if((error as any)?.code!=='WRITER_CHECK_NOT_HELD')console.error(`Writer release check ${reason}: ${errorName}: ${errorMessage}`);
   }
 
   private clearLiveState(state: ThreadState): void {
@@ -1778,9 +2114,10 @@ export class Runtime extends EventEmitter {
     if (method === 'thread/items/list' && message === 'thread/items/list is not supported yet') return runtimeError(503, 'RUNTIME_ITEMS_UNSUPPORTED', 'Native item pagination is not supported');
     if (method === 'turn/steer' && /no active turn|expected.*turn|turn.*mismatch/i.test(message)) return runtimeError(409, 'RUNTIME_STEER_CONFLICT', '当前轮次已结束或变化，请刷新后重新发送');
     if (method === 'thread/turns/list' && message.trim().toLowerCase() === 'list_turns is not supported yet') return runtimeError(503, 'RUNTIME_HISTORY_UNSUPPORTED', 'Native turn history is not supported');
-    if (method === 'thread/turns/list' && isObject(params) && typeof params.threadId === 'string'
+    if(method==='thread/read'&&isObject(error)&&error.code===-32601&&isObject(params)&&params.includeTurns===true&&message==='list_turns is not supported yet')return runtimeError(503,'RUNTIME_HISTORY_UNSUPPORTED','Native turn history is not supported');
+    if (method === 'thread/turns/list' && isObject(error) && error.code===-32600 && isObject(params) && typeof params.threadId === 'string'
       && message === `thread ${params.threadId} is not materialized yet; thread/turns/list is unavailable before first user message`) {
-      return runtimeError(503, 'RUNTIME_HISTORY_UNSUPPORTED', 'Native turn history is not available before the first user message');
+      return runtimeError(503, 'RUNTIME_HISTORY_NOT_MATERIALIZED', '会话历史尚未物化，请稍后重新同步。');
     }
     if (method === 'thread/read' && /^thread not loaded(?::|$)/i.test(message.trim())) return runtimeError(404, 'RUNTIME_THREAD_NOT_LOADED', 'Thread is not loaded in the native runtime');
     if (method?.startsWith('thread/') && /(?:record|thread) not found/i.test(message)) return runtimeError(404, 'RUNTIME_NOT_FOUND', 'Thread was not found');

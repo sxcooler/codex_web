@@ -1,6 +1,7 @@
 import {createContext,useCallback,useContext,useEffect,useRef,useState,type CSSProperties,type ReactNode} from 'react';
 import {api} from './api.ts';
 import {absoluteTime,balanceText,codexCredits,countdown,creditCount,credits,finite,headlineRemaining,isCodex,pendingKey,readPending,remaining,timestamp,usableCredit,usageGroups,windowLabel,type AccountUsage,type ResetCredit,type ResetOperation,type UsageGroup} from './accountUsage.ts';
+import {sharedStateEvent,type SharedStateChange} from './sharedState.ts';
 
 const Context=createContext<{open:(source:HTMLElement)=>void;label:string;remaining:number|null;stale:boolean;content:ReactNode;watch:()=>()=>void}|null>(null);
 const text=(value:unknown,fallback:string)=>typeof value==='string'&&value.trim()?value:fallback;
@@ -20,39 +21,47 @@ export function AccountUsagePanel({active=true}:{active?:boolean}){
 export function AccountUsageProvider({children}:{children:ReactNode}){
   const [data,setData]=useState<AccountUsage|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[open,setOpen]=useState(false),[now,setNow]=useState(Date.now()),[visiblePanels,setVisiblePanels]=useState(0);
   const [selected,setSelected]=useState<{accountId:string;credit:ResetCredit}|null>(null),[pending,setPending]=useState<ResetOperation|null>(null),[busy,setBusy]=useState(false),[storageError,setStorageError]=useState('');
-  const current=useRef(data),alive=useRef(true),locked=useRef(false),inflight=useRef<{fresh:boolean;promise:Promise<AccountUsage|null>}|null>(null),panel=useRef<HTMLDialogElement>(null),confirmation=useRef<HTMLDialogElement>(null),cancel=useRef<HTMLButtonElement>(null),opener=useRef<HTMLElement|null>(null);
+  const current=useRef(data),alive=useRef(true),usageGeneration=useRef(0),usageRevision=useRef(0),locked=useRef(false),inflight=useRef<{fresh:boolean;promise:Promise<AccountUsage|null>}|null>(null),panel=useRef<HTMLDialogElement>(null),confirmation=useRef<HTMLDialogElement>(null),cancel=useRef<HTMLButtonElement>(null),opener=useRef<HTMLElement|null>(null);
   const watch=useCallback(()=>{setVisiblePanels(count=>count+1);return()=>setVisiblePanels(count=>count-1);},[]);
   const restorePending=(accountId:string|null)=>{try{setPending(accountId?readPending(accountId):null);setStorageError('');}catch(e:any){setPending(null);setStorageError(e.message||'浏览器存储不可用，无法安全保存操作标识。');}};
+  const invalidate=useCallback(()=>{usageGeneration.current++;usageRevision.current++;current.current=null;setData(null);setPending(null);setSelected(null);setNotice('');setError('');setNow(Date.now());},[]);
+  const accept=useCallback((value:AccountUsage):AccountUsage|null=>{
+    if(!value||typeof value!=='object'||!(value.accountId===null||typeof value.accountId==='string'))throw Error('用量数据暂不可用');
+    if(current.current?.accountId===value.accountId&&finite(current.current.updatedAt)&&finite(value.updatedAt)&&value.updatedAt<current.current.updatedAt)return null;
+    if(current.current?.accountId!==value.accountId){usageGeneration.current++;setSelected(null);setNotice('');}
+    current.current=value;setData(value);
+    if(value.accountId&&value.pendingReset?.accountId===value.accountId){setSelected(null);try{localStorage.setItem(pendingKey(value.accountId),JSON.stringify(value.pendingReset));restorePending(value.accountId);}catch{setPending(value.pendingReset);setStorageError('浏览器存储不可用；服务已保存本次操作标识。');}}
+    else restorePending(value.accountId);
+    setError(value.error||'');setNow(Date.now());return value;
+  },[]);
   const read=useCallback(async(fresh=false):Promise<AccountUsage|null>=>{
     if(!alive.current)return null;
     if(inflight.current){if(!fresh||inflight.current.fresh)return inflight.current.promise;await inflight.current.promise;return read(true);}
-    setLoading(true);
+    const generation=usageGeneration.current,revision=usageRevision.current;setLoading(true);
     const promise=(async()=>{try{
       const value:AccountUsage=await api('/account/usage'+(fresh?'?refresh=true':''));
-      if(!alive.current)return null;
-      if(!value||typeof value!=='object'||!(value.accountId===null||typeof value.accountId==='string'))throw Error('用量数据暂不可用');
-      if(current.current?.accountId!==value.accountId){setSelected(null);setNotice('');}
-      current.current=value;setData(value);
-      if(value.accountId&&value.pendingReset?.accountId===value.accountId){setSelected(null);try{localStorage.setItem(pendingKey(value.accountId),JSON.stringify(value.pendingReset));restorePending(value.accountId);}catch{setPending(value.pendingReset);setStorageError('浏览器存储不可用；服务已保存本次操作标识。');}}
-      else restorePending(value.accountId);
-      setError(value.error||'');setNow(Date.now());return value;
-    }catch(e:any){if(alive.current){if(e.data?.code==='ACCOUNT_CHANGED'){current.current=null;setData(null);setPending(null);setSelected(null);}setError(e.message||'用量更新失败');setNow(Date.now());}return null;}finally{inflight.current=null;if(alive.current)setLoading(false);}})();
+      if(!alive.current||generation!==usageGeneration.current)return null;
+      // The same fresh read may be pushed before its HTTP response; use the newer valid snapshot.
+      if(revision!==usageRevision.current&&current.current?.accountId===value.accountId&&finite(current.current?.updatedAt)&&finite(value.updatedAt)&&current.current!.updatedAt>=value.updatedAt)return current.current;
+      return accept(value);
+    }catch(e:any){if(alive.current&&generation===usageGeneration.current&&revision===usageRevision.current){if(e.data?.code==='ACCOUNT_CHANGED')invalidate();setError(e.message||'用量更新失败');setNow(Date.now());}return null;}finally{inflight.current=null;if(alive.current)setLoading(false);}})();
     inflight.current={fresh,promise};return promise;
-  },[]);
+  },[accept,invalidate]);
   useEffect(()=>{
     alive.current=true;void read();
-    const wake=()=>{if(document.visibilityState==='visible'&&Date.now()-(current.current?.updatedAt||0)>30000)void read();};
-    const lost=()=>{alive.current=false;current.current=null;setData(null);setPending(null);setSelected(null);setOpen(false);setNotice('');setError('');};
+    const lost=()=>{alive.current=false;invalidate();setOpen(false);};
+    const shared=(event:Event)=>{
+      if(!alive.current)return;const {kind,value}=(event as CustomEvent<SharedStateChange>).detail;
+      if(kind==='ready'){void read();return;}
+      if(kind==='usage-invalidated'){invalidate();return;}
+      if(kind==='usage-error'){usageGeneration.current++;usageRevision.current++;if(value?.code==='ACCOUNT_CHANGED')invalidate();setError(text(value?.message,'用量更新失败'));setNow(Date.now());return;}
+      if(kind==='usage')try{if(accept(value))usageRevision.current++;}catch(e:any){setError(e.message);}
+    };
     const storage=()=>{restorePending(current.current?.accountId??null);};
-    const timer=setInterval(()=>{if(document.visibilityState==='visible'){setNow(Date.now());void read();}},60000);
-    window.addEventListener('focus',wake);document.addEventListener('visibilitychange',wake);window.addEventListener('auth-lost',lost);window.addEventListener('storage',storage);
-    return()=>{alive.current=false;clearInterval(timer);window.removeEventListener('focus',wake);document.removeEventListener('visibilitychange',wake);window.removeEventListener('auth-lost',lost);window.removeEventListener('storage',storage);};
-  },[read]);
+    window.addEventListener(sharedStateEvent,shared);window.addEventListener('auth-lost',lost);window.addEventListener('storage',storage);
+    return()=>{alive.current=false;usageRevision.current++;window.removeEventListener(sharedStateEvent,shared);window.removeEventListener('auth-lost',lost);window.removeEventListener('storage',storage);};
+  },[read,accept,invalidate]);
   useEffect(()=>{if(!visiblePanels)return;const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[visiblePanels]);
-  useEffect(()=>{
-    const deadlines=usageGroups(data).flatMap(([,group])=>[group.primary?.resetsAt,group.secondary?.resetsAt]).map(timestamp).filter((value):value is number=>value!==null&&value>Date.now());
-    if(!deadlines.length)return;const timer=setTimeout(()=>{if(document.visibilityState==='visible')void read(true);},Math.min(2147483647,Math.max(1,Math.min(...deadlines)-Date.now()+50)));return()=>clearTimeout(timer);
-  },[data,read]);
   useEffect(()=>{const dialog=panel.current;if(open&&!dialog?.open)dialog?.showModal();else if(!open&&dialog?.open){dialog.close();opener.current?.focus();}},[open]);
   useEffect(()=>{const dialog=confirmation.current;if(selected&&!dialog?.open){dialog?.showModal();cancel.current?.focus();}else if(!selected&&dialog?.open)dialog.close();},[selected]);
   const freshEnough=(value:AccountUsage|null)=>!!value&&!value.stale&&!value.error&&finite(value.updatedAt)&&Date.now()-value.updatedAt<30000;

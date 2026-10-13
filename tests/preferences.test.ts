@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {readSendShortcut,writeSendShortcut,shouldSubmit,readSessionSort,writeSessionSort} from '../src/web/preferences.ts';
+import {readSendShortcut,writeSendShortcut,shouldSubmit,readSessionSort,writeSessionSort,readSessionGrouping,writeSessionGrouping,readCollapsedProjects} from '../src/web/preferences.ts';
 
 const key='codex-web:send-shortcut:v1';
 test('session sort defaults to native update time and notifies only a confirmed preference write',t=>{
@@ -44,4 +44,20 @@ test('desktop shortcuts protect Shift, IME and mobile Enter for both modes',()=>
       [{...enter,ctrlKey:true,metaKey:true},true,shortcut,false],
     ]),
   ] as const)assert.equal(shouldSubmit(event as typeof enter,{mobile:mobile as boolean,shortcut:shortcut as 'enter'|'mod-enter'}),want,JSON.stringify({event,mobile,shortcut}));
+});
+
+test('fresh and legacy clients use the same project grouping and preserve directory folds',t=>{
+ const values=new Map<string,string>();
+ const original=Object.getOwnPropertyDescriptor(globalThis,'localStorage');
+ Object.defineProperty(globalThis,'localStorage',{value:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},configurable:true});
+ t.after(()=>{if(original)Object.defineProperty(globalThis,'localStorage',original);else delete (globalThis as any).localStorage;});
+ assert.equal(readSessionGrouping(),'project');
+ values.set('codex-web:session-grouping:v1','project');values.set('codex-web:project-collapse:v1',JSON.stringify(['c:/work/one','']));
+ assert.equal(readSessionGrouping(),'project');assert.deepEqual([...readCollapsedProjects()],['c:/work/one','']);
+ values.set('codex-web:session-grouping:v2','directory');values.set('codex-web:project-collapse:v2',JSON.stringify(['directory:c:/work/one','directory:','project:"old"']));
+ assert.equal(readSessionGrouping(),'project');assert.deepEqual([...readCollapsedProjects()],['c:/work/one','']);
+ values.set('codex-web:session-grouping:v2','project');assert.equal(readSessionGrouping(),'project');assert.equal(readCollapsedProjects().has('project:one'),false);
+ assert.equal(values.get('codex-web:session-grouping:v1'),'project');
+ values.set('codex-web:session-grouping:v2','flat');assert.equal(readSessionGrouping(),'flat');
+ assert.equal(writeSessionGrouping('directory' as any),false);
 });

@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline';
 
 const threads = new Map();
+const projects = new Map(),projectKeys=new Map();let projectCreates=0,projectLists=0,lastMetadata,lastSettings,initializeParams;
 const archivedThreads = new Set();
 const approvals = new Map();
 const mode = process.argv[2] ?? 'normal';
@@ -183,11 +184,28 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return;
   }
   if (method === 'initialize') {
+    initializeParams=params;
     const response = () => send({ id, result: { userAgent: 'codex-cli/fixture', codexHome: process.cwd(), platformFamily: 'windows', platformOs: 'windows' } });
     if (mode === 'delayed-init') return setTimeout(response, 60);
     return response();
   }
   if (!initialized) return send({ id, error: { code: -32000, message: 'request arrived before initialized' } });
+  if(method==='project/list'){
+    projectLists++;
+    if(mode==='projects-unavailable'||(mode==='projects-partial'&&params.cursor))return send({id,error:{code:-32601,message:'project list unavailable'}});
+    const data=[...projects.values()];
+    return send({id,result:{data:mode==='projects-partial'?[]:data,nextCursor:['projects-loop','projects-partial'].includes(mode)?'same':null}});
+  }
+  if(method==='project/create'){
+    projectCreates++;
+    if(mode==='projects-create-fail')return send({id,error:{code:-32600,message:'project create failed'}});
+    let project=projectKeys.get(params.idempotencyKey);
+    if(!project){project={id:'project-'+(projects.size+1),name:params.name,roots:params.roots,metadata:{},createdAt:1,updatedAt:1,position:projects.size};projects.set(project.id,project);projectKeys.set(params.idempotencyKey,project);}
+    return send({id,result:{project}});
+  }
+  if(method==='fixture/projects'){projects.clear();for(const project of params.data)projects.set(project.id,project);return send({id,result:{}});}
+  if(method==='thread/metadata/update'){lastMetadata=params;const value=threads.get(params.threadId);value.projectId=params.projectId||null;return send({id,result:{thread:value}});}
+  if(method==='thread/settings/update'){lastSettings=params;const value=threads.get(params.threadId);if(mode!=='cwd-mismatch')value.cwd=params.cwd;return send({id,result:settings(value)});}
   if (method === 'model/list') { modelLists++; return send({ id, result: { data: [{ id: 'fixture', model: 'fixture', displayName: 'Fixture', description: '', hidden: false, supportedReasoningEfforts: [{reasoningEffort:'low',description:''},{reasoningEffort:'high',description:''}], defaultReasoningEffort: 'low', inputModalities: ['text','image'], isDefault: true }, { id:'actual-text',model:'actual-text',displayName:'Text only',hidden:false,supportedReasoningEfforts:[{reasoningEffort:'low'}],defaultReasoningEffort:'low',inputModalities:['text'],isDefault:false }], nextCursor: null } }); }
   if (mode === 'settings-conflict' && method === 'config/read') return send({id,result:{config:{web_search:'cached'},origins:{},layers:[{name:{type:'user',file:process.cwd()+'/fixture-config.toml',profile:null},version:'user-v1',config:{web_search:'cached'}}]}});
   if (mode === 'settings-conflict' && method === 'config/batchWrite') return send({id,error:{code:-32600,message:'FAKE_SECRET_MUST_NOT_LEAK',data:{config_write_error_code:'configVersionConflict'}}});
@@ -195,7 +213,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (method === 'configRequirements/read') return send({ id, result: { requirements: mode === 'managed' ? { allowedSandboxModes: ['read-only'], allowedApprovalPolicies: ['on-request'] } : null } });
   if (method === 'thread/name/set') { threads.get(params.threadId).name = params.name; return send({id,result:{}}); }
   if (method === 'account/read') return send({ id, result: { account: { type: 'chatgpt', email: 'fixture@example.test', planType: 'plus' }, requiresOpenaiAuth: true } });
-  if (method === 'thread/list') return send({ id, result: { data: [...threads.values()].filter(value=>archivedThreads.has(value.id)===!!params.archived).map((value) => ({ ...value, turns: [] })), nextCursor: null, backwardsCursor: null } });
+  if (method === 'thread/list') return send({ id, result: { data: [...threads.values()].filter(value=>archivedThreads.has(value.id)===!!params.archived&&(params.projectId!==null||value.projectId===null)).map((value) => ({ ...value, turns: [] })), nextCursor: null, backwardsCursor: null } });
   if (method === 'fixture/native-thread') { const value={...thread(params.threadId),...params.thread};value.status=params.status;threads.set(value.id,value);return send({id,result:{}}); }
   if (method === 'thread/loaded/list') {
     if(mode==='loaded-error')return send({id,error:{code:-32601,message:'unsupported'}});
@@ -207,8 +225,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return send({id,result:method==='thread/archive'?{}:{thread:threads.get(params.threadId)}});
   }
   if (method === 'thread/start') {
+    if(params.ephemeral)return send({id,error:{code:-32600,message:'ephemeral generation is unsupported in this legacy fixture'}});
     lastThread = params;
     const value = thread(mode === 'unmaterialized-current' ? '00000000-0000-4000-8000-000000000010' : `thread-${nextThread++}`, params.cwd);
+    value.projectId=mode==='projects-ignore-identity'?null:params.projectId??null;
     threads.set(value.id, value);
     return send({ id, result: settings(value, params) });
   }
@@ -219,7 +239,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     if (mode === 'fork-disconnect') return process.exit(9);
     const source = threads.get(params.threadId);
     const end = source.turns.findIndex(turn => turn.id === params.lastTurnId) + 1;
-    const value = {...thread(`fork-${forks}`, source.cwd, structuredClone(source.turns.slice(0, mode === 'fork-future' ? undefined : end))), forkedFromId:source.id};
+    const value = {...thread(`fork-${forks}`, source.cwd, structuredClone(source.turns.slice(0, mode === 'fork-future' ? undefined : end))), forkedFromId:source.id,projectId:source.projectId};
     threads.set(value.id,value);
     const result = settings(value);
     if (mode === 'fork-source-id') result.thread = source;
@@ -294,7 +314,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       value.status = { type: 'idle' };
     }
     if (mode === 'unsupported-empty') return send({ id, error: { code: -32000, message: 'list_turns is not supported yet' } });
-    if (mode === 'unmaterialized-current') return send({ id, error: { code: -32000, message: `thread ${params.threadId} is not materialized yet; thread/turns/list is unavailable before first user message` } });
+    if (mode === 'unmaterialized-current' && !threads.get(params.threadId)?.turns.length) return send({ id, error: { code: -32600, message: `thread ${params.threadId} is not materialized yet; thread/turns/list is unavailable before first user message` } });
     if (mode === 'pagination') {
       const old = turn('old', 'completed', [{ type: 'agentMessage', id: 'summary', text: 'summary', phase: null, memoryCitation: null, delivery: null, questions: null }]);
       old.itemsView = 'summary';
@@ -337,6 +357,6 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return finish(params.threadId, activeTurn, 'interrupted');
   }
   if (method === 'thread/unsubscribe') {unsubscribes++;return send({ id, result: { status: mode === 'not-subscribed' ? 'notSubscribed' : 'unsubscribed' } });}
-  if (method === 'fixture/stats') return send({ id, result: { forks, lastFork, turnStarts, interrupts, lastTurn, modelLists, lastThread, lastResume, itemLists, threadReads, turnLists, fullTurnLists, headerTurnLists, resumes, unsubscribes } });
+  if (method === 'fixture/stats') return send({ id, result: { initializeParams,projectCreates,projectLists,lastMetadata,lastSettings,forks, lastFork, turnStarts, interrupts, lastTurn, modelLists, lastThread, lastResume, itemLists, threadReads, turnLists, fullTurnLists, headerTurnLists, resumes, unsubscribes } });
   send({ id, error: { code: -32601, message: `unknown ${method}` } });
 });

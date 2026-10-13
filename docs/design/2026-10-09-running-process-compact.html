@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>运行过程精简展示 · 修订设计</title>
+<style>
+:root{color-scheme:dark;font:14px/23px "Microsoft YaHei",sans-serif;background:#161c1f;color:#e2e7e8;--line:#354249;--muted:#99a6ac;--space:12px}
+*{box-sizing:border-box}body{margin:0}main{max-width:1000px;margin:auto;padding:24px}h1{font-size:18px;font-weight:600;margin:0 0 8px}p{margin:0}a{color:#a8cdbb}button,summary{cursor:pointer}button{font:inherit;color:inherit;background:#222b2f;border:1px solid #425057;border-radius:5px;padding:6px 12px}button[aria-pressed="true"]{border-color:#8abda6}.muted{color:var(--muted);font-size:12px}.intro{margin-bottom:16px}.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.turn{border:1px solid var(--line);border-radius:6px;padding:0 16px}.turn>summary{padding:var(--space) 0}.row{display:flex;align-items:baseline;gap:8px;min-height:23px;line-height:23px;flex-wrap:wrap}.meta{color:var(--muted);font-size:12px;margin-left:auto}.name{color:#c0cbcF;overflow-wrap:anywhere}summary{list-style:none}summary::-webkit-details-marker{display:none}summary:before{content:'›';color:var(--muted);width:10px;flex:none}details[open]>summary:before{content:'⌄'}
+.entry{border-top:1px solid var(--line);padding:var(--space) 0}.message .byline{font-size:12px;color:var(--muted);line-height:23px}.message p{margin-top:8px}.content{margin-top:var(--space)}.tool{padding:10px 0;border-top:1px solid #2b373d}.tool:first-child{padding-top:0;border-top:0}.tool:last-child{padding-bottom:0}.tool details{margin-top:8px}.tool summary{color:#b5c9d1}pre{margin:8px 0 0;padding:12px;background:#121719;border:1px solid #2e3b41;border-radius:4px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.65}.issue>summary{color:#d8bb8c}.image-preview{display:block;max-width:100%;width:480px;height:auto;border:1px solid var(--line);border-radius:4px}.image-meta{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;margin-top:8px}.path{color:var(--muted);font-size:12px;overflow-wrap:anywhere}.live{color:var(--muted)}.final{padding:16px 0}.final .byline{font-size:12px;color:var(--muted);line-height:23px}.final p{margin-top:8px}.note{margin-top:16px}.hidden{display:none}
+@media(max-width:500px){main{padding:16px 12px}.turn{padding:0 12px}.row{gap:6px}.turn>summary .state{flex-basis:100%;margin-left:16px}.image-preview{width:100%}.filename{max-width:calc(100% - 110px)}.meta{font-size:12px}}
+</style>
+<main>
+<h1>运行过程 · 修订设计</h1>
+<p class="intro muted">示例数据。每条记录上下内边距均为 12px；长消息自然换行。产品尚未修改。</p>
+<div class="bar"><button id="running" type="button" aria-pressed="true">运行中</button><button id="completed" type="button" aria-pressed="false">已完成</button><span class="muted">可展开执行记录与“查看图片”</span></div>
+<details class="turn" id="turn" open>
+<summary class="row"><span id="title">执行中</span><span class="muted" id="elapsed">已用 2分15秒</span><span class="muted">12 项过程</span><span class="meta state" id="status">正在思考</span></summary>
+<div class="process">
+<article class="entry message"><div class="byline">Codex</div><p>离线修复和录像验证已通过。我再核对读回截图与接续记录，确认是否还有启动前的阻塞。</p></article>
+<details class="entry records"><summary class="row"><span>执行记录 · 3 项</span><span class="muted">命令、思考与协作</span></summary><div class="content">
+<div class="tool"><div class="row"><span>命令</span><span class="name">git status --short</span><span class="meta">exit 0</span></div><details><summary class="row">查看命令与输出</summary><pre>git status --short
+（工作区状态示例）</pre></details></div>
+<div class="tool"><div class="row"><span>思考</span><span class="muted">未提供摘要</span></div></div>
+<div class="tool"><div class="row"><span>子 Agent</span><span class="name">readiness_readonly</span><span class="meta">已完成</span></div></div>
+</div></details>
+<details class="entry image-step" id="view-image"><summary class="row"><span>查看图片</span><span class="name filename">readback-01.png</span></summary><div class="content">
+验证截图保存在隔离测试记录中，不随公开源码分发。
+<div class="image-meta"><span class="path">artifacts/readback-01.png</span><a class="muted" href="2026-10-09-running-process-image-sample.svg" target="_blank" rel="noopener">在新标签页预览</a></div>
+</div></details>
+<article class="entry message"><div class="byline">Codex</div><p>截图里的状态与读回记录一致。正在检查实机前置条件，尚未确认的风险会保留在记录中。</p></article>
+<details class="entry issue"><summary class="row"><span>命令</span><span class="name">git commit --dry-run</span><span class="meta" style="color:inherit">exit 1</span></summary><div class="content"><pre>git commit --dry-run
+On branch master
+nothing to commit, working tree clean</pre><p class="muted" style="margin-top:8px">退出码 1 单独显示，展开可看原始输出。</p></div></details>
+<details class="entry records"><summary class="row"><span>执行记录 · 5 项</span><span class="muted">查询、修改与工具调用</span></summary><div class="content">
+<div class="tool"><div class="row"><span>命令</span><span class="name">git log -1</span><span class="meta">exit 0</span></div></div>
+<div class="tool"><div class="row"><span>代码查询</span><span class="meta">已完成</span></div></div>
+<div class="tool"><div class="row"><span>文件修改</span><span class="name">docs/status.md</span></div></div>
+<div class="tool"><div class="row"><span>MCP 工具</span><span class="name">search_graph</span><span class="meta">已完成</span></div></div>
+<div class="tool"><div class="row"><span>思考</span><span class="muted">详细记录</span></div></div>
+</div></details>
+<div class="entry live" id="live"><div class="row">正在思考</div></div>
+</div>
+</details>
+<article class="final hidden" id="final"><div class="byline">Codex · 最终答复</div><p>核对完成。离线验证通过，实机前置条件和剩余风险已写入交接记录。</p></article>
+<p class="note muted">查看图片默认只显示文件名，展开后看图片与路径。生成的图片作为交付结果保留；完成后过程收起。</p>
+</main>
+<script>
+const turn=document.querySelector('#turn'),running=document.querySelector('#running'),completed=document.querySelector('#completed');
+function state(done){turn.open=!done;document.querySelector('#title').textContent=done?'执行过程':'执行中';document.querySelector('#elapsed').textContent=done?'用时 3分42秒':'已用 2分15秒';document.querySelector('#status').textContent=done?'已完成':'正在思考';document.querySelector('#final').classList.toggle('hidden',!done);document.querySelector('#live').classList.toggle('hidden',done);running.setAttribute('aria-pressed',String(!done));completed.setAttribute('aria-pressed',String(done))}
+running.addEventListener('click',()=>state(false));completed.addEventListener('click',()=>state(true));
+</script>
+</html>

@@ -5,6 +5,7 @@ import { createServer, request } from 'node:http';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import {Lifecycle} from '../src/server/lifecycle.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const data = join(root, '.local', 'web');
@@ -49,21 +50,30 @@ export async function stopServer(onlyIfIdle = false) {
 }
 
 export async function runServer(portable = false, diagnosticsEnabled = false) {
+  const lifecycle=new Lifecycle(data,diagnosticsEnabled);
+  lifecycle.record('startup',{reason:'worker_start'});
+  try {
   if (portable) for (const key of ['WEB_ORIGIN', 'PORT', 'WORK_ROOT', 'CODEX_BIN']) delete process.env[key];
   process.env.WEB_DATA_DIR = data;
   await mkdir(data, { recursive: true, mode: 0o700 });
   const config = JSON.parse(await readFile(join(data, 'config.json'), 'utf8').catch((error: any) => { if (error.code === 'ENOENT') return '{}'; throw error; }));
+  const port=Number(process.env.PORT??config.port??3000);if(Number.isInteger(port)&&port>0&&port<=65535)lifecycle.port=port;
   const { startServer } = await import('../src/server/main.ts');
-  const app = await startServer(diagnosticsEnabled); // Returns only after this instance successfully binds its Web port.
+  const app = await startServer(diagnosticsEnabled,false); // Returns only after this instance successfully binds its Web port.
   const token = randomBytes(32).toString('hex');
   let state: Instance;
   let closing: Promise<void> | undefined;
-  const shutdown = () => closing ??= (async () => {
-    await app.close();
-    control.closeAllConnections();
-    await new Promise<void>(resolve => control.close(() => resolve()));
-    const saved = JSON.parse(await readFile(record, 'utf8').catch(() => '{}'));
-    if (saved.token === token) await unlink(record).catch(() => {});
+  const shutdown = (reason:string) => closing ??= (async () => {
+    lifecycle.record('shutdown_begin',{reason});
+    try { try { await app.close(); }
+    finally {
+      control.closeAllConnections();
+      await new Promise<void>(resolve => control.close(() => resolve()));
+      const saved = JSON.parse(await readFile(record, 'utf8').catch(() => '{}'));
+      if (saved.token === token) await unlink(record).catch(() => {});
+    }
+    lifecycle.record('shutdown_end',{reason});
+    }catch(error){lifecycle.record('shutdown_failure',{reason},error);throw error;}
   })();
   const control = createServer(async (req, res) => {
     if (req.headers.origin || req.headers.authorization !== `Bearer ${token}`) { res.writeHead(403).end(); return; }
@@ -71,7 +81,7 @@ export async function runServer(portable = false, diagnosticsEnabled = false) {
     if(req.url==='/prepare-update'||req.url==='/stop-idle'){try{const prepare=(app as any)[req.url==='/stop-idle'?'prepareRestart':'prepareUpdate'];if(typeof prepare!=='function')throw Error('Idle preparation unavailable');await prepare.call(app);}catch{res.writeHead(409).end();return;}}
     res.setHeader('Content-Type', 'application/json'); res.setHeader('Connection', 'close');
     res.end(JSON.stringify(state));
-    if (req.url === '/stop' || req.url === '/stop-idle') res.on('finish', () => { void shutdown().catch(error => { console.error(error); process.exitCode = 1; }); });
+    if (req.url === '/stop' || req.url === '/stop-idle') res.on('finish', () => { lifecycle.record('control_stop',{reason:req.url==='/stop-idle'?'control_stop_idle':'control_stop'});void shutdown(req.url==='/stop-idle'?'control_stop_idle':'control_stop').catch(error => { console.error(error); process.exitCode = 1; }); });
   });
   try {
     await new Promise<void>((resolve, reject) => { control.once('error', reject); control.listen(0, '127.0.0.1', resolve); });
@@ -80,8 +90,10 @@ export async function runServer(portable = false, diagnosticsEnabled = false) {
     const temporary = record + '.' + token;
     await writeFile(temporary, JSON.stringify(state), { mode: 0o600, flag: 'wx' });
     await rename(temporary, record);
-    for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { void shutdown().catch(error => { console.error(error); process.exitCode = 1; }); });
-  } catch (error) { control.close(); await app.close(); throw error; }
+    lifecycle.record('ready',{reason:'worker_ready',controlPort:address.port});
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { lifecycle.record('signal',{reason:'signal',signal});void shutdown(signal).catch(error => { console.error(error); process.exitCode = 1; }); });
+  } catch (error) { lifecycle.record('startup_failure',{reason:'control_startup_failed'},error);control.close(); await app.close(); throw error; }
+  }catch(error){lifecycle.record('startup_failure',{reason:'startup_failed'},error);throw error;}
 }
 
 export async function startBackground(portable = false, diagnosticsEnabled = false) {

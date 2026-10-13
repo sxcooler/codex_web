@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {chatFileUrl,fileUrl,linkedFile,fileImageUrl} from '../src/web/fileLinks.ts';
+import {chatFileUrl,fileUrl,linkedFile,fileImageUrl,relativeFile,previewFilePath} from '../src/web/fileLinks.ts';
+
+test('preview copy resolves host paths including worktrees and selected nested repositories',()=>{
+ const path='.worktrees/temporal-pipeline-benchmark/docs/中文 空格.md';
+ assert.equal(previewFilePath('C:\\Users\\Developer\\work\\project',path),'C:\\Users\\Developer\\work\\project\\.worktrees\\temporal-pipeline-benchmark\\docs\\中文 空格.md');
+ assert.equal(previewFilePath('C:/work/project/',path),'C:/work/project/'+path);
+ assert.equal(previewFilePath('/home/project/','docs/readme.md','vendor/sub'),'/home/project/vendor/sub/docs/readme.md');
+ assert.equal(previewFilePath('\\\\server\\share\\project\\','docs/readme.md'),'\\\\server\\share\\project\\docs\\readme.md');
+ assert.equal(previewFilePath('/','readme.md'),'/readme.md');
+ for(const [root,path,repository] of [[undefined,'a.md',''],['C:/work','',''],['C:/work','../escape.md',''],['C:/work','a.md','../escape'],['relative','a.md',''],['C:/work','..\\escape.md',''],['/home/work','/outside.md','']] as const)assert.equal(previewFilePath(root,path,repository),'');
+});
 
 test('document links resolve within the active project without opening local protocols',()=>{
   const origin='https://web.example',root='C:\\work\\project';
@@ -49,4 +59,23 @@ test('absolute project images reuse local file boundary checks and keep document
   assert.equal(resolve('../runs/a.png'),origin+'/api/sessions/session/files/image?path=runs%2Fa.png');
   assert.equal(fileImageUrl('s','docs/report.md','/home/project/runs/a.png',origin,'/home/project'),origin+'/api/sessions/s/files/image?path=runs%2Fa.png');
   for(const url of [root+'-other/a.png',root+'/../private.png','C:/outside/private.png','https://evil.invalid/a.png','file://remote/a.png','\\\\remote\\a.png'])assert.equal(resolve(url),'',url);
+});
+
+test('local directory links distinguish the project root from invalid or empty targets',()=>{
+ const origin='https://web.example',root='C:/work/project',target='https://web.example/api/sessions/s/files/content?path=.';
+ for(const path of ['.','./','C:/work/project','C:/work/project/','c:\\WORK\\project\\','file:///C:/work/project/'])assert.equal(chatFileUrl('s',root,path,origin),target,path);
+ assert.equal(chatFileUrl('s','/home/test/project','/home/test/project',origin),target);
+ assert.equal(fileUrl('s','README.md','./',origin),target);
+ assert.equal(fileUrl('s','docs/README.md','../',origin),target);
+ assert.equal(linkedFile('s','docs/README.md',target,origin),'.');
+ assert.equal(relativeFile('docs/README.md','../'),'.');
+ for(const path of ['', '../', 'C:/work/project/../', 'C:/work/project-other', 'javascript:alert(1)', '%2f%2foutside/a'])assert.equal(chatFileUrl('s',root,path,origin),'',path);
+ for(const path of ['', '../../', 'javascript:alert(1)', '%zz'])assert.equal(relativeFile('docs/README.md',path),'',path);
+ assert.equal(linkedFile('s','',origin+'/api/sessions/s/files/content?path=',origin),'');
+ assert.equal(fileImageUrl('s','README.md','./',origin,root),'');
+ assert.equal(fileImageUrl('s','README.md',root,origin,root),'');
+});
+
+test('absolute Linux project roots cannot become image targets',()=>{
+ for(const path of ['/home/project','/home/project/','/home/project///'])assert.equal(fileImageUrl('s','README.md',path,'https://web.example','/home/project'),'');
 });
