@@ -41,7 +41,7 @@ const server=await createServer({cacheDir:'.local/shared-state-vite',server:{hos
 await server.listen();
 const origin=`http://127.0.0.1:${server.httpServer.address().port}`;
 const browser=await chromium.launch({channel:'chrome',headless:true});
-const context=await browser.newContext({viewport:{width:1280,height:900}}),pages=[],errors=[];
+const context=await browser.newContext({locale:'zh-CN',viewport:{width:1280,height:900}}),pages=[],errors=[];
 const until=async(check,message)=>{const end=Date.now()+10_000;while(!await check()){assert.ok(Date.now()<end,message);await new Promise(resolve=>setTimeout(resolve,25));}};
 const broadcast=(kind,value={})=>{for(const {response} of streams)response.write(`event: ${kind}\ndata: ${JSON.stringify(value)}\n\n`);};
 const listReads=()=>requests.filter(request=>request.path==='/api/sessions');

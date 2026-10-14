@@ -30,7 +30,7 @@ for(const diagnosticMode of [false,true])test(`API exceptions retain message and
   app.post('/api/failure/:threadId',async()=>{throw cause;});
   const headers=await login();headers['x-private-header']='private-header-sentinel';
   const response=await app.inject({method:'POST',url:'/api/failure/test-thread?search=private-query-sentinel',headers,payload:{prompt:'private-prompt-sentinel'}});
-  assert.equal(response.statusCode,500);assert.deepEqual(response.json(),{error:'Internal server error'});
+  assert.equal(response.statusCode,500);assert.deepEqual(response.json(),{error:'Internal server error',code:'INTERNAL_ERROR'});
   assert.equal(logs.length,1,'ordinary mode must always log the exception');
   const ordinary=JSON.parse(logs[0]);
   assert.equal(ordinary.event,'api_error');assert.equal(ordinary.route,'/api/failure/:threadId');assert.equal(ordinary.method,'POST');
@@ -64,7 +64,7 @@ test('error logging failures never change the API error response',async t=>{
   t.mock.method(console,'error',()=>{throw new Error('stderr failed');});
   (diagnostics as any).recordHttpError=()=>{throw new Error('diagnostic failed');};
   const response=await app.inject({url:'/api/failure',headers});
-  assert.equal(response.statusCode,500);assert.deepEqual(response.json(),{error:'Internal server error'});
+  assert.equal(response.statusCode,500);assert.deepEqual(response.json(),{error:'Internal server error',code:'INTERNAL_ERROR'});
 });
 
 test('diagnostics still records the exception when ordinary logging fails',async t=>{

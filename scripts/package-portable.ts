@@ -13,7 +13,7 @@ const executable = windows ? 'node.exe' : 'node';
 // Official v24.20.0 SHASUMS256.txt; Linux binary hash is derived from the verified archive.
 const linuxArchiveHash = '2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2';
 const nodeHash = windows ? '5c976096e04e5c2c1f091938926234cc9fbebfe9787ddd149351b3b0ecc707b5' : '89af8424dd53e560b1933f87ba650d8bf57c83ca5a04600eefb31f416aabbae7';
-export const runtimeFiles = ['src/server', 'src/codex', 'src/projects.ts', 'scripts/setup-auth.ts', 'scripts/portable.ts', 'scripts/server-control.ts', 'scripts/update-portable.ts','scripts/portable-manifest.ts', 'scripts/windows', 'scripts/linux', 'dist'];
+export const runtimeFiles = ['src/server', 'src/codex', 'src/projects.ts', 'scripts/setup-auth.ts', 'scripts/portable.ts', 'scripts/tailscale.ts', 'scripts/server-control.ts', 'scripts/update-portable.ts','scripts/portable-manifest.ts', 'scripts/windows', 'scripts/linux', 'dist'];
 export function sourceAllowed(path: string): boolean {
   return !path.toLowerCase().split('/').some(part => ['.git', '.local', '.worktrees', '.superpowers', '.codebase-memory', 'node_modules', 'dist', 'releases', 'output', 'test-results', 'playwright-report'].includes(part))
     && !/(^|\/)\.env(?!\.example$)|\.(?:sqlite(?:-wal|-shm)?|db|log|pem|key|pfx)$/i.test(path)
@@ -33,6 +33,28 @@ async function copy(source: string, target: string, allowed = (_path: string) =>
   if ((await lstat(source)).isSymbolicLink()) throw new Error('Package input must not be a symbolic link');
   await mkdir(dirname(target), { recursive: true });
   await cp(source, target, { recursive: true, filter: async path => { if (!allowed(path)) return false; if ((await lstat(path)).isSymbolicLink()) throw new Error('Symbolic link in package input'); return true; } });
+}
+export async function copyPortableDocs(source: string, target: string, tracked: string[]) {
+  const architecture = 'codex-drive/specs/2026-10-14-internationalization.arch.md';
+  const packagedArchitecture = 'docs/design/2026-10-14-internationalization.arch.md';
+  // Installed updaters accept docs/ and README_EN.md, but not new top-level names.
+  for (const path of tracked) {
+    if (!sourceAllowed(path) || !(['README.md','README_CN.md',architecture].includes(path) || path.startsWith('docs/'))) continue;
+    const destination=path===architecture?packagedArchitecture:path==='README_CN.md'?'README_EN.md':path;
+    await copy(join(source,path),join(target,destination));
+    if (path.endsWith('.md')) {
+      const document=join(target,destination);
+      let content=await readFile(document,'utf8');
+      for(const [original,packaged] of [[architecture,packagedArchitecture],['README_CN.md','README_EN.md']]){
+        const oldLink=relative(dirname(path),original).split(sep).join('/');
+        const newLink=relative(dirname(destination),packaged).split(sep).join('/');
+        content=original===architecture?content.replaceAll(oldLink,newLink):content
+          .replaceAll(`](${oldLink})`,`](${newLink})`)
+          .replaceAll(`](${oldLink}#`,`](${newLink}#`);
+      }
+      await writeFile(document,content);
+    }
+  }
 }
 function zip(source: string, target: string) {
   if (!windows) { execFileSync('python3', ['-m', 'zipfile', '-c', target, basename(source)], { cwd: dirname(source), stdio: 'inherit' }); return; }
@@ -102,7 +124,7 @@ async function main() {
     }
     if(windows)await writeFile(join(portable,'Update.cmd'),'@echo off\r\nsetlocal\r\n"%~dp0runtime\\node.exe" "%~dp0scripts\\update-portable.ts" %*\r\nexit /b %errorlevel%\r\n');
     else await writeFile(join(portable,'Update.sh'),'#!/usr/bin/env bash\nset -euo pipefail\ncd -- "$(dirname -- "${BASH_SOURCE[0]}")"\nexec ./runtime/node ./scripts/update-portable.ts "$@"\n',{mode:0o755});
-    for (const path of tracked) if ((['README.md', 'README_EN.md'].includes(path) || path.startsWith('docs/')) && sourceAllowed(path)) await copy(join(repo, path), join(portable, path));
+    await copyPortableDocs(repo,portable,tracked);
     await writeFile(join(portable, 'THIRD-PARTY-NOTICES.txt'), 'Node.js: runtime/NODE-LICENSE.txt\nDependency licenses and notices are retained in node_modules.\nCodex CLI is not included; use your own installation and account.\n');
     execFileSync(join(portable, 'runtime', executable), ['--input-type=module', '-e', "await import('./src/server/app.ts'); const {default: sharp} = await import('sharp'); await sharp({create:{width:1,height:1,channels:3,background:'white'}}).png().toBuffer(); console.log('Packaged backend and native image processing OK')"], { cwd: portable, stdio: 'inherit', windowsHide: true });
 

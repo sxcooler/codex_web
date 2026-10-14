@@ -6,7 +6,7 @@ let browser;
 try{
  browser=await chromium.launch({channel:'chrome',headless:true});
  for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
-  const page=await browser.newPage({viewport}),requests=[],external=[],errors=[];
+  const page=await browser.newPage({locale:'zh-CN',viewport}),requests=[],external=[],errors=[];
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**://example.invalid/**',route=>{external.push(route.request().url());return route.abort();});
   await page.route('**/api/sessions/generated/turns/turn/items/*/images/*',route=>{requests.push(route.request().url());return route.request().url().includes('/broken/')?route.fulfill({status:404,body:'missing'}):route.fulfill({contentType:'image/png',path:'public/assets/icon-mobile-v1-512.png'});});

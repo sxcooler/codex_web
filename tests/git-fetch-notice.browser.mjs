@@ -8,7 +8,7 @@ let browser;
 try{
  browser=await chromium.launch({channel:'chrome',headless:true});
  for(const width of [1280,390]){
-  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];let result={remotes:[{name:'origin',status:'updated'},{name:'upstream',status:'updated'}]},held,hold=false,calls=0;
+  const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}}),errors=[];let result={remotes:[{name:'origin',status:'updated'},{name:'upstream',status:'updated'}]},held,hold=false,calls=0;
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/api/**',async route=>{
    const path=new URL(route.request().url()).pathname;

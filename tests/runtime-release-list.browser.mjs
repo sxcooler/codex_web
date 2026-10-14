@@ -55,7 +55,7 @@ try{
   await runtime.call('fixture/native-thread',{threadId:fork.id,thread:fork,status:{type:'idle'}});
   const metadata=new MetadataStore(join(dataDir,'metadata.sqlite'));try{metadata.registerFork(fork);}finally{metadata.close();}
   const originalPid=runtime.diagnosticState().native.nativePid;
-  browser=await chromium.launch({channel:'chrome',headless:true});context=await browser.newContext({viewport:{width:1280,height:900}});
+  browser=await chromium.launch({channel:'chrome',headless:true});context=await browser.newContext({locale:'zh-CN',viewport:{width:1280,height:900}});
   const pages=await Promise.all([context.newPage(),context.newPage(),context.newPage()]);for(const page of pages){page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});}
   const [homePage,idlePage,busyPage]=pages;
   await homePage.goto(origin);await homePage.getByLabel('管理员密码').fill('fixture-password-long-enough');await homePage.getByRole('button',{name:'登录',exact:true}).click();

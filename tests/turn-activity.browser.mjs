@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';import{mkdir,writeFile}from'node:fs/prom
 const evidence='.local/compact-ui-20261009/turn-activity-browser/'+Date.now();await mkdir(evidence,{recursive:true});console.log('Evidence: '+evidence);
 const server=await createServer({cacheDir:'.local/compact-ui-20261009/turn-activity-vite',server:{host:'127.0.0.1',port:0,strictPort:true}});await server.listen();await server.transformRequest('/src/web/style.css');let browser;
 try{browser=await chromium.launch({channel:'chrome',headless:true});for(const width of [1280,390]){
-const page=await browser.newPage({viewport:{width,height:900}}),errors=[];let outputReads=0;page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
+const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}}),errors=[];let outputReads=0;page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
 await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;if(path.endsWith('/output')){outputReads++;return route.fulfill({json:{output:'完整命令输出'}});}if(path.includes('/images/')||path.includes('/files/image'))return route.fulfill({contentType:'image/png',path:'public/assets/icon-mobile-v1-180.png'});return route.fulfill({json:{}});});
 await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/tests/turn-activity.html`);await page.locator('article.message').first().waitFor();
 const groups=page.locator('.execution-process'),item=id=>page.locator(`[data-item-id="${id}"]`),open=group=>group.evaluate(node=>node.open);

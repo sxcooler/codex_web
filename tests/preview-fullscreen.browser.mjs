@@ -4,7 +4,7 @@ import {createServer} from 'vite';
 import {chromium} from 'playwright';
 const baseline=process.argv.includes('--baseline'),server=await createServer({cacheDir:'.local/qa-temp/fullscreen-vite',server:{host:'127.0.0.1',port:0,hmr:false}});await server.listen();await server.transformRequest('/src/web/style.css');
 const browser=await chromium.launch({channel:'chrome',headless:true}),results=[];
-try{for(const width of [1280,390]){const page=await browser.newPage({viewport:{width,height:900},hasTouch:width===390});try{
+try{for(const width of [1280,390]){const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900},hasTouch:width===390});try{
  let imageRequests=0;await page.route('**/api/sessions/*/files/image?*',route=>{imageRequests++;return route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV1sAAAAASUVORK5CYII=','base64')});});
  const base=`http://127.0.0.1:${server.httpServer.address().port}/tests/`;
  if(baseline){for(const fixture of ['file-browser.html','workspace-panels.html','panel-collapse.html','preview-performance.html']){await page.goto(base+fixture);await page.waitForFunction(()=>document.querySelector('#result')?.textContent!=='RUNNING');assert.match(await page.locator('#result').textContent(),/^PASS/);}results.push({width,baseline:true});continue;}

@@ -1,4 +1,5 @@
 import type {Json} from './api.ts';
+import {msg} from './i18n/messages.ts';
 const object=(value:unknown):value is Json=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const terminal=(turn:Json)=>['completed','interrupted','failed'].includes(turn.status);
 // A recent window refreshes live state without collapsing the history already expanded here.
@@ -57,7 +58,7 @@ export function applyChange(snapshot:Json,event:Json):Json|null{
 // Older pages add history only; live state and the SSE cursor stay authoritative.
 export function prependHistory(snapshot:Json,page:Json,cursor:string):Json {
   if(snapshot.history?.nextCursor!==cursor)return snapshot;
-  if(!Array.isArray(page.turns)||!page.turns.every((turn:Json)=>object(turn)&&typeof turn.id==='string'&&Array.isArray(turn.items))||(page.nextCursor!==null&&typeof page.nextCursor!=='string')||page.nextCursor===cursor)throw new Error('历史分页无效，请刷新会话后重试');
+  if(!Array.isArray(page.turns)||!page.turns.every((turn:Json)=>object(turn)&&typeof turn.id==='string'&&Array.isArray(turn.items))||(page.nextCursor!==null&&typeof page.nextCursor!=='string')||page.nextCursor===cursor)throw Object.assign(new Error('历史分页无效，请刷新会话后重试'),{i18n:msg('session.history.invalidPage')});
   const ids=new Set((snapshot.thread.turns??[]).map((turn:Json)=>turn.id));
   const older=page.turns.filter((turn:Json)=>{if(ids.has(turn.id))return false;ids.add(turn.id);return true;});
   const attachments=new Map((snapshot.attachmentPreviews??[]).map((file:Json)=>[file.path,file]));

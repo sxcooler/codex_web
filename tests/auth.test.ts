@@ -175,11 +175,11 @@ test('session bootstrap and login enforce Host, Origin, CSRF, schemas, and stric
         payload: { password: OLD_PASSWORD, extra: true },
       });
       assert.equal(malformed.statusCode, 400);
-      assert.deepEqual(malformed.json(), { error: 'Invalid request' });
+      assert.deepEqual(malformed.json(), { error: 'Invalid request', code: 'REQUEST_VALIDATION_FAILED' });
 
       const wrong = await login(app, 'definitely-wrong-password', session);
       assert.equal(wrong.response.statusCode, 401);
-      assert.deepEqual(wrong.response.json(), { error: 'Invalid credentials' });
+      assert.deepEqual(wrong.response.json(), { error: 'Invalid credentials', code: 'AUTH_INVALID_CREDENTIALS' });
 
       const authenticated = await login(app, OLD_PASSWORD, session);
       assert.equal(authenticated.response.statusCode, 200);

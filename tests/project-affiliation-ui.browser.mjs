@@ -14,7 +14,7 @@ const server=await createServer({...viteConfig,configFile:false,server:{...viteC
 const origin=`http://127.0.0.1:${server.httpServer.address().port}`,browser=await chromium.launch({channel:'chrome',headless:true});
 try{
  for(const width of [1280,390]){
-  const context=await browser.newContext({viewport:{width,height:780}}),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+  const context=await browser.newContext({locale:'zh-CN',viewport:{width,height:780}}),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
   try{
    await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();window.__stream=this;queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};});
    await page.route('**/api/**',async route=>{

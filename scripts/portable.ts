@@ -8,6 +8,7 @@ import { createServer } from 'node:net';
 import { managedServer, runServer, startBackground, stopServer } from './server-control.ts';
 import { configuredOrigins, optionalDomain } from '../src/server/origins.ts';
 import {assertCodexVersion,codexUpgradeMessage} from '../src/codex/executable.ts';
+import {configureTailscale} from './tailscale.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export function parsePort(value: string): number {
@@ -147,16 +148,29 @@ export async function launchPreference(config: { background?: boolean }, termina
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.some(arg => !['--no-browser', '--foreground', '--background', '--configure-startup', '--stop', '--status', '--diagnostics'].includes(arg)) || (args.includes('--foreground') && args.includes('--background')) || (args.includes('--stop') && args.includes('--status'))) throw new Error('支持 --no-browser / --foreground / --background / --configure-startup / --stop / --status / --diagnostics。');
+  if (args.some(arg => !['--no-browser', '--foreground', '--background', '--configure-startup', '--configure-tailscale', '--stop', '--status', '--diagnostics'].includes(arg)) || (args.includes('--foreground') && args.includes('--background')) || (args.includes('--stop') && args.includes('--status')) || (args.includes('--configure-tailscale') && args.some(arg=>['--stop','--status','--configure-startup','--foreground','--background','--diagnostics'].includes(arg)))) throw new Error('支持 --no-browser / --foreground / --background / --configure-startup / --configure-tailscale / --stop / --status / --diagnostics。');
   if (args.includes('--stop')) return stopServer();
   if (args.includes('--status')) { const state = await managedServer(); process.stdout.write(state ? `运行中：${state.origin}（diagnostics: ${state.diagnosticsEnabled?'on':'off'}）\n` : '没有由此入口管理的运行实例。\n'); return; }
   if (args.includes('--configure-startup') && !process.stdin.isTTY) throw new Error('请在交互终端修改启动偏好。');
+  if (args.includes('--configure-tailscale') && !process.stdin.isTTY) throw new Error('请在交互终端配置 Tailscale。');
+  if (args.includes('--configure-tailscale') && await managedServer()) throw new Error('请先结束活动任务并用 Stop 入口停止 Web，再配置 Tailscale；不会自动重启。');
   const dataDir = join(root, '.local', 'web');
-  const config = await loadPortableConfig(dataDir);
-  const port = parsePort(String(config.port ?? 3000)), [origin] = configuredOrigins(config.origin,config.allowedOrigins);
+  const firstConfiguration = !await exists(join(dataDir,'config.json'));
+  let config = await loadPortableConfig(dataDir);
+  const port = parsePort(String(config.port ?? 3000));
   if (!(await stat(config.workRoot).catch(() => null))?.isDirectory()) throw new Error('工作目录不存在，请检查 .local/web/config.json。');
   if (!(await stat(config.codexBin).catch(() => null))?.isFile()) throw new Error('Codex 路径不存在，请检查 .local/web/config.json。');
   const existing = await managedServer();
+  if (args.includes('--configure-tailscale') && existing) throw new Error('请先结束活动任务并用 Stop 入口停止 Web，再配置 Tailscale；不会自动重启。');
+  if ((firstConfiguration || args.includes('--configure-tailscale')) && process.stdin.isTTY && !existing) {
+    const terminal: Terminal = { async question(prompt) { const reader=createInterface({input:process.stdin,output:process.stdout}); try { return await reader.question(prompt); } finally { reader.close(); } } };
+    if (args.includes('--configure-tailscale') || /^(?:y|yes)$/i.test((await terminal.question('现在配置 Tailscale 私有 HTTPS 远程入口？[y/N]: ')).trim())) {
+      try { const privateOrigin=await configureTailscale(dataDir,port,terminal); config=JSON.parse(await readFile(join(dataDir,'config.json'),'utf8')); process.stdout.write(`已配置 Tailscale 私有 HTTPS：${privateOrigin}\n`); }
+      catch (error) { if (args.includes('--configure-tailscale')) throw error; process.stderr.write(`Tailscale 配置未完成：${error instanceof Error?error.message:String(error)}\n继续使用本地入口；以后可运行 ${launcher} --configure-tailscale 重试。\n`); }
+    }
+    if (args.includes('--configure-tailscale')) return;
+  }
+  const [origin] = configuredOrigins(config.origin,config.allowedOrigins);
   if (existing && args.includes('--diagnostics') && !existing.diagnosticsEnabled) throw new Error('服务正在运行但未开启诊断；请停止后带 --diagnostics 重新启动。');
   if (!existing && !await portAvailable(port)) throw new Error(`端口 ${port} 已占用，可能已经启动；打开 ${origin.origin}，或修改配置的 port 和 origin。`);
   if (!await exists(join(dataDir, 'auth.json'))) {

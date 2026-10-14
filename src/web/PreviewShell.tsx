@@ -1,8 +1,11 @@
+import {useLocale} from './i18n/LocaleProvider.tsx';
+import {msg,type UiText} from './i18n/text.ts';
 import {useEffect,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 
 export function PreviewShell({children,label,filePath,controls,active,resetKey}:{children:ReactNode;label:string;filePath?:string;controls?:ReactNode;active:boolean;resetKey:string}){
+  const {t,text}=useLocale();
   const dialogRef=useRef<HTMLDialogElement>(null),buttonRef=useRef<HTMLButtonElement>(null),switching=useRef(false),frame=useRef(0),[expanded,setExpanded]=useState(false);
-  const [copied,setCopied]=useState<{path:string;message:string;success:boolean}|null>(null),slash=label.lastIndexOf('/');
+  const [copied,setCopied]=useState<{path:string;message:UiText;success:boolean}|null>(null),slash=label.lastIndexOf('/');
   const feedback=copied?.path===filePath?copied:null;
   useEffect(()=>{if(!copied)return;const timer=setTimeout(()=>setCopied(null),1800);return()=>clearTimeout(timer);},[copied]);
   const change=(next:boolean,restoreFocus=true,hideFocus=false)=>{
@@ -48,11 +51,11 @@ export function PreviewShell({children,label,filePath,controls,active,resetKey}:
       }
     }}>
     <div className="file-preview-toolbar"><div className="file-preview-header"><h3 title={label}>{slash>=0?<><span className="preview-directory">{label.slice(0,slash)}</span><span className="preview-path-separator">/</span></>:null}<span className="preview-filename">{label.slice(slash+1)}</span></h3>
-    <button type="button" className="preview-copy" disabled={!filePath} aria-label="复制文件路径" title={!filePath?'项目路径尚未取得':feedback?.message??'复制文件路径'} data-copy-status={feedback?.success?'success':feedback?'error':undefined} onClick={async()=>{if(!filePath)return;try{await navigator.clipboard.writeText(filePath);setCopied({path:filePath,message:'已复制',success:true});}catch{setCopied({path:filePath,message:'复制失败，请重试',success:false});}}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{feedback?.success?<path d="m5 12 4 4L19 6"/>:feedback?<path d="m6 6 12 12M18 6 6 18"/>:<><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></>}</svg></button>
-    <button ref={buttonRef} type="button" className="preview-expand" aria-label={expanded?'收起':'全屏查看'} aria-expanded={expanded} title={expanded?'返回面板预览':'全屏查看'} onBlur={event=>event.currentTarget.removeAttribute('data-hide-focus')} onClick={event=>change(!expanded,true,event.detail>0)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d={expanded?'M3 9h6V3M21 9h-6V3M3 15h6v6M21 15h-6v6':'M9 3H3v6M15 3h6v6M3 15v6h6M21 15v6h-6'}/></svg></button>
+    <button type="button" className="preview-copy" disabled={!filePath} aria-label={t('panels.preview.copyPath')} title={!filePath?t('panels.preview.noRoot'):feedback?text(feedback.message):t('panels.preview.copyPath')} data-copy-status={feedback?.success?'success':feedback?'error':undefined} onClick={async()=>{if(!filePath)return;try{await navigator.clipboard.writeText(filePath);setCopied({path:filePath,message:msg('panels.copy.success'),success:true});}catch{setCopied({path:filePath,message:msg('panels.copy.failure'),success:false});}}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{feedback?.success?<path d="m5 12 4 4L19 6"/>:feedback?<path d="m6 6 12 12M18 6 6 18"/>:<><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></>}</svg></button>
+    <button ref={buttonRef} type="button" className="preview-expand" aria-label={expanded?t('panels.preview.collapse'):t('panels.preview.fullscreen')} aria-expanded={expanded} title={expanded?t('panels.preview.inline'):t('panels.preview.fullscreen')} onBlur={event=>event.currentTarget.removeAttribute('data-hide-focus')} onClick={event=>change(!expanded,true,event.detail>0)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d={expanded?'M3 9h6V3M21 9h-6V3M3 15h6v6M21 15h-6v6':'M9 3H3v6M15 3h6v6M3 15v6h6M21 15v6h-6'}/></svg></button>
     </div>
     {controls?<div className="file-preview-controls">{controls}</div>:null}
-    <span role="status" className={'preview-copy-feedback'+(feedback?.success?' sr-only':'')} hidden={!feedback} data-error={feedback&&!feedback.success?true:undefined}>{feedback?.message??''}</span></div>
+    <span role="status" className={'preview-copy-feedback'+(feedback?.success?' sr-only':'')} hidden={!feedback} data-error={feedback&&!feedback.success?true:undefined}>{feedback?text(feedback.message):''}</span></div>
     {children}
   </dialog>;
 }

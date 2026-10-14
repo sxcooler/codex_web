@@ -8,11 +8,11 @@
 
 1. 将整个包解压到可写目录，例如 Windows 的 `D:\Apps\CodexWeb` 或 Linux 的 `~/apps/codex-web`。Linux 使用 `tar -xzf 包名.tar.gz` 保留执行权限；不要直接在压缩包内运行。
 2. 项目需要 Git 时另行安装 Git；Codex CLI 可预先安装，也可在启动菜单选择安装方式。
-3. Windows 双击 `Start.cmd`，Linux 在解压目录运行 `bash Start.sh`。首次填写工作目录、本地端口，随后可填写额外绑定域名（回车跳过，裸域名默认 HTTPS），再设置 12–256 位 Web 管理员密码（输入不显示）。默认保留 `http://localhost:端口`，域名加入访问白名单；此步骤不配置 DNS、证书或代理。启动流程检查已有独立 CLI，缺失时按下节处理；账户登录按官方流程单独完成。
+3. Windows 双击 `Start.cmd`，Linux 在解压目录运行 `bash Start.sh`。首次填写工作目录、本地端口和可选域名，再核对独立 CLI，可选择接入 Tailscale，随后设置 12–256 位 Web 管理员密码（输入不显示）。普通域名回车跳过，裸域名默认 HTTPS，加入访问白名单但仍需自行配置 DNS、证书或代理；Tailscale 私有 HTTPS 则由可选接入流程处理。缺少独立 CLI 时按下节处理；账户登录按官方流程单独完成。
 4. 首次交互运行询问“以后启动后是否自动转入后台”，默认选择是，并保存到配置的 `background` 字段。旧配置在下一次交互启动补问；非交互启动且没有偏好时保持前台，不自动写入选择。
 5. 服务就绪后显示地址并尝试打开默认浏览器。后台启动窗口可以关闭；用 `Stop.cmd` / `bash Stop.sh` 停止，`Status.cmd` / `bash Status.sh` 查看状态。前台运行保持终端打开，按 `Ctrl+C` 停止。
 
-`--foreground`、`--background` 只覆盖本次启动；`--configure-startup` 在交互终端修改默认偏好；`--no-browser` 禁止自动打开浏览器。重复启动会复用本包已管理的实例，其他程序占用端口则失败，不终止该程序。后台模式不安装自启。Windows 可另行运行包内 `scripts/windows/install-startup.cmd` / `uninstall-startup.cmd` 安装或移除登录自启；Linux 可使用包内用户级 systemd 入口。包移动后须重新安装自启。
+`--foreground`、`--background` 只覆盖本次启动；`--configure-startup` 在交互终端修改默认偏好；`--configure-tailscale` 在交互终端单独配置私网入口，完成后退出，不启动服务；`--no-browser` 禁止自动打开浏览器。重复启动会复用本包已管理的实例，其他程序占用端口则失败，不终止该程序。后台模式不安装自启。Windows 可另行运行包内 `scripts/windows/install-startup.cmd` / `uninstall-startup.cmd` 安装或移除登录自启；Linux 可使用包内用户级 systemd 入口。包移动后须重新安装自启。
 
 启动、停止和状态共用本地管理连接验证实例身份，不根据裸 PID 杀进程；启动失败保留错误提示。Windows 日志位于 `.local/web/server.log`，运行时按约 1 MiB 轮转；Linux 后台输出到 `server.log` / `server-error.log`，启动时轮转，长时间运行需关注磁盘空间。其他入口手动运行的旧实例须在原终端停止后，才能改用这些入口。
 
@@ -30,6 +30,19 @@
 ```
 
 这是配置片段，不要替换整个配置文件。`origin` 是默认打开地址，`allowedOrigins` 是额外完整站点地址数组，可填写多个；不支持通配符、路径、查询或账户密码。两个不同主机地址各自登录，共用同一服务和工作目录。旧配置未设置数组时仍只允许原地址，不自动开放 localhost。代理转发目标仍为 `http://127.0.0.1:本地端口`，保留原始 Host；无需把本地端口改成 443。域名、HTTPS 和网络连通需单独配置。
+
+## Tailscale 私有 HTTPS
+
+首次交互配置询问是否接入 Tailscale，默认不启用；跳过或接入失败仍可本机启动，不反复弹出。已有安装先结束任务，用 Stop 入口停止服务，再运行 `Start.cmd --configure-tailscale` / `bash Start.sh --configure-tailscale`。此命令只配置网络，完成后需自行 Start；已有受管实例运行时拒绝修改，不自动停止或重启。
+
+源码部署可运行 `npm run tailscale:setup`，按已有配置端口设置；显式覆盖示例：`npm run tailscale:setup -- --port 3412`。旧入口 `scripts/windows/configure-serve.cmd -Port 3412` 与 `bash scripts/linux/configure-serve.sh 3412` 共用同一实现，默认只使用已安装、已登录的客户端；分别加 `-Interactive` / `--interactive` 可进入安装和登录引导。修改已有部署前先停止 Web，配置完成后手动启动。
+
+- 缺少客户端时显示[官方下载页](https://tailscale.com/download)，手动安装后输入 `retry` 重测；仅输入 `install` 才辅助安装。Windows 调用 winget 的精确 `Tailscale.Tailscale` 包，没有 winget 时手动安装；Linux 下载运行[官方安装脚本](https://tailscale.com/docs/install/linux)。这是系统级第三方客户端安装，可能需要管理员或 sudo 权限；失败可重试或取消，不伪报成功。
+- 安装不等于登录。未登录或已停止时手动处理后输入 `retry`，或输入 `up` 同意执行 `tailscale up`，按客户端提示认证。Linux 需要相应权限，失败可在独立终端使用 `sudo tailscale up`，或由管理员授权 operator；脚本不保存 auth key，不切账号、不重置已有偏好。
+- 读取实际 MagicDNS 主机名，建立持久私有 HTTPS → `http://127.0.0.1:本地端口`，复读映射确认成功后再更新 Web 配置；保留原字段、额外域名和 localhost。完全相同的已有私有映射可复用；其他映射、Funnel 或不能确认的结构拒绝修改，不全局 reset。
+- 首次启用 HTTPS 可能需在 Tailscale 管理页确认域名/证书设置；按提示完成后重试。映射已建而 Web 配置落盘失败时，修复权限并重跑同一端口；不会清除其他映射。非交互模式不自动安装或登录。
+
+手机仍需自行安装 Tailscale，加入同一 tailnet，并满足访问策略。配置成功后使用输出的私有 HTTPS 地址和 Web 密码；脚本不修改光猫、路由器、防火墙、UDP 端口或模型出站代理，也不承诺必然点对点直连。[家庭宽带直连建议](../../README_CN.md#3-让-tailscale-尽量走直连中国家庭宽带)
 
 ## 缺少 Codex CLI
 
@@ -94,7 +107,9 @@ npm run package:portable -- --node-binary C:\path\to\node.exe
 
 Linux 同样可传 `--node-binary /path/to/node`。Linux tar.gz 保留启动脚本和 Node 执行权限；源码 ZIP 通用于两个平台，但需在目标平台重新 `npm ci`。
 
-源码导出仅包含 Git 已跟踪文件的当前内容，新文件须先 `git add`，包括 `README_EN.md` 和新 docs 目录。导出排除 `.git`、本地运行数据、环境文件、构建缓存和常见密钥文件；WSL 测试数据不进入源码包。便携程序按运行文件白名单复制，不打包开发目录。
+源码导出仅包含 Git 已跟踪文件的当前内容，新文件须先 `git add`，包括 `README_CN.md` 和新 docs 目录。导出排除 `.git`、本地运行数据、环境文件、构建缓存和常见密钥文件；WSL 测试数据不进入源码包。便携程序按运行文件白名单复制，不打包开发目录。
+
+仓库和源码包使用英文 `README.md`、中文 `README_CN.md`；便携包为兼容已有更新器，将中文说明放在其已接受的 `README_EN.md` 路径，并同步改写文档链接。包内首页仍为英文，可从顶部“中文”链接切换。
 
 公开发布与内容复查见 [发布指南](publishing.md)。
 

@@ -12,7 +12,7 @@ let browser;
 try{
  await server.listen();browser=await chromium.launch({channel:'chrome',headless:true});
  for(const width of [390,844,1280,1440,1920,2048,3440]){
-  const page=await browser.newPage({viewport:{width,height:width===844?390:900},hasTouch:width<=844}),errors=[];
+  const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:width===844?390:900},hasTouch:width<=844}),errors=[];
   let metrics;
   try{
    page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(['error','warning'].includes(message.type()))errors.push(message.text());});

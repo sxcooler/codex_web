@@ -1,50 +1,55 @@
 # Codex Web
 
-[English](README_EN.md)
+[中文](README_CN.md)
 
-由于众所周知的原因，在某些国家和地区使用官方版的ChatGPT APP远程控制会有些不便，故产生了本项目。
+A lightweight web client for Codex running on your development machine, accessible locally or remotely. Use a desktop or mobile browser to manage projects, continue native Codex Threads, inspect live execution and Git changes, and respond to approvals. The official standalone Codex CLI handles agent execution and conversation history; the Web service uses the host user's Codex login.
 
-运行在自己开发机上的轻量 Codex 网页客户端，支持本地和远程访问。通过桌面或手机浏览器管理项目、继续原生 Codex Thread、查看实时执行和 Git 变更，并处理审批。Agent 执行和聊天历史由官方独立 Codex CLI 管理，Web 使用当前宿主用户的 Codex 登录。
+Deploy a lightweight service and use one clean interface on desktop and mobile. Build on the familiar native conversation experience with live execution, approvals, file previews, and Git changes in one workspace. Paginated history, connection recovery, and retained drafts make everyday work smoother, locally and remotely.
 
-## 主要功能
+Your development machine remains in control of execution, credentials, and native conversations. Manage your own remote endpoint through private HTTPS, without a project-operated account or cloud relay. Model requests follow your existing Codex configuration and chosen provider, keeping data flows clear and under your control.
 
-- 选择已有项目、无项目、新建 Git 项目或 Clone，持续对话、插话、中止与释放接力。
-- 按目录统一项目分组，自动注册官方项目并补齐历史会话的空归属，升级后无需逐条处理。
-- 实时增量同步、历史分页、按需命令输出、安全 Markdown 与原文复制。
-- 可调整并记忆的三栏布局，文本 / Markdown / 图片预览、统一 / 并排 diff、只读 Git 日志和 JUnit 报告。
-- 原生模型 / 推理与审批方式选择，重命名、收藏、Web 隐藏和元数据清除。
-- 私有文件 / 图片附件、Web Push，以及只缓存静态外壳的 PWA。
-- 顶栏查看账户额度、自动恢复时间和重置机会；使用机会需二次确认，断线后保留同一次操作供核实。
+## Features
 
-- 设置按常规、配置、个性化、使用情况、已安装插件和 Codex Web 分类：默认模型／强度、速度、权限、搜索与记忆配置均通过原生接口受控读写；个人／项目指令支持差异预览、版本冲突与未保存保护。
-- 已完成回答可分支到新聊天，并展示回答携带的记忆引用；插件页只读显示原生已安装状态，启用不等于已连接或当前会话可调用。
-- 浏览器发送快捷键与会话时间排序可持久化；历史消息时间、文件前进／后退导航、登录续期和会话断线恢复得到改善。
+- Select an existing project, use no-project mode, create a Git project or clone a repository; continue conversations, steer running tasks, interrupt, and release for handoff.
+- Group conversations by their project directory; automatically register native projects and fill missing historical affiliations after upgrades.
+- Live incremental synchronization, paginated history, on-demand command output, safe Markdown, and original-text copying.
+- Resizable, remembered three-pane layout; text, Markdown, and image previews, unified/split diffs, read-only Git history, and JUnit reports.
+- Native model, reasoning, and approval choices; rename, favorite, hide from Web, and clear Web metadata.
+- Private file/image attachments, Web Push, and a PWA that caches only the static shell.
+- Account limits, automatic reset times, and reset credits in the top bar; using a credit requires confirmation, and interrupted operations retain their identity for verification.
 
-## 界面展示
+- Settings categories cover General, Configuration, Personalization, Usage, Installed Plugins, and Codex Web. Native defaults, speed, permissions, search, and memory use controlled reads/writes; personal/project instructions include diffs, version checks, and unsaved-change protection.
+- Branch a completed answer into a new chat and inspect its supplied memory citations. Installed plugins are read-only native status; enabled does not establish connection or current-session tool availability.
+- Persist browser send shortcuts and session time sorting; improved historical message times, file back/forward navigation, login renewal, and connection recovery.
+- The interface supports Simplified Chinese and English and follows the browser by default. Change it on the sign-in page or under Settings → Codex Web → Browser preferences. The choice is saved in this browser and synchronized across tabs; switching preserves drafts, approval answers, and loaded history. Model replies and file contents retain their original text. If browser storage is blocked, the choice applies to the current tab with an option to retry saving.
 
-**PC 端**
+## Screenshots
 
-![Codex Web PC 端：项目列表、会话与右侧项目面板](docs/assets/screenshots/desktop.png)
+All screenshots use demo data.
 
-**手机端**
+**Desktop**
 
-![Codex Web 手机端：会话历史与消息输入区](docs/assets/screenshots/mobile.png)
+![Codex Web desktop in English: project list, conversation, and file preview](docs/assets/screenshots/desktop-en.png)
 
-## 平台与前置条件
+**Mobile**
 
-| 宿主平台 | 范围 |
+![Codex Web mobile in English: conversation history and message composer](docs/assets/screenshots/mobile-en.png)
+
+## Platforms and prerequisites
+
+| Host platform | Scope |
 | --- | --- |
-| Windows | 支持源码运行、Windows x64 便携包和当前用户登录自启；兼容系统 PowerShell 5.1 |
-| Linux | 提供 x64 glibc 便携包；源码运行、真实任务和沙箱边界已在 WSL2 Ubuntu 22.04 普通用户下验证；不声明全部发行版已验证 |
-| macOS | 本轮未适配、未验证 |
+| Windows | Source execution, Windows x64 portable packages, and current-user logon startup; compatible with built-in PowerShell 5.1 |
+| Linux | An x64 glibc portable package is available; source execution, live tasks, and sandbox boundaries have been verified as a non-root user on WSL2 Ubuntu 22.04; no claim covers all distributions |
+| macOS | Not adapted or verified in this round |
 
-源码运行需要 Node **>=24.20.0**、npm、官方独立 Codex CLI **>=0.160.1**，以及用于项目 /Git 功能的 Git。`.node-version` 声明版本基线，不会自动切换 Node。按 [Codex 官方说明](https://learn.chatgpt.com/docs/codex/cli) 安装并登录；Linux/WSL 应使用 Linux CLI 和该环境自己的登录。不要依赖 VS Code 扩展私有目录内的二进制。
+Running from source requires Node **>=24.20.0**, npm, the official standalone Codex CLI **>=0.160.1**, and Git for project/Git features. `.node-version` declares the baseline; it does not switch Node automatically. Install and sign in using the [official Codex instructions](https://learn.chatgpt.com/docs/codex/cli). Linux/WSL must use the Linux CLI and its own environment's login. Do not rely on binaries inside the VS Code extension's private directory.
 
-**Codex Web 0.1.8 要求 Codex CLI >=0.160.1（本版开发／实测基线）**，仅接受可识别的稳定版本。旧 0.1.6 安装须先独立升级 Codex CLI，运行 `codex --version` 核对版本，再执行 0.1.8 应用更新；应用更新不会升级 CLI。版本过旧、预发布或无法识别时，新服务拒绝启动，更新器按既有规则保留或回滚应用。
+**Codex Web 0.1.8 requires Codex CLI >=0.160.1 (the development and verified baseline)** and a recognizable stable version. Before updating an older installation, upgrade Codex CLI separately if needed and check `codex --version`, then apply the 0.1.8 update. App updates do not upgrade the CLI. Older, prerelease, or unrecognized versions prevent startup; the updater preserves or rolls back the app under its existing rules.
 
-## 源码启动
+## Run from source
 
-先创建默认工作根目录 `~/work`（Windows 为 `%USERPROFILE%\work`），或将 `WORK_ROOT` 设置为已有目录；服务不会自动创建它。然后在项目目录运行：
+Create the default work root `~/work` (`%USERPROFILE%\work` on Windows), or set `WORK_ROOT` to an existing directory; the service does not create it automatically. Then run in the project directory:
 
 ```sh
 npm ci
@@ -53,125 +58,133 @@ npm run auth:setup
 npm start
 ```
 
-已有密码时跳过 setup。密码在本机交互终端设置，长度 12–256 字符。默认访问 `http://localhost:3000`，服务仅监听 `127.0.0.1`。`npm run dev` 仅启动前端开发服务器，完整功能使用 build + start。远程入口、配置和升级见 [部署指南](docs/guides/deployment.md)。
+Skip setup if a password already exists. Set a 12–256-character password in your local interactive terminal. The default URL is `http://localhost:3000`; the service listens only on `127.0.0.1`. `npm run dev` starts only the frontend development server; use build + start for the complete service. See the [deployment guide](docs/guides/deployment.md) for remote access, configuration, and upgrades.
 
-默认工作根目录为当前用户的 `~/work`（Windows 为 `%USERPROFILE%\work`），仅发现一级项目目录。`.local/web/config.json` 配置 `origin`、`port`、`workRoot`、`codexBin`；对应 `WEB_ORIGIN`、`PORT`、`WORK_ROOT`、`CODEX_BIN` 环境变量优先，`WEB_DATA_DIR` 可更换数据目录。Windows 默认查找独立 CLI 官方安装位置，Linux 默认使用 PATH 中的 `codex`。
+The default work root is the current user's `~/work` (`%USERPROFILE%\work` on Windows); only immediate project directories are discovered. `.local/web/config.json` configures `origin`, `port`, `workRoot`, and `codexBin`. The corresponding `WEB_ORIGIN`, `PORT`, `WORK_ROOT`, and `CODEX_BIN` environment variables take precedence; `WEB_DATA_DIR` changes the data directory. Windows defaults to the official standalone CLI installation location; Linux defaults to `codex` on PATH.
 
-`allowProjectDirectoryLinks` 默认 `false`。需要读取项目内目录联接（Windows Junction）或目录符号链接指向的外部目录时，可在服务配置加入 `"allowProjectDirectoryLinks": true`，重启服务后生效。文件浏览、文本读取和图片预览共用此开关，无需配置机器路径；开启表示信任项目内的目录联接及其目标。敏感文件、路径穿越、文件大小及图片像素限制仍保留；不会允许直接读取任意项目外绝对路径或放开 Git 写入。旧的 `projectImageMounts` 映射已移除，使用该配置的管理员须改用此开关。详见 [目录联接规则](docs/design/project-directory-links.md)。
+`allowProjectDirectoryLinks` defaults to `false`. To read external directories reached through directory junctions or directory symlinks inside a project, add `"allowProjectDirectoryLinks": true` to the service configuration and restart the service. File browsing, text reads, and image previews share this switch without machine-specific path mappings. Enabling it trusts the project's directory links and their targets; sensitive-file, traversal, size, and image-pixel restrictions remain. Direct external absolute paths and Git writes are not enabled. The previous `projectImageMounts` mapping has been removed; replace it with this switch. See [directory-link rules](docs/design/project-directory-links.md).
 
-部署脚本按平台放在 [`scripts/windows/` 和 `scripts/linux/`](scripts/README.md)。Linux 可用 `bash scripts/linux/start-server.sh` 前台启动，或 `bash scripts/linux/install-startup.sh --start` 安装用户级 systemd 自启；先完成上述构建与密码设置。停止、日志和 Tailscale 配置见部署指南。
+Deployment scripts are organized into [`scripts/windows/` and `scripts/linux/`](scripts/README.md). After building and setting a password, Linux users can run `bash scripts/linux/start-server.sh` in the foreground, or install a user systemd service with `bash scripts/linux/install-startup.sh --start`. See the deployment guide for stopping, logs, and Tailscale configuration.
 
-Windows 可双击 `scripts/windows/start-server.cmd` 后台启动源码部署的服务，日志写入 `.local/web/server.log`，关闭启动窗口不会停止服务；双击 `stop-server.cmd` 停止。CMD 入口优先调用已有 PowerShell 7，否则使用系统自带的 Windows PowerShell 5.1，无需额外安装。其他同名 CMD 分别配置自启和网络入口。
+On Windows, double-click `scripts/windows/start-server.cmd` to start a source deployment in the background. Logs are written to `.local/web/server.log`; closing the launcher window does not stop the service. Double-click `stop-server.cmd` to stop it. CMD launchers prefer an existing PowerShell 7 installation and otherwise use built-in Windows PowerShell 5.1; no extra PowerShell installation is required. Matching CMD launchers also configure startup and network access.
 
-右侧“文件”“变更”和“Git 日志”均支持 PNG、JPEG、WebP、GIF、AVIF 和 SVG 图片预览，按面板宽度缩放。变更预览分别读取工作区、暂存区或提交中的实际版本，展示变更前后图片，支持新增、删除和重命名。SVG 转成静态图，动图显示首帧；文件上限 20 MiB、4000 万像素，预览最长边 2048 像素。“文件”也显示并允许读取 `.gitignore` 忽略的文件；项目目录边界、登录验证及凭据等敏感文件保护仍然生效。Git 变更列表继续遵循 Git 的跟踪规则，刷新后会清除已不在列表中的选中项。
+The Files, Changes, and Git History tabs preview PNG, JPEG, WebP, GIF, AVIF, and SVG images, scaled to fit the panel. Changes show before/after images from the actual worktree, index, or commit, including additions, deletions, and renames. SVG is rasterized and animations show their first frame. Limits are 20 MiB and 40 megapixels per image, with a preview long edge of at most 2048 pixels. Files also lists and reads files excluded by `.gitignore`; project boundaries, authentication, and sensitive-file protection still apply. The Changes list follows Git tracking rules and clears selections that disappear after a successful refresh.
 
-Git 日志可选择项目主仓库、子模块和嵌套仓库；单仓库时显示仓库名，不可用子模块注明原因。仓库选择按项目保存，切换仓库会重置分支、分页、提交和文件选择；所选仓库消失或不可用时回到主仓库并提示。扫描达到边界时显示不完整提示，保留尚未确认消失的选择。“变更”和“文件”继续读取主项目。Git 日志用图标和简短名称区分本地分支、远程跟踪分支及标签，支持选择 `origin/main` 等远程分支；“全部分支”也包含仅远程分支可达的提交。三个标签共用“项目”右侧的“刷新”：立即读取本地内容，同时在后台 fetch，完成后更新图谱；日志标签获取所选仓库，变更和文件标签获取主仓库，反馈注明目标，仅在发起时的标签和仓库显示。获取期间仍可查看文件、切换标签或继续会话；失败保留本地内容并提示。无远程时跳过获取。同仓库并发合并，结果保留 10 秒防重复请求；单个远程最多 30 秒，整次最多 60 秒。仅更新和清理远程跟踪分支，不合并代码或修改本地分支、标签、暂存区和工作区。自动刷新及切换标签不触发 fetch，详见[工作区设计](docs/design/workspace-panels.md)。
+Git History uses icons and short names for local branches, remote-tracking branches, and tags. You can select branches such as `origin/main`; All branches also includes remote-only history. All three tabs share the Refresh button beside Project: local content reloads immediately while fetch runs in the background, then the graph updates. Browsing and chat remain available; failures retain local content and show a message. Fetch is skipped when no remote exists. Concurrent requests for a project are merged, with results reused for 10 seconds; limits are 30 seconds per remote and 60 seconds overall. Only remote-tracking branches are updated or pruned; local branches, tags, the index, and working files remain unchanged. Automatic refreshes and tab switches do not trigger fetch. See the [workspace design](docs/design/workspace-panels.md).
 
-Markdown 文档支持仓内图片及受限 `<img>`：优先使用 `![说明](相对路径)`，需要尺寸时可使用整数宽高。路径相对文档目录，`/` 表示项目根目录；图片通过现有鉴权预览读取。外部图片、脚本、事件属性和任意样式不会加载或执行。文档源文件保持 GitHub 可用的相对路径，不写入本机路径、私有域名或 Web API 地址，详见 [Markdown 兼容与安全规则](docs/design/markdown.md#仓内图片与-github-兼容2026-09-26)。
+Markdown documents support repository-local images and restricted `<img>` tags. Prefer `![description](relative/path)`; integer dimensions are available when needed. Paths resolve relative to the document, with `/` referring to the project root, through the authenticated image preview endpoint. External images, scripts, event attributes, and arbitrary styles are not loaded or executed. Keep GitHub-compatible relative paths in document source, without local machine paths, private domains, or Web API addresses. See the [Markdown compatibility and safety rules](docs/design/markdown.md#仓内图片与-github-兼容2026-09-26).
 
-## 本地与跨设备访问
+## Local and cross-device access
 
-推荐的日常用法是：**Windows 开发机后台运行 Codex Web，手机通过 Tailscale 私有 HTTPS 随时接续任务**。代码、执行环境和 Codex 登录都留在开发机，手机只需 Tailscale 和浏览器。以下命令在项目或便携包根目录的 PowerShell 中运行。
+Recommended daily setup: **run Codex Web in the background on a Windows development machine, then continue tasks from your phone over private Tailscale HTTPS**. Code, execution, and Codex credentials stay on the host; the phone needs only Tailscale and a browser. Run the following commands in PowerShell from the project or portable package root.
 
-### 1. 先在开发机跑通
+### 1. Get local access working first
 
-按上方步骤源码启动，或按下方说明解压便携包、运行 `Start.cmd`。完成原生 Codex 登录、工作目录和 Web 密码设置，确认 `http://localhost:3000` 能登录并完成一个任务；自定义端口时使用实际端口。便携包选择后台运行，源码版使用 `scripts/windows/start-server.cmd`。
+Use the source setup above or extract a portable package and run `Start.cmd`. Complete native Codex login, work-root setup, and Web password setup. Confirm that you can sign in and finish a task at `http://localhost:3000` (use your actual port if different). Choose background mode for portable packages; source deployments use `scripts/windows/start-server.cmd`.
 
-### 2. 给手机一个私有 HTTPS 入口
+### 2. Give your phone a private HTTPS address
 
-开发机和手机均[安装 Tailscale](https://tailscale.com/download)，登录同一账号加入同一 tailnet，保持连接；使用自定义访问策略时，允许手机访问开发机的 HTTPS 端口。在开发机运行：
+First-run portable setup offers optional Tailscale integration: host client detection, consented installation, sign-in guidance, a private HTTPS mapping, and Web origin configuration. For an existing installation, finish tasks, stop Web, then run `Start.cmd --configure-tailscale` or `bash Start.sh --configure-tailscale`. Source deployments use `npm run tailscale:setup`. See the [portable guide](docs/guides/portable.md#tailscale-私有-https) for details.
 
-```powershell
-.\scripts\windows\configure-serve.cmd -Port 3000
+Your phone still needs [Tailscale](https://tailscale.com/download) and access to the same tailnet. Open the printed `https://device.tailnet-name.ts.net` address and sign in with your **Web password**; localhost and HTTPS require separate browser logins. Use “Add to Home Screen” if desired. Restart Web after configuring an existing installation; first-run setup continues to startup.
+
+[Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve) provides a persistent HTTPS endpoint for authorized tailnet devices. Web keeps listening on `127.0.0.1`; do not forward its application ports to the public internet or enable Funnel. Serve provides HTTPS; the underlying peer-to-peer connection depends on network conditions.
+
+### 3. Improve direct connections: home broadband in China
+
+Tailscale attempts direct connections and falls back to encrypted relays. A working page does not establish a direct connection. Test from mobile data or another external network:
+
+```sh
+tailscale netcheck
+tailscale ping PEER_TAILSCALE_IP_OR_NAME
+tailscale status
 ```
 
-端口应与 Web 服务一致。首次使用按提示启用 Tailscale HTTPS / Serve；完成后重新运行脚本。脚本建立 HTTPS 到本机回环服务的映射，将实际域名写入 `.local/web/config.json`，并保留原地址供本机访问。已有 Serve 配置时会停止并提示检查，不会覆盖其他服务；不要为此直接清空现有映射。
+`netcheck` describes local UDP/NAT conditions. `ping` and `status` identify this pair's actual direct or relay path; initial probes may use a relay before becoming direct. [Connection types](https://tailscale.com/kb/1257/connection-types)
 
-等任务结束后重启 Web（便携包 `Stop.cmd` → `Start.cmd`，源码版 `stop-server.cmd` → `start-server.cmd`）。手机打开脚本输出的 `https://设备名.tailnet名称.ts.net` 实际地址，用 **Web 密码**登录；HTTPS 与 localhost 各自登录。可在浏览器菜单中“添加到主屏幕”作为日常入口。
+For a home connection with an ONT in router mode followed by your own router, consider **bridging the ONT and running PPPoE on your router**, subject to ISP support. Obtain the broadband credentials and preserve IPTV/telephone settings first. Some ONTs need super-administrator access; ask your ISP to bridge it or provide legitimate access. This removes a local NAT layer but does not guarantee a public address.
 
-这里使用的 [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve) 仅供 tailnet 内获准设备访问，无需路由器端口转发或开启公网 Funnel。脚本使用后台持久配置，Tailscale 重启后会恢复映射。服务仍监听 `127.0.0.1`；只输入开发机的 Tailscale IP 并不能替代这个 HTTPS 入口。
+1. Check the router's WAN address. RFC1918 private ranges or `100.64.0.0/10` indicate upstream NAT. Bridging cannot remove ISP CGNAT; ask about public IPv4, or check IPv6 firewall access when both peers have usable public IPv6. [NAT traversal](https://tailscale.com/blog/how-nat-traversal-works)
+2. Reserve the host's LAN IP. If connections still relay, forward **UDP 41641 to that host's UDP 41641** and permit that Tailscale port in the host firewall. Verify its actual listening port first. IPv6 normally needs firewall permission rather than IPv4 NAT forwarding. [Port requirements](https://tailscale.com/docs/reference/faq/firewall-ports)
+3. **Do not forward Web's TCP 3000, private HTTPS TCP 443, or use DMZ.** The installer does not change routers, firewalls, or Tailscale UDP ports. Retest from outside; the peer's network can still prevent direct connections. [Firewall considerations](https://tailscale.com/kb/1181/firewalls)
 
-### 3. 登录自启与日常接力
+### 4. Start at logon and hand off tasks
 
 ```powershell
 .\scripts\windows\install-startup.cmd
 ```
 
-这是**当前 Windows 用户登录后自启**，不是开机未登录就启动的系统服务。启动项使用 Codex Web 名称和图标；`uninstall-startup.cmd` 可移除。开发机须保持开机、联网且不休眠，Tailscale 及所需代理也须运行。手机断开不等于任务停止，重新连接后可查看进展；离线不能发送消息。
+This starts Web **when the current Windows user logs in**, not before login as a system service. The startup entry uses the Codex Web name and icon; remove it with `uninstall-startup.cmd`. Keep the host powered on, connected, and awake, with Tailscale and any required proxy running. Disconnecting the phone does not itself stop a task; reconnect to check progress. You cannot send messages offline.
 
-CLI、VS Code、Codex App 和 Web 使用同一宿主用户的原生会话时，先在原客户端释放会话再接力，同一会话只保留一个写入客户端。手机无需安装 Codex，也无需复制开发机的凭据。
+When CLI, VS Code, Codex App, and Web share the same host user's native sessions, release a conversation in the previous client before handing it off. Keep one writer per conversation. The phone needs neither Codex installed nor a copy of the host's credentials.
 
-### 4. 需要出站代理时：让 HTTP 与 WebSocket 使用系统代理
+### 5. If outbound access needs a proxy: use it for HTTP and WebSocket
 
-**Tailscale 负责“手机访问开发机”；代理负责“开发机上的 Codex 访问模型服务”**，两者是不同链路。网络本来可直连模型服务时可跳过本节。
+**Tailscale connects the phone to the host; the outbound proxy connects Codex on the host to the model service.** These are separate connections. Skip this section if direct model access already works.
 
-Windows 上使用 v2rayN 等代理时，先启用其“系统代理”，确认 Windows 代理指向实际监听地址，例如 `127.0.0.1:10808`（仅为示例，以自己的端口为准）。仅启动代理程序不等于设置了系统代理。
+For v2rayN or a similar Windows proxy, enable its system-proxy setting and confirm that Windows points to the actual listener, for example `127.0.0.1:10808` (an example only; use your own port). Running the proxy application alone does not configure the system proxy.
 
-备份原生 Codex 用户配置 `%USERPROFILE%\.codex\config.toml`，在已有 `[features]` 节中加入下面这一项；没有该节时才新建，**不要覆盖整个文件或重复声明该节**：
+Back up the native Codex user config at `%USERPROFILE%\.codex\config.toml`, then add this setting to the existing `[features]` section. Create the section only if absent; **do not replace the whole file or duplicate the section**:
 
 ```toml
 [features]
 respect_system_proxy = true
 ```
 
-这是 Codex 原生配置，不是 Web 的 `config.json`。同一 Windows 用户、同一 `CODEX_HOME` 下的独立 CLI、VS Code 扩展和 Codex App 可共用；自定义 `CODEX_HOME`、其他系统用户或 WSL 需检查各自配置。先确认正在使用的 CLI 支持并读到了此选项：
+This is native Codex configuration, not Web's `config.json`. Standalone CLI, the VS Code extension, and Codex App can share it under the same Windows user and `CODEX_HOME`. Custom `CODEX_HOME` values, other OS users, and WSL require checking their own configurations. Check that the CLI you use supports and reads the option:
 
 ```powershell
 codex features list | Select-String respect_system_proxy
 ```
 
-应显示 `true`；找不到命令时使用独立 CLI 的实际路径。等活动任务结束后，重启 Web 和需要生效的 VS Code / Codex App 原生进程，再发一条短消息验证。启动脚本的 `-NoProfile` 只跳过 PowerShell profile，不阻止 Codex 读取系统代理，因此无需依赖 profile 中的代理变量，也无需调整 Codex 文件访问权限或登录方式。
+Expect `true`; use the standalone CLI's actual path if it is not on PATH. Once active tasks finish, restart Web and the native processes for any affected VS Code / Codex App instances, then verify with a short message. The launcher's `-NoProfile` skips the PowerShell profile, not Codex's system-proxy lookup. This setup needs no profile-based proxy variables or changes to Codex filesystem permissions or login mode.
 
-该开关在 CLI **0.156.1** 中仍标为 `under development`。已验证该版本及 VS Code / Codex App 所带 **0.155.0-alpha.16.3 / 0.155.0-alpha.16.4** 原生程序能经系统代理建立 WebSocket 并收到模型回复；这不代表所有版本和平台都支持，升级后应复核。实现依据见 [Codex 0.156.1 的代理选择逻辑](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/http-client/src/outbound_proxy.rs)。如有回归，仅撤销新增设置并重启相关客户端，保留其他配置及登录凭据。
+CLI **0.156.1** still marks this feature `under development`. That version and the native **0.155.0-alpha.16.3 / 0.155.0-alpha.16.4** executables bundled with VS Code / Codex App were verified to establish WebSocket connections and receive model responses through the system proxy. This does not establish support for every version or platform; recheck after upgrades. See [Codex 0.156.1 proxy selection](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/http-client/src/outbound_proxy.rs). If it regresses, undo only the added setting and restart affected clients, preserving other configuration and credentials.
 
-### 5. 遇到问题先区分链路
+### 6. Identify which connection failed
 
-| 现象 | 先检查 |
+| Symptom | Check first |
 | --- | --- |
-| 本机网页也打不开 | 服务状态与端口；便携包 `Status.cmd`，源码版 `scripts/windows/status-server.cmd` |
-| 本机正常，手机打不开 | 两端 Tailscale、访问策略、开发机是否休眠，以及 `tailscale serve status` 的 HTTPS 地址和目标端口 |
-| 页面可用，但 Codex 反复 `Reconnecting… 5/5` | 模型连接详情、系统代理是否在线、原生配置是否生效；已有 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 也可能影响实际路由 |
-| 模型返回 `401 Unauthorized` | 原生账户及 provider / API key 配置；不是正常的 WebSocket 回退提示，不能靠上述代理开关修复 |
+| Local Web access also fails | Service status and port: portable `Status.cmd`, source `scripts/windows/status-server.cmd` |
+| Local access works, phone access fails | Tailscale on both devices, access policy, host sleep, and the HTTPS address / target port in `tailscale serve status` |
+| Web works, but Codex repeats `Reconnecting… 5/5` | Model connection details, proxy availability, and effective native config; existing `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` may also affect routing |
+| Model requests return `401 Unauthorized` | Native account and provider / API key configuration; this is not a normal WebSocket fallback notice and the proxy flag does not fix it |
 
-WebSocket 重试耗尽后可能回退到 HTTP 流式响应，造成“等很久又好了”；这只是重连的一种原因，不应仅凭 `5/5` 就判断为代理问题。本机使用不需要 Tailscale；Linux、其他网络方案与详细排查见 [部署指南](docs/guides/deployment.md#网络访问方式)。
+Exhausted WebSocket retries can fall back to HTTP streaming, explaining a long wait followed by a successful response. This is only one possible cause; `5/5` alone does not diagnose a proxy problem. Local use needs no Tailscale. See the [deployment guide](docs/guides/deployment.md#网络访问方式) for Linux, other networking options, and further troubleshooting.
 
-## 便携包
+## Portable packages
 
-从 [GitHub Releases](https://github.com/sxcooler/codex_web/releases) 下载对应平台的包，完整解压到可写目录：
+Download the appropriate package from [GitHub Releases](https://github.com/sxcooler/codex_web/releases) and fully extract it into a writable directory:
 
-| 包 | 启动方式 |
+| Package | Start |
 | --- | --- |
-| `codex-web-版本-win-x64.zip` | 双击 `Start.cmd` |
-| `codex-web-版本-linux-x64.tar.gz` | `tar -xzf 包名.tar.gz`，进入解压目录运行 `bash Start.sh` |
-| `codex-web-版本-source.zip` | 通用干净源码，按上方源码启动步骤运行 |
+| `codex-web-VERSION-win-x64.zip` | Double-click `Start.cmd` |
+| `codex-web-VERSION-linux-x64.tar.gz` | Run `tar -xzf PACKAGE.tar.gz`, enter the extracted directory, then run `bash Start.sh` |
+| `codex-web-VERSION-source.zip` | Platform-independent clean source; follow the source setup above |
 
-便携包自带 Node 和当前平台的生产依赖，无需安装 Node/npm；Git 与 Codex CLI 需单独准备。首次配置工作目录、本地端口、可选域名、CLI 和密码。0.1.4 起可在 config.json 的 `allowedOrigins` 数组添加额外完整访问地址，让 localhost 与 HTTPS 域名同时可用、各自登录；域名和代理仍需自行配置。缺少 Codex 时，可打开官方页面手动安装，或明确同意后运行对应平台的官方安装脚本。账户登录仍须自行完成。首次交互运行还会询问是否以后默认后台运行；选择后台后，启动成功即可关闭终端，用 `Stop.cmd` / `bash Stop.sh` 停止，`Status.cmd` / `bash Status.sh` 查看状态。`--foreground` / `--background` 临时覆盖，`--configure-startup` 修改偏好，`--no-browser` 禁止自动打开浏览器。后台运行不自动启用登录自启。
+Portable packages include Node and platform-specific production dependencies; Node/npm installation is unnecessary. Git and Codex CLI are separate prerequisites. First-run setup asks for the work root, local port, optional domain, CLI, optional Tailscale access, and password. Since 0.1.4, the `allowedOrigins` array in config.json accepts additional full site addresses, allowing localhost and HTTPS domains to work together with separate browser logins. Ordinary custom-domain DNS and proxy setup remain separate; the installer can configure private Tailscale HTTPS. If Codex is missing, install manually using the official page or explicitly consent to running the official installer for your platform. Account sign-in remains separate. The first interactive run also asks whether future launches should run in the background. Once ready, the launcher can close; use `Stop.cmd` / `bash Stop.sh` to stop and `Status.cmd` / `bash Status.sh` to inspect the instance. Override with `--foreground` / `--background`, change the saved preference with `--configure-startup`, configure private access separately with `--configure-tailscale`, or suppress the browser with `--no-browser`. Background mode does not enable logon startup.
 
-Windows 源码版用 `scripts/windows/start-server.cmd` 后台启动；登录自启可选 `scripts/windows/install-startup.cmd`，使用当前用户启动项，无需计划任务、管理员权限或 PowerShell 7；`uninstall-startup.cmd` 移除自启。Linux 登录自启沿用用户级 systemd。
+For Windows source deployments, use `scripts/windows/start-server.cmd`. Optional `scripts/windows/install-startup.cmd` uses the current user’s logon startup entry, without Task Scheduler, administrator privileges, or PowerShell 7. Remove it with `uninstall-startup.cmd`. Linux logon startup continues to use user-level systemd.
 
-Linux 包面向 x64 glibc 环境，验证环境为 WSL2 Ubuntu 22.04；暂不提供 ARM64、Alpine/musl 或 macOS 包。不要跨平台复制 `node_modules`。构建时在对应平台运行 `npm ci` 和 `npm run package:portable`，产物位于 `releases/`。配置、升级、构建依赖与校验方法见 [便携包指南](docs/guides/portable.md)。
+The Linux package targets x64 glibc systems, with WSL2 Ubuntu 22.04 as the verification environment. ARM64, Alpine/musl, and macOS packages are not provided. Do not copy `node_modules` between platforms. Build natively with `npm ci` followed by `npm run package:portable`; artifacts are written to `releases/`. See the [portable package guide](docs/guides/portable.md) for configuration, upgrades, build prerequisites, and verification.
 
-## 使用与边界
+## Usage and boundaries
 
-Web 新建会话接受首轮任务后，会使用标题专用 `gpt-6-luna` 和 `low` 思考强度、沿用创建时确认的 provider 与账户，后台生成一次原生标题；主任务继续使用用户选择的模型和思考强度。生成期间显示原生预览和“命名中…”，成功后标题保存到 Codex 原生名称，重新打开仍一致。空白或纯附件创建、已有会话继续、打开、恢复和导入历史都不触发；同一创建请求重试不重复生成。标题与任务语言一致，最多 36 个字符，不把任务前缀保存为自动 Web 标题；原有 Web 名称仍保留兼容。
+Conversation menus support native archiving; switch the sidebar to Archived to restore a thread. Hide from Web only changes Web preferences. User message blocks align right, with available native turn start/completion times beside role names. Missing timestamps and individual steering-message times are not inferred. Long filenames, commit entries, source and diffs scroll horizontally within their panels; Markdown prose still wraps.
 
-每个有文本的新建任务增加一次短摘要推理，使用独立临时只读会话，禁用 hooks、plugins、multi-agent、apps 和 web search；临时事件不会进入主历史或最近会话。标题模型及思考强度按上述固定策略校验，原生不支持或返回其它有效配置时跳过，不自动替换模型；生成（包括等待临时会话启动）120 秒超时或失败后保留预览，不循环重试，任务继续执行。手动改名和已观察到的原生名称优先，取消或释放会收束临时生成。若启动结果未知，晚到的临时会话只做清理，不继续推理或写名称；未定启动阻止同进程后续临时启动，等待仍计入各自期限，主任务继续，关闭所属原生进程会收束留存。原生命名接口没有跨客户端条件更新，仍应按下述规则使用一个写入客户端。
+Viewing, refreshing, returning to the foreground, and leaving a read-only view do not change native ownership. Foreground recovery verifies status first. Explicit sending or Continue conversation checks writer identity and permissions; conflicts leave history readable. Only conversations explicitly operated on by this page request release on navigation, deferred until completion for running tasks. Returning to read-only history does not cancel that release. Recent dialogue ordering uses the native dialogue clock, so viewing and settings changes do not move completed conversations first. Manual “Release and close” leaves the page only after release is confirmed. Use one writer per Thread at a time. VS Code may retain ownership after a response completes; close the corresponding project window before returning to Web. The app does not forcibly take ownership. An empty Thread may not persist before its first message; releasing or restarting can lose the empty Thread while retaining project files.
 
-账户用量和左侧会话列表由 Web 后端统一维护共享快照。存在已登录的页面订阅时，每 60 秒统一更新用量及近期查看的列表查询；全部页面断开后停止周期刷新。会话页复用消息事件流，首页等页面使用全局事件流，每个标签页只保留一个长连接。普通读取及焦点切换使用共享结果，手动“刷新”仍请求新数据；列表的排序、搜索、隐藏、归档和分页游标分别隔离，最多缓存 32 个查询，闲置 5 分钟后淘汰。创建、名称、收藏、隐藏、归档和释放状态变化会合并更新列表，消息 token 不触发列表查询。周期更新失败保留有成功时间的旧数据并提示；已失效的隐藏或归档元数据不会作为旧成功缓存回传，账户身份变化或无法确认时立即清除旧用量。单个页面断开不取消其它页面共用的读取；原生重置机会的账户核验和结果待核实保护保持。
+A timeout or lost connection can leave a submission's outcome unknown. Check native history before explicitly retrying; refreshing never resends a task. Drafts survive within the current page lifecycle, but a full reload does not guarantee retention. Project context does not replace native Codex permissions. Web file and Git APIs remain restricted to validated project boundaries; there is no arbitrary shell/RPC REST endpoint. See the [session guide](docs/guides/sessions.md).
 
-会话菜单支持原生归档，切换左栏到“已归档”可恢复；“从 Web 隐藏”仅改变 Web 偏好。用户消息靠右显示，角色名称内侧显示可用的本轮开始/完成时间；插话和缺失原生时间的历史不猜测时间戳。右侧长文件名、提交记录、源码与差异支持区域内横向滚动，Markdown 正文继续自动换行。
+Web Push requires HTTPS, browser support, and explicit user permission. Physical-phone background delivery and real VS Code handoff for phase-two features still have verification gaps. The PWA does not cache APIs, conversations, or credentials; tasks cannot be submitted offline.
 
-查看、刷新、切回前台和离开只读页面均不改变会话占用；前台先只读核对状态。明确发送或点击“接续会话”才校验写入身份和权限，冲突时历史仍可读。只有本页面明确操作过的会话会在切走时自动申请释放，运行或待审批时延迟到结束；只读返回不取消释放。最近对话按新一轮对话时间排序，查看和设置写入不使旧会话置前。手动“释放并关闭”收到实际释放确认后才离开；同一 Thread 同时只使用一个写入客户端。VS Code 可能在回复结束后仍占用 Thread，需关闭对应项目窗口再回 Web；不会强制抢占。空会话在首条消息前可能未持久化，释放或重启可能丢失空会话，项目文件仍保留。
+For the 0.1.8 release scope and checks, see the [release record](docs/verification/2026-10-14-release-018.md). Portable updates require matching platform/runtime fingerprints and file checks; see the [portable guide](docs/guides/portable.md#数据与升级).
 
-提交超时或断网可能结果未知；先核对原生历史，再显式重试，刷新不会重发任务。草稿在本次页面生命周期内保留，完整刷新不保证保留。项目上下文不替代 Codex 原生权限；Web 文件和 Git API 保持受控项目边界，无任意 shell/RPC REST 接口。完整操作见 [会话指南](docs/guides/sessions.md)。
+## Documentation and verification
 
-Web Push 需要 HTTPS、浏览器支持与用户主动授权；物理手机后台投递及第二阶段真实 VS Code 接力尚有验收缺口。PWA 不缓存 API、聊天或凭据，离线不能提交任务。
+Detailed documentation is currently in Chinese:
 
-0.1.8 本轮发布范围与验收见 [发布记录](docs/verification/2026-10-14-release-018.md)。便携增量升级以同平台运行环境指纹及文件校验为准；完整范围见 [便携指南](docs/guides/portable.md#数据与升级)。
-
-## 文档与验证
-
-[文档索引](docs/README.md) · [架构](docs/design/architecture.md) · [最新 Linux 验证记录](docs/verification/2026-09-13-linux.md) · [第二阶段验收](docs/verification/2026-09-11-phase2.md) · [历史 MVP 验证](docs/verification/2026-09-09-mvp.md)
+[Documentation index](docs/README.md) · [Architecture](docs/design/architecture.md) · [Latest Linux verification](docs/verification/2026-09-13-linux.md) · [Phase-two verification](docs/verification/2026-09-11-phase2.md) · [Historical MVP verification](docs/verification/2026-09-09-mvp.md)
 
 ```sh
 npm test
@@ -180,8 +193,8 @@ npm run protocol:generate
 npm run probe -- doctor
 ```
 
-CLI 升级后重新生成协议、审阅差异并验证兼容性；生成内容在忽略目录 `.local/`。`probe -- read` 只读已有测试 Thread；start/verify/reverse/interrupt/approval 会消耗现有账户额度并留下原生历史。verify 已尝试后拒绝重发，不能删除尝试记录绕过保护。历史验证保留日期和版本，不代表当前机器已完成部署；源码更新也不代表运行中的服务已更新。
+After upgrading the CLI, regenerate the protocol, review differences, and verify compatibility. Generated files live in the ignored `.local/` directory. `probe -- read` only reads an existing test Thread. start/verify/reverse/interrupt/approval consume the existing account's usage and leave native history. verify refuses to resend after an attempt; do not delete attempt records to bypass that protection. Historical records retain their dates and versions and do not prove deployment on your machine. Updating source does not update an already-running service.
 
-## 公开发布
+## Public releases
 
-公开示例中的用户名、路径和会话 ID 均已泛化。源码包 **不含 `.git` 和本地运行数据**；推送仓库前还须核对准备公开的 Git 历史，删除当前文件不等于清除历史。禁止上传 `.local/`、Codex 原生数据、凭据、附件、数据库、日志、未脱敏截图和测试产物；`docs/assets/screenshots/` 中经脱敏检查的展示图可随文档发布。范围与限制见 [发布指南](docs/guides/publishing.md)。
+Public examples use generalized usernames, paths, and conversation IDs. Source archives **exclude `.git` and local runtime data**. Before pushing a repository, also review the Git history being published; deleting a current file does not remove its history. Do not upload `.local/`, native Codex data, credentials, attachments, databases, logs, unredacted screenshots, or test artifacts. Reviewed, redacted showcase images in `docs/assets/screenshots/` may be published with the documentation. See the [publishing guide](docs/guides/publishing.md) for the reviewed scope and its limits.

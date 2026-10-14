@@ -6,7 +6,7 @@ const server=await createServer({cacheDir:'.local/vite',server:{host:'127.0.0.1'
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try{
  for(const width of [390,1280]){
-  const page=await browser.newPage({viewport:{width,height:900}});
+  const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}});
   await page.route('**/api/sessions/*/files/image?*',route=>route.request().url().includes('path=broken.png')?route.fulfill({status:404}):route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')}));
   for(const fixture of ['git-repositories','git-history','workspace-panels','workspace-panels?fetch','workspace-panels?images']){
    const [fixtureName,mode]=fixture.split('?'),fixtureUrl=new URL(`/tests/${fixtureName}.html`,`http://127.0.0.1:${server.httpServer.address().port}`);

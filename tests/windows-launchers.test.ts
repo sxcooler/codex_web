@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
 
 test('CMD launchers forward paths, arguments and exit codes with PowerShell 7 or built-in 5.1', {skip:process.platform!=='win32'}, async()=>{
   const root=await mkdtemp(join(tmpdir(),'codex cmd entry '));
@@ -41,19 +42,25 @@ test('Windows 5.1 preserves Unicode network config', {skip:process.platform!=='w
   const root=await mkdtemp(join(tmpdir(),'codex ps51 '));
   const legacy=join(process.env.SystemRoot!,'System32/WindowsPowerShell/v1.0/powershell.exe');
   try {
-    for(const directory of ['scripts/windows','.local/web'])await mkdir(join(root,directory),{recursive:true});
-    const run=(file:string)=>spawnSync(legacy,['-NoProfile','-ExecutionPolicy','Bypass','-File',join(root,file)],{encoding:'utf8',windowsHide:true,timeout:15000});
-    const network=(await readFile(new URL('../scripts/windows/configure-serve.ps1',import.meta.url),'utf8')).replace("$tailscalePath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe'","$tailscalePath = 'Invoke-TestNetwork'");
-    await writeFile(join(root,'scripts/windows/configure-serve.ps1'),network);
+    for(const directory of ['scripts/windows','src/server','.local/web'])await mkdir(join(root,directory),{recursive:true});
+    for(const file of ['scripts/windows/configure-serve.ps1','scripts/tailscale.ts','src/server/origins.ts'])await copyFile(new URL('../'+file,import.meta.url),join(root,file));
+    await writeFile(join(root,'scripts/windows/common.ps1'),`$projectRoot='${root.replaceAll("'","''")}'\n$nodePath='${process.execPath.replaceAll("'","''")}'\n`);
+    const preload=join(root,'fake-network.mjs');
+    await writeFile(preload,`import childProcess from 'node:child_process';
+let mapping={};childProcess.spawnSync=(file,args)=>{
+ if(args[0]==='--version')return {status:0,stdout:'1.90.0'};
+ if(args[0]==='status')return {status:0,stdout:JSON.stringify({BackendState:'Running',Self:{DNSName:'fixture.example.ts.net.'}})};
+ if(args[0]!=='serve')throw Error('Unexpected external command');
+ if(args[1]==='status')return {status:0,stdout:JSON.stringify(mapping)};
+ if(args.join(' ')!=='serve --bg --https=443 http://127.0.0.1:3355')throw Error('Unexpected mapping');
+ mapping={TCP:{443:{HTTPS:true}},Web:{'fixture.example.ts.net:443':{Handlers:{'/':{Proxy:'http://127.0.0.1:3355'}}}}};return {status:0};
+};`);
+    const run=(file:string)=>spawnSync(legacy,['-NoProfile','-ExecutionPolicy','Bypass','-File',join(root,file)],{env:{...process.env,NODE_OPTIONS:'--import='+pathToFileURL(preload).href},encoding:'utf8',windowsHide:true,timeout:15000});
     await writeFile(join(root,'.local/web/config.json'),JSON.stringify({workRoot:'C:\\项目\\测试',codexBin:'C:\\工具\\codex.exe'}));
     await writeFile(join(root,'network-check.ps1'),`
 $ErrorActionPreference='Stop'
-function Invoke-TestNetwork {
- $global:LASTEXITCODE=0
- if($args[0] -eq 'status'){'{"BackendState":"Running","Self":{"DNSName":"fixture.example.ts.net."}}'}
- elseif($args[1] -eq 'status'){'{}'}
-}
 & (Join-Path $PSScriptRoot 'scripts/windows/configure-serve.ps1') -Port 3355
+& (Join-Path $PSScriptRoot 'scripts/windows/configure-serve.ps1')
 `);
     const configured=run('network-check.ps1');assert.equal(configured.status,0,configured.stdout+configured.stderr);
     const saved=JSON.parse(await readFile(join(root,'.local/web/config.json'),'utf8'));

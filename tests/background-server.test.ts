@@ -39,11 +39,12 @@ test('portable remembers explicit launch preference and never changes unattended
   assert.equal(await launchPreference({background:false},{question:async()=>''},true),true);
 });
 
-test('portable forwards per-run diagnostics without saving the flag',async()=>{
+test('portable forwards diagnostics and keeps optional Tailscale setup separate from server start',async()=>{
   const root=await mkdtemp(join(tmpdir(),'codex portable diagnostics '));
   try {
     for(const dir of ['scripts','src/server','src/codex','.local/web'])await mkdir(join(root,dir),{recursive:true});
     await copyFile(new URL('../scripts/portable.ts',import.meta.url),join(root,'scripts/portable.ts'));
+    await copyFile(new URL('../scripts/tailscale.ts',import.meta.url),join(root,'scripts/tailscale.ts'));
     await copyFile(new URL('../src/server/origins.ts',import.meta.url),join(root,'src/server/origins.ts'));
     await copyFile(new URL('../src/codex/executable.ts',import.meta.url),join(root,'src/codex/executable.ts'));
     await writeFile(join(root,'scripts/server-control.ts'),`export async function managedServer(){return process.env.FIXTURE_EXISTING?{diagnosticsEnabled:false}:null;} export async function runServer(...args){console.log('FORWARD:'+JSON.stringify(['foreground',...args]));} export async function startBackground(...args){console.log('FORWARD:'+JSON.stringify(['background',...args]));} export async function stopServer(){throw Error('not used');}`);
@@ -59,6 +60,28 @@ test('portable forwards per-run diagnostics without saving the flag',async()=>{
     }
     const existing=spawnSync(process.execPath,[join(root,'run.mjs'),'--no-browser','--diagnostics'],{env:{...process.env,FIXTURE_EXISTING:'1'},encoding:'utf8',windowsHide:true,timeout:10000});
     assert.notEqual(existing.status,0);assert.doesNotMatch(existing.stdout,/FORWARD:/);
+    const network=spawnSync(process.execPath,[join(root,'run.mjs'),'--configure-tailscale'],{encoding:'utf8',windowsHide:true,timeout:10000});
+    assert.notEqual(network.status,0);assert.match(network.stderr,/交互终端/);assert.doesNotMatch(network.stdout,/FORWARD:/);
+    assert.equal(await readFile(join(root,'.local/web/config.json'),'utf8'),config);
+    await writeFile(join(root,'scripts/tailscale.ts'),`import {readFile,writeFile} from 'node:fs/promises';import {join} from 'node:path';export async function configureTailscale(dir,port){console.log('NETWORK:'+port);const file=join(dir,'config.json'),saved=JSON.parse(await readFile(file,'utf8'));await writeFile(file,JSON.stringify({...saved,origin:'https://fixture.tailnet.ts.net',allowedOrigins:[saved.origin]}));return 'https://fixture.tailnet.ts.net';}`);
+    await writeFile(join(root,'interactive.mjs'),`import childProcess from 'node:child_process';import {Interface} from 'node:readline/promises';import {fileURLToPath} from 'node:url';childProcess.spawnSync=()=>({status:0,stdout:'codex-cli 0.160.1'});Object.defineProperty(process.stdin,'isTTY',{value:true});const answers=process.env.FIRST_CONFIG?[process.env.FIRST_CONFIG,process.env.TEST_PORT,'',process.env.NETWORK_CHOICE]:[];Interface.prototype.question=async()=>{if(!answers.length)throw Error('Unexpected question');return answers.shift();};process.argv[1]=fileURLToPath(new URL('./scripts/portable.ts',import.meta.url));await import('./scripts/portable.ts');`);
+    const configured=spawnSync(process.execPath,[join(root,'interactive.mjs'),'--configure-tailscale'],{encoding:'utf8',windowsHide:true,timeout:10000});
+    assert.equal(configured.status,0,configured.stderr);assert.match(configured.stdout,/NETWORK:/);assert.match(configured.stdout,/https:\/\/fixture.tailnet.ts.net/);assert.doesNotMatch(configured.stdout,/FORWARD:/);
+    const configuredBytes=await readFile(join(root,'.local/web/config.json'),'utf8');
+    const refused=spawnSync(process.execPath,[join(root,'interactive.mjs'),'--configure-tailscale'],{env:{...process.env,FIXTURE_EXISTING:'1'},encoding:'utf8',windowsHide:true,timeout:10000});
+    assert.notEqual(refused.status,0);assert.match(refused.stderr,/Stop/);assert.doesNotMatch(refused.stdout,/NETWORK:|FORWARD:/);assert.equal(await readFile(join(root,'.local/web/config.json'),'utf8'),configuredBytes);
+    const invalidBytes=JSON.stringify({...JSON.parse(configuredBytes),codexBin:join(root,'missing-cli')});
+    await writeFile(join(root,'.local/web/config.json'),invalidBytes);
+    const invalidWhileRunning=spawnSync(process.execPath,[join(root,'interactive.mjs'),'--configure-tailscale'],{env:{...process.env,FIXTURE_EXISTING:'1',LOCALAPPDATA:root,CODEX_INSTALL_DIR:join(root,'missing'),PATH:''},encoding:'utf8',windowsHide:true,timeout:10000});
+    assert.notEqual(invalidWhileRunning.status,0);assert.match(invalidWhileRunning.stderr,/Stop/);assert.doesNotMatch(invalidWhileRunning.stdout,/NETWORK:|FORWARD:|未找到/);assert.equal(await readFile(join(root,'.local/web/config.json'),'utf8'),invalidBytes);
+    for(const choice of ['','y']){
+      await rm(join(root,'.local/web/config.json'));
+      const first=spawnSync(process.execPath,[join(root,'interactive.mjs'),'--no-browser','--foreground'],{env:{...process.env,CODEX_INSTALL_DIR:root,FIRST_CONFIG:root,TEST_PORT:String(port),NETWORK_CHOICE:choice},encoding:'utf8',windowsHide:true,timeout:10000});
+      assert.equal(first.status,0,first.stderr);assert.match(first.stdout,/FORWARD:/);
+      const actual=JSON.parse(await readFile(join(root,'.local/web/config.json'),'utf8'));
+      assert.equal(actual.origin,choice?'https://fixture.tailnet.ts.net':`http://localhost:${port}`);
+      if(choice)assert.match(first.stdout,/NETWORK:/);else assert.doesNotMatch(first.stdout,/NETWORK:/);
+    }
   } finally {await rm(root,{recursive:true,force:true});}
 });
 

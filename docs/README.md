@@ -1,6 +1,6 @@
 # 文档索引
 
-[中文首页](../README.md) · [English README](../README_EN.md)
+[中文首页](../README_CN.md) · [English README](../README.md)
 
 当前操作说明与历史证据分开维护；具体平台支持以最新验证记录为准。历史版本、测试数与环境不推断成当前机器状态。英文首页完整对应中文，详细文档本轮保持中文。
 
@@ -15,6 +15,7 @@
 
 - [便携更新、自启动、提问与模型目录](design/portable-updates-and-input.md)：轻量更新与恢复、品牌启动器、原生异步提问和目录刷新。
 - [多访问地址](design/multiple-origins.md)：localhost 与 HTTPS 白名单、Cookie/CSRF 边界和首次可选域名。
+- [国际化方案](../codex-drive/specs/2026-10-14-internationalization.arch.md)：简体中文／英文、类型安全文案、语言偏好与错误展示边界；对应[实施计划](superpowers/plans/2026-10-14-internationalization.md)和[验收记录](verification/2026-10-14-internationalization.md)。
 
 - [当前用户后台运行](design/background-running.md)：源码/便携启停、首次偏好、用户启动项及迁移。
 
@@ -22,12 +23,16 @@
 - [架构](design/architecture.md)：模块、原生 Thread 与访问边界。
 - [会话工作区](design/session-workspace.md)：第二阶段流程、模型/权限、附件、报告与通知；2026-09-22 固定单行顶栏与输入区收起已实施，含 mock 原型图及[验收记录](verification/2026-09-22-session-toolbar.md)。
 - [会话同步与性能](design/session-sync.md)：水位、回放、gzip、历史分页、按需输出与列表性能。
+- [权限核对提示](design/2026-10-14-session-ownership-notice.md)：正常加载与核对保持安静，持续未知或实际异常保留恢复入口。
+- [语言控件与任务空闲重启](design/2026-10-14-language-control-and-restart.md)：语言选择框样式、浏览器验证要求和只读查询不阻碍重启的边界；对应[验收记录](verification/2026-10-14-language-control-and-restart.md)。
 - [无响应诊断](design/runtime-diagnostics.md)：有界日志、进程负载、HTTP/RPC 等待及隐私边界；新增诊断需重启服务后生效。
 - [工作区面板](design/workspace-panels.md)：布局、项目阅读状态、Git 历史、三标签图片预览、忽略文件显示，以及统一刷新与异步 fetch。
 - [Markdown](design/markdown.md) 与 [执行过程](design/execution-process.md)：渲染、安全、折叠和可访问性；[紧凑输入、摘要同步与子 Agent 展示验收](verification/2026-09-22-compact-input-reasoning.md)。
 - [Linux 支持与文档整理](design/linux-support-and-docs.md)：已批准方案、便携安装补充和实施清单。
 
 ## 验证与归档
+
+- [2026-10-14 Tailscale 接入验收](verification/2026-10-14-tailscale-setup.md)：安装／登录／Serve 的分步授权、双平台模拟回归、旧更新器文档兼容及国际化设计边界。
 
 - [2026-09-30 发送后刷新恢复](verification/2026-09-30-session-open-recovery.md)：打开失败的有限重试、占用保护与不重复提交回归。
 

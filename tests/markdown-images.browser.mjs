@@ -7,7 +7,7 @@ let browser;
 try{
  browser=await chromium.launch({channel:'chrome',headless:true});
  for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
-  const page=await browser.newPage({viewport}),remote=[],errors=[],requested=[];
+  const page=await browser.newPage({locale:'zh-CN',viewport}),remote=[],errors=[],requested=[];
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**://example.invalid/**',route=>{remote.push(route.request().url());return route.abort();});
   await page.route('**/api/sessions/fixture/files/image?*',route=>{const path=new URL(route.request().url()).searchParams.get('path');requested.push(path);return path.endsWith('missing.png')?route.fulfill({status:404,body:'missing'}):route.fulfill({contentType:'image/png',path:path.startsWith('docs/assets/screenshots/')?path:'public/assets/icon-mobile-v1-512.png'});});

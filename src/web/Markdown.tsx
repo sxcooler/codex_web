@@ -1,12 +1,16 @@
+import {useLocale} from './i18n/LocaleProvider.tsx';
+import {msg,type UiText} from './i18n/text.ts';
 import {useEffect,useId,useMemo,useRef,useState,type ReactNode,type ComponentProps} from 'react';
 import {Streamdown,CodeBlock,defaultRehypePlugins,useIsCodeFenceIncomplete,type Components} from 'streamdown';
 import {code} from '@streamdown/code';
 import {linkFragment} from './fileLinks.ts';
 import {MermaidBlock} from './MermaidBlock.tsx';
+import {createTranslator} from './i18n/messages.ts';
+import type {Locale} from './i18n/types.ts';
 import {checkedHighlighter} from './codeHighlight.ts';
 const checkedCode=checkedHighlighter(code);
 type MarkdownNode={type?:string;value?:string;tagName?:string;properties?:Record<string,unknown>;children?:MarkdownNode[];position?:{start:{line:number};end:{line:number}}};
-type LinkOptions={resolve:(url:string)=>string;image?:(url:string)=>string;scope:string};
+type LinkOptions={resolve:(url:string)=>string;image?:(url:string)=>string;scope:string;locale:Locale};
 // Parse only standalone image HTML; other raw HTML keeps the existing rendering policy.
 const imageHtmlPlugin=()=>{
   const parse=(defaultRehypePlugins.raw as ()=> (tree:MarkdownNode)=>MarkdownNode)();
@@ -23,7 +27,7 @@ const imageHtmlPlugin=()=>{
   };
 };
 // ponytail: Streamdown keys processors by plugin names and JSON options; scope isolates file resolvers.
-const linkPlugin=({resolve,image}:LinkOptions)=>function visit(node:MarkdownNode){
+const linkPlugin=({resolve,image,locale}:LinkOptions)=>{const t=createTranslator(locale);return function visit(node:MarkdownNode){
   if(node.tagName==='a'&&typeof node.properties?.href==='string'){
     const original=node.properties.href,url=resolve(original);
     if(url)node.properties.href=url;
@@ -31,7 +35,7 @@ const linkPlugin=({resolve,image}:LinkOptions)=>function visit(node:MarkdownNode
   }
   if(node.tagName==='img'){
     const props=node.properties??{},src=typeof props.src==='string'?image?.(props.src):'';
-    if(!src){node.tagName='span';node.properties={};node.children=[{type:'text',value:'[仅支持项目内图片'+(props.alt?'：'+String(props.alt):'')+']'+(typeof props.src==='string'?' ('+props.src+')':'')}];}
+    if(!src){node.tagName='span';node.properties={};node.children=[{type:'text',value:t('panels.markdown.projectImages',props.alt?String(props.alt):'')+(typeof props.src==='string'?' ('+props.src+')':'')}];}
     else{
       node.properties={src};
       for(const key of ['alt','title'])if(typeof props[key]==='string')node.properties[key]=props[key];
@@ -39,7 +43,7 @@ const linkPlugin=({resolve,image}:LinkOptions)=>function visit(node:MarkdownNode
     }
   }
   node.children?.forEach(visit);
-};
+};};
 const theme:['github-dark','github-dark']=['github-dark','github-dark'];
 // Positions come from the Markdown parser, after raw HTML has been sanitized.
 const sourcePositionPlugin=()=>function visit(node:MarkdownNode){
@@ -47,10 +51,12 @@ const sourcePositionPlugin=()=>function visit(node:MarkdownNode){
  node.children?.forEach(visit);
 };
 const safeRemote=(url:string)=>{if(url.startsWith('#')&&linkFragment(url))return '#'+encodeURIComponent(linkFragment(url));try{const parsed=new URL(url);return ['http:','https:'].includes(parsed.protocol)?parsed.href:'';}catch{return '';}};
-function Copy({text,label}:{text:string;label:string}){const [feedback,setFeedback]=useState('');useEffect(()=>setFeedback(''),[text]);return <span className="markdown-copy"><button type="button" className="quiet" onClick={async()=>{try{await navigator.clipboard.writeText(text);setFeedback('已复制');}catch{setFeedback('复制失败，请选择文本复制');}}}>{label}</button><span role="status">{feedback}</span></span>;}
-function MarkdownImage({src,alt,title,width,height}:ComponentProps<'img'>){const [failed,setFailed]=useState(false);useEffect(()=>setFailed(false),[src]);return failed?<span className="muted" role="status">[图片无法加载：{alt||'文件可能不存在、不可读或超过预览限制'}]</span>:<img className="markdown-image" src={src} alt={alt??''} title={title} width={width} height={height} style={height?{height}:undefined} loading="lazy" decoding="async" onError={()=>setFailed(true)}/>;}
-function MarkdownCode(props:ComponentProps<'code'>&{node?:MarkdownNode;'data-block'?:string}){const incomplete=useIsCodeFenceIncomplete();if(!('data-block' in props))return <code>{props.children}</code>;const text=String(props.children??''),language=/language-([^\s]+)/.exec(props.className??'')?.[1]??'text';return <div data-source-start={props.node?.position?.start.line} data-source-end={props.node?.position?.end.line}>{language==='mermaid'?<MermaidBlock text={text} incomplete={incomplete}><Copy text={text} label="复制源码"/></MermaidBlock>:<CodeBlock key={text} code={text} language={language} isIncomplete={incomplete} lineNumbers={false}><Copy text={text} label="复制代码"/></CodeBlock>}</div>;}
+function Copy({text,label}:{text:string;label:string}){const {text:displayText}=useLocale();const [feedback,setFeedback]=useState<UiText>('');useEffect(()=>setFeedback(''),[text]);return <span className="markdown-copy"><button type="button" className="quiet" onClick={async()=>{try{await navigator.clipboard.writeText(text);setFeedback(msg('panels.copy.success'));}catch{setFeedback(msg('panels.copy.select'));}}}>{label}</button><span role="status">{displayText(feedback)}</span></span>;}
+function MarkdownImage({src,alt,title,width,height}:ComponentProps<'img'>){const {t}=useLocale();const [failed,setFailed]=useState(false);useEffect(()=>setFailed(false),[src]);return failed?<span className="muted" role="status">{t('panels.markdown.imageFailed',alt||t('panels.markdown.imageReason'))}</span>:<img className="markdown-image" src={src} alt={alt??''} title={title} width={width} height={height} style={height?{height}:undefined} loading="lazy" decoding="async" onError={()=>setFailed(true)}/>;}
+function MarkdownImageNode(props:ComponentProps<'img'>|Record<string,unknown>){return <MarkdownImage {...props as ComponentProps<'img'>}/>;}
+function MarkdownCode(props:ComponentProps<'code'>&{node?:MarkdownNode;'data-block'?:string}){const {t}=useLocale();const incomplete=useIsCodeFenceIncomplete();if(!('data-block' in props))return <code>{props.children}</code>;const text=String(props.children??''),language=/language-([^\s]+)/.exec(props.className??'')?.[1]??'text';return <div data-source-start={props.node?.position?.start.line} data-source-end={props.node?.position?.end.line}>{language==='mermaid'?<MermaidBlock text={text} incomplete={incomplete}><Copy text={text} label={t('panels.markdown.copySource')}/></MermaidBlock>:<CodeBlock key={text} code={text} language={language} isIncomplete={incomplete} lineNumbers={false}><Copy text={text} label={t('panels.markdown.copyCode')}/></CodeBlock>}</div>;}
 export function Markdown({text,streaming=false,resolveUrl=safeRemote,resolveImage,onLink,anchor,linkScope='chat',actions}:{text:string;streaming?:boolean;resolveUrl?:(url:string)=>string;resolveImage?:(url:string)=>string;onLink?:(url:string)=>boolean;anchor?:{fragment?:string};linkScope?:string;actions?:ReactNode}){
+ const {locale,t}=useLocale();
  const root=useRef<HTMLDivElement>(null),scope=useId();
  const jump=(fragment:string)=>{
   const line=/^L([1-9]\d*)(?:C\d+)?(?:-L?\d+(?:C\d+)?)?$/.exec(fragment);
@@ -72,4 +78,4 @@ export function Markdown({text,streaming=false,resolveUrl=safeRemote,resolveImag
   if(root.current?.closest('.preview-shell'))for(const scroll of root.current.querySelectorAll<HTMLElement>('[data-streamdown="table-wrapper"]>div:last-child'))scroll.tabIndex=0;
   if(anchor?.fragment)jump(anchor.fragment);
  },[text,linkScope,anchor,scope]);
- const rehypePlugins=useMemo(()=>[imageHtmlPlugin,defaultRehypePlugins.raw,[linkPlugin,{resolve:resolveUrl,image:resolveImage,scope:linkScope}] as [typeof linkPlugin,LinkOptions],defaultRehypePlugins.sanitize,sourcePositionPlugin,defaultRehypePlugins.harden],[resolveUrl,resolveImage,linkScope]);const components:Components={code:MarkdownCode,strong:({children})=><strong>{children}</strong>,a:({href,children})=>{const url=safeRemote(href??'');return url?<a href={url} onClick={event=>{if(onLink?.(href??''))event.preventDefault();else if(url.startsWith('#')){event.preventDefault();jump(linkFragment(url));}}} {...(url.startsWith('#')?{}:{target:'_blank',rel:'noopener noreferrer'})}>{children}</a>:<span>{children}</span>;},img:({src,alt,title,width,height})=><MarkdownImage src={src} alt={alt} title={title} width={width} height={height}/>,input:({checked})=><input type="checkbox" checked={!!checked} disabled aria-label={checked?'已完成':'未完成'}/>};return <div ref={root} className="markdown-message" data-streaming={streaming}><Streamdown key={linkScope} mode={streaming?'streaming':'static'} isAnimating={streaming} parseIncompleteMarkdown={streaming} plugins={streaming?{}:{code:checkedCode}} shikiTheme={theme} components={components} rehypePlugins={rehypePlugins} skipHtml urlTransform={safeRemote} controls={{code:false,table:false,image:false,mermaid:false}} lineNumbers={false} tableMaxHeight={0} codeBlockMaxHeight={0}>{text}</Streamdown><div className="message-actions"><Copy text={text} label="复制 Markdown"/>{actions}</div></div>;}
+ const rehypePlugins=useMemo(()=>[imageHtmlPlugin,defaultRehypePlugins.raw,[linkPlugin,{resolve:resolveUrl,image:resolveImage,scope:linkScope,locale}] as [typeof linkPlugin,LinkOptions],defaultRehypePlugins.sanitize,sourcePositionPlugin,defaultRehypePlugins.harden],[resolveUrl,resolveImage,linkScope,locale]);const components:Components={code:MarkdownCode,strong:({children})=><strong>{children}</strong>,a:({href,children})=>{const url=safeRemote(href??'');return url?<a href={url} onClick={event=>{if(onLink?.(href??''))event.preventDefault();else if(url.startsWith('#')){event.preventDefault();jump(linkFragment(url));}}} {...(url.startsWith('#')?{}:{target:'_blank',rel:'noopener noreferrer'})}>{children}</a>:<span>{children}</span>;},img:MarkdownImageNode,input:({checked})=><input type="checkbox" checked={!!checked} disabled aria-label={checked?t('panels.markdown.completed'):t('panels.markdown.incomplete')}/>};return <div ref={root} className="markdown-message" data-streaming={streaming}><Streamdown key={linkScope} mode={streaming?'streaming':'static'} isAnimating={streaming} parseIncompleteMarkdown={streaming} plugins={streaming?{}:{code:checkedCode}} shikiTheme={theme} components={components} rehypePlugins={rehypePlugins} skipHtml urlTransform={safeRemote} controls={{code:false,table:false,image:false,mermaid:false}} lineNumbers={false} tableMaxHeight={0} codeBlockMaxHeight={0}>{text}</Streamdown><div className="message-actions"><Copy text={text} label={t('panels.markdown.copy')}/>{actions}</div></div>;}

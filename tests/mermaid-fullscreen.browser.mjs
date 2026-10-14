@@ -13,7 +13,7 @@ try{
  await server.listen();await server.transformRequest('/src/web/style.css');
  browser=await chromium.launch({channel:'chrome',headless:true});
  for(const width of [1280,390]){
-  const page=await browser.newPage({viewport:{width,height:900},hasTouch:width===390}),errors=[];
+  const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900},hasTouch:width===390}),errors=[];
   page.setDefaultTimeout(30000);page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
   await page.addInitScript(()=>{window.dialogEvents=[];for(const type of ['cancel','close'])document.addEventListener(type,event=>window.dialogEvents.push({type,target:event.target.className,modal:event.target.matches(':modal')}),true);for(const capture of [true,false])window.addEventListener('keydown',event=>{if(event.key==='Escape')window.dialogEvents.push({type:'keydown',capture,prevented:event.defaultPrevented,target:event.target.className,popovers:document.querySelectorAll(':popover-open').length});},capture);});
   try{

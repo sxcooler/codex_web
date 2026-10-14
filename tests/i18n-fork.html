@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module">
+import React from 'react';import {createRoot} from 'react-dom/client';
+import '../src/web/style.css';import {LocaleProvider} from '../src/web/i18n/LocaleProvider.tsx';import {LanguageSelect} from '../src/web/i18n/LanguageSelect.tsx';import {MessageActions} from '../src/web/MessageActions.tsx';import {drafts} from '../src/web/drafts.ts';
+drafts.set('source-thread',{text:'原始草稿',settings:{},attachments:[]});
+createRoot(document.getElementById('root')).render(React.createElement(LocaleProvider,null,React.createElement(LanguageSelect),React.createElement(MessageActions,{threadId:'source-thread',turnId:'selected-turn',canFork:true})));
+</script></body></html>

@@ -25,7 +25,7 @@ let browser;
 try{
  browser=await chromium.launch({channel:'chrome',headless:true});
  for(const width of [1280,390]){
-  const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();
+  const context=await browser.newContext({locale:'zh-CN',viewport:{width,height:900}}),page=await context.newPage();
   try{
    page.on('pageerror',error=>errors.push(error.message));
    await page.addInitScript(()=>{if(!localStorage.getItem('codex-web:session-grouping:v2'))localStorage.setItem('codex-web:session-grouping:v2','directory');window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};});

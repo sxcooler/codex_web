@@ -106,7 +106,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     }
     if (passwordChecks >= 5) {
       reply.header('retry-after', String(Math.max(1, Math.ceil((60_000 - (now - rateWindowStarted)) / 1_000))));
-      reply.code(429).send({ error: 'Too many password attempts' });
+      reply.code(429).send({ error: 'Too many password attempts', code: 'AUTH_RATE_LIMITED' });
       return false;
     }
     passwordChecks += 1;
@@ -125,7 +125,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
   app.addHook('onRequest', async (request, reply) => {
     const origin = originsByHost.get(request.headers.host ?? '');
     if (!origin) {
-      return reply.code(403).send({ error: 'Forbidden' });
+      return reply.code(403).send({ error: 'Forbidden', code: 'REQUEST_FORBIDDEN' });
     }
     requestOrigins.set(request, origin);
 
@@ -133,21 +133,21 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     try {
       cookies = parseCookies(request.headers.cookie);
     } catch {
-      return reply.code(403).send({ error: 'Forbidden' });
+      return reply.code(403).send({ error: 'Forbidden', code: 'REQUEST_FORBIDDEN' });
     }
     requestCookies.set(request, cookies);
 
     if (!['GET', 'HEAD'].includes(request.method)) {
       const csrfHeader = tokenHeader(request.headers['x-csrf-token']);
       if (request.headers.origin !== origin.origin || !sameToken(cookies.csrf, csrfHeader)) {
-        return reply.code(403).send({ error: 'Forbidden' });
+        return reply.code(403).send({ error: 'Forbidden', code: 'REQUEST_FORBIDDEN' });
       }
     }
 
     const route = matchedApiRoute(request);
     if (route && !PUBLIC_ROUTES.has(route)) {
       if (!cookies.session || !auth.authenticate(cookies.session)) {
-        return reply.code(401).send({ error: 'Authentication required' });
+        return reply.code(401).send({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
       }
       authenticatedTokens.set(request, cookies.session);
     }
@@ -156,7 +156,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
   app.setErrorHandler((error: FastifyError, request, reply) => {
     if (error.code === 'FST_REQ_FILE_TOO_LARGE') return reply.code(413).send({ error: 'File too large' });
     if (error.validation || error.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || error.statusCode === 400) {
-      return reply.code(400).send({ error: 'Invalid request' });
+      return reply.code(400).send({ error: 'Invalid request', code: 'REQUEST_VALIDATION_FAILED' });
     }
     const known = ['PROJECT_ERROR', 'RUNTIME_ERROR', 'UPLOAD_ERROR', 'PUSH_ERROR', 'REPORT_ERROR'].includes(error.code ?? '') || ['RUNTIME_', 'ACCOUNT_', 'SETTINGS_', 'INSTRUCTIONS_', 'PLUGINS_', 'SHARED_'].some(prefix => error.code?.startsWith(prefix));
     if (request.routeOptions.url?.startsWith('/api/') && (!known || (error.statusCode ?? 500) >= 500)) {
@@ -169,9 +169,9 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     if (known) {
       return reply.code(error.statusCode ?? 500).send({ error: error.message, code: error.code, partial: (error as any).partial });
     }
-    return reply.code(500).send({ error: 'Internal server error' });
+    return reply.code(500).send({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
   });
-  app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: 'Not found' }));
+  app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: 'Not found', code: 'ROUTE_NOT_FOUND' }));
 
   app.get('/api/auth/session', async (request, reply) => {
     const cookies = requestCookies.get(request) ?? {};
@@ -189,14 +189,14 @@ export async function buildServer(options: { dataDir: string; origin: string; al
       const body = request.body as { password: string };
       const checked = await auth.verifyPassword(body.password);
       if (checked.status === 'busy') {
-        return reply.header('retry-after', '1').code(503).send({ error: 'Password service busy' });
+        return reply.header('retry-after', '1').code(503).send({ error: 'Password service busy', code: 'AUTH_PASSWORD_BUSY' });
       }
-      if (checked.status !== 'valid') return reply.code(401).send({ error: 'Invalid credentials' });
+      if (checked.status !== 'valid') return reply.code(401).send({ error: 'Invalid credentials', code: 'AUTH_INVALID_CREDENTIALS' });
 
       const session = auth.issueSession(checked.credentialFingerprint, requestCookies.get(request)?.session);
       closeInvalidStreams();
       await pruneSubscriptions().catch(() => {});
-      if (!session) return reply.code(401).send({ error: 'Invalid credentials' });
+      if (!session) return reply.code(401).send({ error: 'Invalid credentials', code: 'AUTH_INVALID_CREDENTIALS' });
       setCookie(reply, SESSION_COOKIE, session, requestOrigin(request).protocol === 'https:');
       return { authenticated: true };
     },
@@ -204,7 +204,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
 
   app.post('/api/auth/renew', async (request, reply) => {
     if (!auth.renewSession(authenticatedTokens.get(request)!)) {
-      return reply.code(401).send({ error: 'Authentication required' });
+      return reply.code(401).send({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
     }
     return { authenticated: true };
   });
@@ -226,10 +226,10 @@ export async function buildServer(options: { dataDir: string; origin: string; al
       const body = request.body as { currentPassword: string; newPassword: string };
       const changed = await auth.changePassword(body.currentPassword, body.newPassword);
       if (changed.status === 'busy') {
-        return reply.header('retry-after', '1').code(503).send({ error: 'Password service busy' });
+        return reply.header('retry-after', '1').code(503).send({ error: 'Password service busy', code: 'AUTH_PASSWORD_BUSY' });
       }
       if (changed.status === 'conflict') return reply.code(409).send({ error: 'Password changed concurrently' });
-      if (changed.status === 'invalid') return reply.code(401).send({ error: 'Invalid credentials' });
+      if (changed.status === 'invalid') return reply.code(401).send({ error: 'Invalid credentials', code: 'AUTH_INVALID_CREDENTIALS' });
       closeInvalidStreams();
       await pruneSubscriptions().catch(() => {});
       setCookie(reply, SESSION_COOKIE, '', requestOrigin(request).protocol === 'https:', true);

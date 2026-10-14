@@ -5,7 +5,7 @@ const server=await createServer({cacheDir:'.local/title-vite',server:{host:'127.
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try {
   for(const width of [390,1280]) {
-    const page=await browser.newPage({viewport:{width,height:900}}),errors=[];
+    const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}}),errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/tests/session-toolbar.html?nativeTitle`);
     await page.waitForFunction(()=>window.testState.stream&&document.querySelector('.session-title')?.textContent==='临时任务预览');

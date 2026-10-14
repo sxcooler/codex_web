@@ -6,7 +6,7 @@ const baseline=process.argv.includes('--baseline'),server=await createServer({ca
 const browser=await chromium.launch({channel:'chrome',headless:true}),results=[];
 try{
  for(const width of [390,1280]){
-  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];let observed,stage='initial';
+  const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}}),errors=[];let observed,stage='initial';
   page.on('pageerror',error=>errors.push(error.message));
   const render=async(path,text,anchor)=>{stage=path;await page.evaluate(({path,text,anchor})=>renderPreview(path,text,anchor),{path,text,anchor});await page.waitForFunction(text=>document.querySelector('.preview-content pre')?.textContent===text,text);};
   const colored=()=>page.waitForFunction(()=>[...document.querySelectorAll('.preview-content pre span')].some(node=>node.style.color),{},{timeout:5000});

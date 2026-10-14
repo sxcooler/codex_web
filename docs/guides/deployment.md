@@ -25,6 +25,8 @@ Windows x64 和 Linux x64 glibc 可使用各自自带 Node 的便携包；首次
 
 点击按钮后打开页内确认框，自动查询本机 Codex App Server 的全部已加载会话；存在运行任务、待审批、待输入，或活动状态无法核实时，不允许确认重启。历史会话无需删除，也无需逐个检查 Web 客户端。Web 重启复用 `scripts/windows/restart-server.ps1 -RequireIdle`，预检通过后延迟 90 秒执行；执行前会再次查询活动状态。页面提供“检查重启结果”，计划与结果记录位于 `.local/web/restart-latest.json` 及其指向的 `.result.json`、`.log`。
 
+后台列表、历史与文件读取不阻碍显式重启，关闭时这些读取可能断开并由页面恢复。仍在提交任务或写入时应等待提交结束；任务启动、待审批／输入以及无法核实的状态继续受保护。详见[任务空闲重启规则](../design/2026-10-14-language-control-and-restart.md)。
+
 ## 配置与数据
 
 `.local/web/config.json` 可设置 `origin`、`allowedOrigins`、`port`、`workRoot`、`codexBin`。`origin` 是默认打开地址，`allowedOrigins` 是额外完整 HTTP/HTTPS 站点地址数组（默认空）；两者合并为精确白名单。对应环境变量 `WEB_ORIGIN`、`PORT`、`WORK_ROOT`、`CODEX_BIN` 优先；`WEB_ORIGIN` 只覆盖默认地址，额外地址仍来自配置。`WEB_DATA_DIR` 可更换后端数据目录。便携入口使用包内配置并清除这四项开发环境覆盖。Windows/Linux 部署脚本固定使用项目的 `.local/web`，不要混用其他数据目录。部署入口按平台放在 `scripts/windows/` 与 `scripts/linux/`，见 [脚本索引](../../scripts/README.md)。
@@ -82,13 +84,13 @@ Web 固定监听 `127.0.0.1`，**仅连接同一 Wi-Fi 或安装 VPN 并不能�
 scripts\windows\configure-serve.cmd
 ```
 
-脚本检查现有 Serve 配置；发现任何映射就退出，保留原配置。首次使用可能要求在 Tailscale 管理页启用 HTTPS/Serve。成功后配置私网 HTTPS → `http://127.0.0.1:3000`，将精确 HTTPS origin 写入本机配置，再重启 Web 服务。
+脚本共用 `scripts/tailscale.ts`，读取实际设备状态与域名；完全相同的私有映射幂等复用，其他 Serve/Funnel 映射或不能确认的结构拒绝覆盖。首次使用可能要求在 Tailscale 管理页启用 HTTPS/Serve。成功后复读确认私网 HTTPS → `http://127.0.0.1:3000`，将精确 HTTPS origin 写入本机配置，再手动启动 Web 服务；修改已有部署前先结束任务并停止 Web。
 
 此示例使用仅面向虚拟网络的 Serve，不使用面向公网的 Funnel。辅助脚本把 HTTPS 地址设为默认 origin，并将原有地址保留在 allowedOrigins；新配置默认保留 localhost。手动修改 origin 不会自动添加 localhost，需要自行加入数组。不同主机地址各自登录，Cookie 根据本次访问地址设置 Secure；写请求的 Origin 必须匹配本次 Host，同时验证 CSRF。参考 [Tailscale Serve 官方说明](https://tailscale.com/docs/reference/tailscale-cli/serve)。
 
-Linux 在宿主安装并登录 Tailscale、取得 Serve 操作权限后运行 `bash scripts/linux/configure-serve.sh`；可追加实际 Web 端口，例如 `bash scripts/linux/configure-serve.sh 3412`。同样拒绝覆盖已有映射，成功后保留其他 Web 配置并写入 origin 和端口。脚本不自动安装 Tailscale、不提权，也不启用 Funnel。WSL 验证覆盖命令及配置保护逻辑，未安装 Linux Tailscale，因此不代表 Linux 跨设备访问已验收。
+Linux 在宿主安装并登录 Tailscale、取得 Serve 操作权限后运行 `bash scripts/linux/configure-serve.sh`；可追加实际 Web 端口，例如 `bash scripts/linux/configure-serve.sh 3412`。Windows `-Interactive` / Linux `--interactive` 可选交互安装与登录引导；源码统一入口为 `npm run tailscale:setup`，便携首次配置也可选择接入。安装仅在明确输入 `install` 后运行，可能需要第三方安装器的管理员/sudo 权限；不启用 Funnel。详见[便携包接入流程](portable.md#tailscale-私有-https)。历史 WSL 模拟命令验证不代表真实 Linux 跨设备连接已验收。
 
-核验：`tailscale serve status` 显示目标回环地址，在另一台 tailnet 设备访问 HTTPS 页面并登录。确认非 tailnet 设备不可访问；不要开放路由器端口或添加公网代理。手机浏览器支持时可“添加到主屏幕”；PWA 只缓存静态外壳，离线时不能提交任务，API 和会话正文不进入 PWA 缓存。
+核验：`tailscale serve status` 显示目标回环地址，在另一台 tailnet 设备访问 HTTPS 页面并登录。确认非 tailnet 设备不可访问；不转发 Web TCP 3000/私网 HTTPS TCP 443 到公网，不启用 Funnel。为优化底层点对点连接，可按[家庭宽带直连建议](../../README_CN.md#3-让-tailscale-尽量走直连中国家庭宽带)减少双重 NAT，必要时仅转发实际 Tailscale UDP 端口；这与开放 Web 业务端口不同。手机浏览器支持时可“添加到主屏幕”；PWA 只缓存静态外壳，离线时不能提交任务，API 和会话正文不进入 PWA 缓存。
 
 ## Windows 后台运行与登录后启动
 

@@ -1,10 +1,11 @@
 import {test,expect,type Page} from '@playwright/test';
 
 async function setup(page:Page){
-  const state={opens:0,failOpen:false,denied:false,external:false,holdRead:false,reading:false,finishRead:()=>{},holdOpen:false,finishOpen:()=>{},posted:[] as any[],holdSend:false,finishSend:()=>{},snapshot:{thread:{id:'recovery',name:'刷新恢复测试',turns:[] as any[]},phase:'IDLE',activeTurnId:null as string|null,pending:[],epoch:'test',syncCursor:'test:0'}};
-  await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}} as any;});
+  const state={opens:0,writes:[] as string[],failOpen:false,denied:false,external:false,holdRead:false,reading:false,finishRead:()=>{},holdStatus:false,statusReading:false,finishStatus:()=>{},holdOpen:false,finishOpen:()=>{},posted:[] as any[],holdSend:false,finishSend:()=>{},snapshot:{thread:{id:'recovery',name:'刷新恢复测试',turns:[] as any[]},phase:'IDLE',activeTurnId:null as string|null,pending:[],epoch:'test',syncCursor:'test:0'}};
+  await page.addInitScript(()=>{(window as any).recoveryStreams=[];window.EventSource=class extends EventTarget{closed=false;constructor(){super();(window as any).recoveryStreams.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}} as any;});
   await page.route('**/api/**',async route=>{
     const path=new URL(route.request().url()).pathname;let data:any={},status=200;
+    if(route.request().method()==='POST'&&path.startsWith('/api/sessions/'))state.writes.push(path);
     if(path==='/api/auth/session')data={authenticated:true,csrfToken:'test'};
     else if(path==='/api/projects')data={projects:[]};
     else if(path==='/api/sessions')data={data:[],nextCursor:null};
@@ -12,7 +13,7 @@ async function setup(page:Page){
     else if(path==='/api/permission-modes')data={modes:[]};
     else if(path.endsWith('/open')){state.opens++;if(state.holdOpen)await new Promise<void>(resolve=>{state.finishOpen=resolve;});if(state.failOpen){status=state.denied?403:503;data={error:'测试：运行时暂不可用',code:state.denied?'FORBIDDEN':'RUNTIME_UNAVAILABLE'};}else{if(state.snapshot.phase==='UNKNOWN')state.snapshot.phase='IDLE';data={phase:state.external?'EXTERNAL':state.snapshot.phase};}}
     else if(path==='/api/sessions/recovery'){if(state.holdRead){state.reading=true;await new Promise<void>(resolve=>{state.finishRead=resolve;});}data={...state.snapshot,...(state.external?{phase:'EXTERNAL',activeTurnId:null}:{})};}
-    else if(path.endsWith('/status'))data={resync:false};
+    else if(path.endsWith('/status')){if(state.holdStatus){state.statusReading=true;await new Promise<void>(resolve=>{state.finishStatus=resolve;});}data={resync:false};}
     else if(path.endsWith('/messages')){
       const message=route.request().postDataJSON();state.posted.push(message);
       state.snapshot.phase='RUNNING';state.snapshot.activeTurnId='turn';
@@ -24,6 +25,67 @@ async function setup(page:Page){
   });
   return state;
 }
+
+for(const width of [1280,390])for(const collapsed of [false,true])test(`ownership notice stays quiet during automatic checks and retains recovery at ${width}px ${collapsed?'collapsed':'expanded'}`,async({page},testInfo)=>{
+  const state=await setup(page);state.holdRead=true;
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
+  try {
+  await page.setViewportSize({width,height:900});await page.goto('/sessions/recovery',{waitUntil:'commit'});
+  await expect.poll(()=>state.reading).toBe(true);
+  const ownershipNotice=page.locator('.composer-notices .notice, .composer-notice').filter({hasText:'当前只读查看，执行权限待确认。'});
+  await expect(ownershipNotice).toHaveCount(0);
+  await page.getByRole('textbox',{name:'继续这个会话'}).fill('核对时保留的草稿');
+  if(collapsed)await page.getByRole('button',{name:'收起输入区',exact:true}).click();
+  const geometry=()=>page.evaluate(()=>{
+    const composer=document.querySelector('.composer')!,timeline=document.querySelector('.timeline')!;
+    const c=composer.getBoundingClientRect(),t=timeline.getBoundingClientRect();
+    return {composer:{top:c.top,height:c.height},timeline:{top:t.top,height:t.height,scrollTop:timeline.scrollTop,scrollHeight:timeline.scrollHeight}};
+  });
+  const before=await geometry();
+  expect(state.writes).toEqual([]);
+  await page.screenshot({path:testInfo.outputPath('initial-loading.png')});
+  state.snapshot.phase='UNKNOWN';state.holdRead=false;state.finishRead();
+  await expect(page.locator('.connection')).toHaveText('待核实');
+  await expect(ownershipNotice.filter({visible:true})).toHaveCount(1);
+  await expect(page.getByRole('textbox',{name:'继续这个会话'})).toHaveValue('核对时保留的草稿');
+  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
+  expect(await geometry()).toEqual(before);expect(state.writes).toEqual([]);
+  await page.screenshot({path:testInfo.outputPath('unresolved-ownership.png')});
+  const resync=()=>page.evaluate(()=>{
+    const streams=(window as any).recoveryStreams;
+    streams.findLast((stream:any)=>!stream.closed).dispatchEvent(new MessageEvent('resync',{data:'{}'}));
+  });
+  state.holdRead=true;state.reading=false;await resync();
+  await expect.poll(()=>state.reading).toBe(true);
+  await expect(ownershipNotice).toHaveCount(0);
+  expect(await geometry()).toEqual(before);expect(state.writes).toEqual([]);
+  state.holdRead=false;state.finishRead();
+  await expect(ownershipNotice.filter({visible:true})).toHaveCount(1);
+  state.holdStatus=true;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect.poll(()=>state.statusReading).toBe(true);
+  await expect(page.locator('.connection')).toHaveText('核对中');
+  await expect(ownershipNotice).toHaveCount(0);
+  expect(await geometry()).toEqual(before);expect(state.writes).toEqual([]);
+  await page.screenshot({path:testInfo.outputPath('foreground-check.png')});
+  state.holdStatus=false;state.finishStatus();
+  await expect(ownershipNotice.filter({visible:true})).toHaveCount(1);
+  if(collapsed)await ownershipNotice.getByRole('button',{name:'查看详情',exact:true}).click();
+  await page.getByRole('button',{name:'接续会话',exact:true}).click();
+  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeEnabled();
+  await expect(ownershipNotice).toHaveCount(0);
+  expect(state.opens).toBe(1);expect(state.posted).toEqual([]);
+  expect(state.writes).toEqual(['/api/sessions/recovery/cancel-release','/api/sessions/recovery/open']);
+  state.external=true;await resync();
+  await expect(page.locator('.composer')).toContainText('已在另一个应用中打开');
+  await expect(page.getByRole('button',{name:'接续会话',exact:true})).toBeEnabled();
+  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
+  await expect(ownershipNotice).toHaveCount(0);
+  expect(state.opens).toBe(1);expect(state.posted).toEqual([]);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+  await page.screenshot({path:testInfo.outputPath('external-ownership.png')});
+  } finally {state.holdRead=false;state.finishRead();state.holdStatus=false;state.finishStatus();}
+});
 
 for(const width of [1440,390])test(`refresh during an unacknowledged send recovers without resending at ${width}px`,async({page})=>{
   const state=await setup(page);await page.setViewportSize({width,height:900});

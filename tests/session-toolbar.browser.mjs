@@ -11,7 +11,7 @@ const artifacts=await mkdtemp(join(tmpdir(),'codex-session-actions-'));
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try{
  for(const width of [390,1280]){
-  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];
+  const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}}),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/tests/session-toolbar.html`);

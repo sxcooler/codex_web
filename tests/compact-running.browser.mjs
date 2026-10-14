@@ -9,7 +9,7 @@ const server=await createServer({cacheDir:'.local/compact-ui-20261009/compact-vi
 try{
   browser=await chromium.launch({channel:'chrome',headless:true});
   for(const width of [1280,390]){
-    const page=await browser.newPage({viewport:{width,height:900}}),errors=[],imageReads=[],remoteReads=[];let outputReads=0;
+    const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}}),errors=[],imageReads=[],remoteReads=[];let outputReads=0;
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**://example.invalid/**',route=>{remoteReads.push(route.request().url());return route.abort();});
     await page.route('**/api/**',route=>{

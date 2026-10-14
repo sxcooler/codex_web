@@ -44,7 +44,7 @@ const server=await createServer({...viteConfig,configFile:false,cacheDir:'.local
 });}}]});
 await server.listen();const origin=`http://127.0.0.1:${server.httpServer.address().port}`;
 const browser=await chromium.launch({channel:'chrome',headless:true});
-const context=await browser.newContext({viewport:{width:1280,height:900}}),page=await context.newPage();
+const context=await browser.newContext({locale:'zh-CN',viewport:{width:1280,height:900}}),page=await context.newPage();
 page.on('pageerror',error=>errors.push(error.message));
 await page.addInitScript(()=>{
  localStorage.setItem('codex-web:session-grouping:v1','project');
@@ -103,7 +103,7 @@ try{
   const spacing=await registered().evaluate(element=>{const header=element.querySelector('summary').getBoundingClientRect(),body=element.querySelector('.project-sessions').getBoundingClientRect();return body.left-header.left;});assert.equal(spacing,18,'Project body follows an 18px guide indentation');
   geometry.push({width,values:await page.locator('.sidebar>.recent').evaluate(element=>({scrollTop:element.scrollTop,nav:element.getBoundingClientRect().toJSON(),headers:[...element.querySelectorAll('.project-session-group>summary')].map(header=>{const style=getComputedStyle(header);return {name:header.textContent,expanded:header.getAttribute('aria-expanded'),rect:header.getBoundingClientRect().toJSON(),display:style.display,visibility:style.visibility,contentVisibility:style.contentVisibility,fontSize:style.fontSize,background:style.backgroundColor};})})),indent:spacing});
  }
- vdxPath='C:\\WORK\\vdx\\';await page.setViewportSize({width:1280,height:900});await page.reload();await until(async()=>await registered().count()===1,'Reload restores groups');assert.equal(await visible(registered()),3,'New page defaults to three');assert.equal(await visible(group('SampleSDK')),0,'Reload preserves folded canonical project across slash/case changes');
+ vdxPath='C:\\WORK\\samplesdk\\';await page.setViewportSize({width:1280,height:900});await page.reload();await until(async()=>await registered().count()===1,'Reload restores groups');assert.equal(await visible(registered()),3,'New page defaults to three');assert.equal(await visible(group('SampleSDK')),0,'Reload preserves folded canonical project across slash/case changes');
  await page.getByRole('combobox',{name:'会话分组方式'}).selectOption('flat');await until(async()=>await page.locator('.project-session-group').count()===0,'Flat mode has no grouping disclosure');assert.equal(await page.locator('.sidebar .session-link').count(),rows().length,'Flat mode shows every loaded row');
  assert.deepEqual(errors,[]);await writeFile(join(artifacts,'geometry.json'),JSON.stringify({geometry,reads:reads.map(query=>query.toString()),errors},null,2)+'\n');console.log('PASS: project 3/+3/collapse, manual reset and passive preservation, cached rows, keyboard focus, one-page bounded more/retry, folds and 390/1280 layout; artifacts '+artifacts);
 }finally{holdPage=false;for(const finish of held.splice(0))finish();await context.close();await browser.close();await server.close();}

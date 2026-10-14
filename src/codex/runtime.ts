@@ -189,6 +189,7 @@ export class Runtime extends EventEmitter {
   private nativeRequests = new Map<string, PendingRequest>();
   private inFlight = 0;
   private reads = 0;
+  private writes = 0;
   private failures = 0;
   private diagnosticsSeen = 0;
   private initializeInfo?: any;
@@ -1060,12 +1061,12 @@ export class Runtime extends EventEmitter {
 
   modelInfo(){return {executable:this.options.executable,version:this.initializeInfo?.userAgent??null,readAt:this.modelCatalog?this.modelCatalog.expiresAt-5*60_000:null};}
 
-  assertIdle(){
-    if(this.starting||this.stopping||this.inFlight||this.reads||(this.server&&nativeTitleCleanupPending(this.server))||[...this.states.values()].some(s=>s.reserved||s.activeTurnId||s.pending.size||s.recoverOnIdle||s.releasePromise||s.titleGeneration||s.nameWrite||['active','systemError'].includes(s.nativeStatus?.type)))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动会话、待处理请求或读取操作。请等待所有任务、审批和输入处理完毕后再操作。');
+  assertIdle(allowReads=false){
+    if(this.starting||this.stopping||this.writes||(!allowReads&&(this.inFlight||this.reads))||(this.server&&nativeTitleCleanupPending(this.server))||[...this.states.values()].some(s=>s.reserved||s.activeTurnId||s.pending.size||s.recoverOnIdle||s.releasePromise||s.titleGeneration||s.nameWrite||['active','systemError'].includes(s.nativeStatus?.type)))throw runtimeError(409,'RUNTIME_THREAD_BUSY',allowReads?'仍有活动任务或正在提交写入。请等待所有任务、审批和输入处理完毕后再操作。':'仍有活动会话、待处理请求或读取操作。请等待所有任务、审批和输入处理完毕后再操作。');
   }
 
   async assertNativeIdle(){
-    this.assertIdle();
+    this.assertIdle(true);
     const server=this.server,epoch=this.epoch,deadline=Date.now()+20_000;
     if(!server)return;
     this.reads++;
@@ -1092,12 +1093,13 @@ export class Runtime extends EventEmitter {
       if(error.code==='RUNTIME_THREAD_BUSY')throw error;
       throw runtimeError(503,'RUNTIME_UNAVAILABLE','无法可靠查询本机 Codex App Server 的活动状态，请稍后重试。');
     }finally{this.reads--;this.scheduleIdle();}
-    this.assertIdle();
+    this.assertIdle(true);
   }
 
   async prepareRestart(){
     await this.assertNativeIdle();
-    this.prepareUpdate();
+    this.assertIdle(true);
+    this.updating=true;
   }
 
   prepareUpdate(){
@@ -1107,8 +1109,8 @@ export class Runtime extends EventEmitter {
 
   async reloadModels(){
     await this.assertNativeIdle();
-    this.assertIdle();
-    if(this.server&&!await this.closeIdleServer())throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务、待处理请求或读取操作，请稍后重启。');
+    this.assertIdle(true);
+    if(this.server&&!await this.closeIdleServer(true))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务或正在提交写入，请稍后重启。');
     return this.models(true);
   }
 
@@ -1188,13 +1190,15 @@ export class Runtime extends EventEmitter {
   }
 
   async writeSettings(cwd:string,input:SettingsWriteInput){
-    this.requireString(cwd,'cwd');this.reads++;
-    try{return await writeSettings(this.settingsPeer(),cwd,input);}finally{this.reads--;this.scheduleIdle();}
+    this.requireString(cwd,'cwd');this.reads++;this.writes++;
+    try{return await writeSettings(this.settingsPeer(),cwd,input);}finally{this.reads--;this.writes--;this.scheduleIdle();}
   }
 
   async saveModelDefaults(cwd: string, selectedModel: string, selectedEffort?: string, expectedVersion?:string) {
     this.requireString(cwd, 'cwd');
     this.requireString(selectedModel, 'model');
+    this.writes++;
+    try{
     const model = (await this.models()).data.find(entry => entry.model === selectedModel);
     if (!model) throw runtimeError(400, 'RUNTIME_INVALID_MODEL', 'Selected model is unavailable');
     const effort = selectedEffort ?? model.defaultReasoningEffort;
@@ -1202,6 +1206,7 @@ export class Runtime extends EventEmitter {
       throw runtimeError(400, 'RUNTIME_INVALID_EFFORT', 'Reasoning effort is not supported by this model');
     const result=await this.writeSettings(cwd,{expectedVersion:expectedVersion!,values:{model:selectedModel,model_reasoning_effort:effort}});
     return { model: selectedModel, effort, effectiveModel: result.snapshot.fields.model.effectiveValue, effectiveEffort: result.snapshot.fields.model_reasoning_effort.effectiveValue };
+    }finally{this.writes--;this.scheduleIdle();}
   }
 
   private async resolvePermissions(mode: PermissionMode | undefined, cwd: string, previous?: PermissionPolicy): Promise<PermissionPolicy | undefined> {
@@ -1285,7 +1290,7 @@ export class Runtime extends EventEmitter {
   readAccountUsage():Promise<any>{return this.call('account/rateLimits/read',{});}
 
   async consumeAccountReset(input:{creditId:string;idempotencyKey:string},accountId:string):Promise<any>{
-    this.inFlight++;
+    this.inFlight++;this.writes++;
     try {
       const server=await this.getServer();
       const usage=await server.request<any>('account/rateLimits/read',{});
@@ -1296,7 +1301,7 @@ export class Runtime extends EventEmitter {
         throw runtimeError(504,'RUNTIME_RESULT_UNKNOWN','重置结果待核实，请使用原操作标识重试。');
       }
     } catch(error){throw this.mapError(error);}
-    finally {this.inFlight--;this.scheduleIdle();}
+    finally {this.inFlight--;this.writes--;this.scheduleIdle();}
   }
 
   async archive(threadId:string,archived=true):Promise<any>{
@@ -1344,15 +1349,15 @@ export class Runtime extends EventEmitter {
       return old.promise;
     }
     if (this.requests.size >= REQUEST_LIMIT) return Promise.reject(runtimeError(503, 'RUNTIME_REQUEST_CAPACITY', 'Runtime request capacity is full'));
-    const promise = operation();
+    const promise = (async()=>{this.writes++;try{return await operation();}finally{this.writes--;this.scheduleIdle();}})();
     this.requests.set(clientRequestId, { signature, promise });
     return promise;
   }
 
   private async mutation<T = unknown>(method: string, params: unknown,context?:NativeProjectContext,guard?:()=>void): Promise<T> {
-    this.listReads.clear();this.headerReads.clear();
+    this.writes++;this.listReads.clear();this.headerReads.clear();
     try{return await this.call<T>(method, params, true,false,undefined,context,guard);}
-    finally{this.listReads.clear();this.headerReads.clear();}
+    finally{this.writes--;this.listReads.clear();this.headerReads.clear();}
   }
 
   private async call<T = unknown>(method: string, params: unknown, uncertain = false, rawErrors = false,timeoutMs?:number,context?:NativeProjectContext,guard?:()=>void): Promise<T> {
@@ -2036,15 +2041,15 @@ export class Runtime extends EventEmitter {
     this.idleTimer.unref?.();
   }
 
-  private async closeIdleServer(): Promise<boolean> {
+  private async closeIdleServer(allowReads=false): Promise<boolean> {
     // An uncertain temporary start never blocks stopping our otherwise idle child;
     // AppServer.close settles its retained outcome and the process owns the remaining resource.
     if (this.stopping) { await this.stopping; return true; }
-    const busy = () => [...this.states.values()].some(state => state.reserved || state.activeTurnId || state.pending.size || state.recoverOnIdle || state.titleGeneration || state.nameWrite || ['active', 'systemError'].includes(state.nativeStatus?.type));
+    const busy = () => this.writes>0 || [...this.states.values()].some(state => state.reserved || state.activeTurnId || state.pending.size || state.recoverOnIdle || state.titleGeneration || state.nameWrite || ['active', 'systemError'].includes(state.nativeStatus?.type));
     const deadline = Date.now() + 2000;
-    while ((this.inFlight || this.reads) && !busy() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    while (!allowReads && (this.inFlight || this.reads) && !busy() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     const server = this.server;
-    if (!server || this.inFlight || this.reads || busy()) return false;
+    if (!server || (!allowReads&&(this.inFlight||this.reads)) || busy()) return false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.server = undefined;
     this.stopping = server.close().finally(()=>settleNativeTitleCleanup(server));

@@ -11,6 +11,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "node src/server/main.ts",
     "auth:setup": "node scripts/setup-auth.ts",
+    "tailscale:setup": "node scripts/tailscale.ts --interactive",
     "test": "node --test tests/*.test.ts",
     "probe": "node scripts/probe.ts",
     "protocol:generate": "node scripts/generate-protocol.ts",

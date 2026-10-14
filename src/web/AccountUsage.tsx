@@ -1,36 +1,42 @@
+import {useLocale} from './i18n/LocaleProvider.tsx';
+import {msg,type UiText} from './i18n/text.ts';
+import type {Locale} from './i18n/types.ts';
+import {createTranslator} from './i18n/messages.ts';
 import {createContext,useCallback,useContext,useEffect,useRef,useState,type CSSProperties,type ReactNode} from 'react';
 import {api} from './api.ts';
 import {absoluteTime,balanceText,codexCredits,countdown,creditCount,credits,finite,headlineRemaining,isCodex,pendingKey,readPending,remaining,timestamp,usableCredit,usageGroups,windowLabel,type AccountUsage,type ResetCredit,type ResetOperation,type UsageGroup} from './accountUsage.ts';
 import {sharedStateEvent,type SharedStateChange} from './sharedState.ts';
 
 const Context=createContext<{open:(source:HTMLElement)=>void;label:string;remaining:number|null;stale:boolean;content:ReactNode;watch:()=>()=>void}|null>(null);
-const text=(value:unknown,fallback:string)=>typeof value==='string'&&value.trim()?value:fallback;
-const expiry=(credit:ResetCredit)=>credit.expiresAt===null?'无到期限制':absoluteTime(credit.expiresAt);
-const results:Record<string,string>={reset:'重置成功',nothingToReset:'当前无需重置',noCredit:'该机会已不可用',alreadyRedeemed:'该机会已使用'};
+const nativeText=(value:unknown,fallback:string)=>typeof value==='string'&&value.trim()?value:fallback;
+const expiry=(credit:ResetCredit,locale:Locale)=>credit.expiresAt===null?createTranslator(locale)('account.expiry.none'):absoluteTime(credit.expiresAt,locale);
+const results:Record<string,UiText>={reset:msg('account.result.reset'),nothingToReset:msg('account.result.nothing'),noCredit:msg('account.result.noCredit'),alreadyRedeemed:msg('account.result.redeemed')};
 const rejectedCodes=new Set(['ACCOUNT_CREDIT_UNAVAILABLE','ACCOUNT_RESET_UNSUPPORTED','ACCOUNT_CHANGED','ACCOUNT_INVALID_INPUT','ACCOUNT_RESET_CONFLICT','ACCOUNT_RESET_BUSY']);
 function Group({name,group,now}:{name:string;group:UsageGroup;now:number}){
+  const {locale,t}=useLocale();
   const windows=[group.primary,group.secondary].filter(value=>value!=null);
-  return <section className="usage-group"><h3>{name}</h3>{windows.length?windows.map((window,index)=>{const value=remaining(window),label=windowLabel(window?.windowDurationMins);return <div className="usage-window" key={index} data-status={value===null?'unknown':'current'} style={value!==null?{'--usage-hue':value*1.5} as CSSProperties:undefined}><div><strong>{label}</strong><span className="usage-remaining">{value===null?'暂不可用':`${Math.round(value)}% 剩余`}</span></div>{value!==null?<progress max={100} value={value} aria-label={`${name} ${label}剩余额度`}/>:null}<p className="small muted">自动重置：{absoluteTime(window?.resetsAt)}<br/>{countdown(window?.resetsAt,now)}</p></div>;}):<p className="muted">暂不可用</p>}</section>;
+  return <section className="usage-group"><h3>{name}</h3>{windows.length?windows.map((window,index)=>{const value=remaining(window),label=windowLabel(window?.windowDurationMins,locale);return <div className="usage-window" key={index} data-status={value===null?'unknown':'current'} style={value!==null?{'--usage-hue':value*1.5} as CSSProperties:undefined}><div><strong>{label}</strong><span className="usage-remaining">{value===null?t('account.unavailable'):t('account.remaining',Math.round(value))}</span></div>{value!==null?<progress max={100} value={value} aria-label={t('account.remaining.aria',name,label)}/>:null}<p className="small muted">{t('account.resetAt',absoluteTime(window?.resetsAt,locale))}<br/>{countdown(window?.resetsAt,now,locale)}</p></div>;}):<p className="muted">{t('account.unavailable')}</p>}</section>;
 }
-export function AccountUsageButton(){const state=useContext(Context);return state?<button type="button" className="account-usage-button" data-status={state.stale?'stale':state.remaining!==null?'current':'unknown'} style={state.remaining!==null?{'--usage-hue':state.remaining*1.5} as CSSProperties:undefined} onClick={event=>state.open(event.currentTarget)} aria-label={'账户用量'+(state.stale?'，数据待更新':state.label)}><span className="usage-badge"><span>用量</span><span className="usage-headline">{state.label}</span>{state.stale?<span className="usage-stale" aria-hidden="true">待更新</span>:null}</span></button>:null;}
+export function AccountUsageButton(){const {t}=useLocale();const state=useContext(Context);return state?<button type="button" className="account-usage-button" data-status={state.stale?'stale':state.remaining!==null?'current':'unknown'} style={state.remaining!==null?{'--usage-hue':state.remaining*1.5} as CSSProperties:undefined} onClick={event=>state.open(event.currentTarget)} aria-label={t('account.button.aria',state.stale,state.label)}><span className="usage-badge"><span>{t('account.badge')}</span><span className="usage-headline">{state.label}</span>{state.stale?<span className="usage-stale" aria-hidden="true">{t('account.stale.badge')}</span>:null}</span></button>:null;}
 export function AccountUsagePanel({active=true}:{active?:boolean}){
   const state=useContext(Context),watch=state?.watch;
   useEffect(()=>active?watch?.():undefined,[active,watch]);
   return state?.content??null;
 }
 export function AccountUsageProvider({children}:{children:ReactNode}){
-  const [data,setData]=useState<AccountUsage|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[open,setOpen]=useState(false),[now,setNow]=useState(Date.now()),[visiblePanels,setVisiblePanels]=useState(0);
-  const [selected,setSelected]=useState<{accountId:string;credit:ResetCredit}|null>(null),[pending,setPending]=useState<ResetOperation|null>(null),[busy,setBusy]=useState(false),[storageError,setStorageError]=useState('');
+  const {locale,t,text}=useLocale();
+  const [data,setData]=useState<AccountUsage|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState<UiText>(''),[notice,setNotice]=useState<UiText>(''),[open,setOpen]=useState(false),[now,setNow]=useState(Date.now()),[visiblePanels,setVisiblePanels]=useState(0);
+  const [selected,setSelected]=useState<{accountId:string;credit:ResetCredit}|null>(null),[pending,setPending]=useState<ResetOperation|null>(null),[busy,setBusy]=useState(false),[storageError,setStorageError]=useState<UiText>('');
   const current=useRef(data),alive=useRef(true),usageGeneration=useRef(0),usageRevision=useRef(0),locked=useRef(false),inflight=useRef<{fresh:boolean;promise:Promise<AccountUsage|null>}|null>(null),panel=useRef<HTMLDialogElement>(null),confirmation=useRef<HTMLDialogElement>(null),cancel=useRef<HTMLButtonElement>(null),opener=useRef<HTMLElement|null>(null);
   const watch=useCallback(()=>{setVisiblePanels(count=>count+1);return()=>setVisiblePanels(count=>count-1);},[]);
-  const restorePending=(accountId:string|null)=>{try{setPending(accountId?readPending(accountId):null);setStorageError('');}catch(e:any){setPending(null);setStorageError(e.message||'浏览器存储不可用，无法安全保存操作标识。');}};
+  const restorePending=(accountId:string|null)=>{try{setPending(accountId?readPending(accountId):null);setStorageError('');}catch(e:any){setPending(null);setStorageError(e?.message?e:msg('account.storage.unavailable'));}};
   const invalidate=useCallback(()=>{usageGeneration.current++;usageRevision.current++;current.current=null;setData(null);setPending(null);setSelected(null);setNotice('');setError('');setNow(Date.now());},[]);
   const accept=useCallback((value:AccountUsage):AccountUsage|null=>{
-    if(!value||typeof value!=='object'||!(value.accountId===null||typeof value.accountId==='string'))throw Error('用量数据暂不可用');
+    if(!value||typeof value!=='object'||!(value.accountId===null||typeof value.accountId==='string'))throw Object.assign(Error('用量数据暂不可用'),{i18n:msg('account.data.unavailable')});
     if(current.current?.accountId===value.accountId&&finite(current.current.updatedAt)&&finite(value.updatedAt)&&value.updatedAt<current.current.updatedAt)return null;
     if(current.current?.accountId!==value.accountId){usageGeneration.current++;setSelected(null);setNotice('');}
     current.current=value;setData(value);
-    if(value.accountId&&value.pendingReset?.accountId===value.accountId){setSelected(null);try{localStorage.setItem(pendingKey(value.accountId),JSON.stringify(value.pendingReset));restorePending(value.accountId);}catch{setPending(value.pendingReset);setStorageError('浏览器存储不可用；服务已保存本次操作标识。');}}
+    if(value.accountId&&value.pendingReset?.accountId===value.accountId){setSelected(null);try{localStorage.setItem(pendingKey(value.accountId),JSON.stringify(value.pendingReset));restorePending(value.accountId);}catch{setPending(value.pendingReset);setStorageError(msg('account.storage.serverSaved'));}}
     else restorePending(value.accountId);
     setError(value.error||'');setNow(Date.now());return value;
   },[]);
@@ -44,7 +50,7 @@ export function AccountUsageProvider({children}:{children:ReactNode}){
       // The same fresh read may be pushed before its HTTP response; use the newer valid snapshot.
       if(revision!==usageRevision.current&&current.current?.accountId===value.accountId&&finite(current.current?.updatedAt)&&finite(value.updatedAt)&&current.current!.updatedAt>=value.updatedAt)return current.current;
       return accept(value);
-    }catch(e:any){if(alive.current&&generation===usageGeneration.current&&revision===usageRevision.current){if(e.data?.code==='ACCOUNT_CHANGED')invalidate();setError(e.message||'用量更新失败');setNow(Date.now());}return null;}finally{inflight.current=null;if(alive.current)setLoading(false);}})();
+    }catch(e:any){if(alive.current&&generation===usageGeneration.current&&revision===usageRevision.current){if(e.data?.code==='ACCOUNT_CHANGED')invalidate();setError(e?.message?e:msg('account.update.failed'));setNow(Date.now());}return null;}finally{inflight.current=null;if(alive.current)setLoading(false);}})();
     inflight.current={fresh,promise};return promise;
   },[accept,invalidate]);
   useEffect(()=>{
@@ -54,8 +60,8 @@ export function AccountUsageProvider({children}:{children:ReactNode}){
       if(!alive.current)return;const {kind,value}=(event as CustomEvent<SharedStateChange>).detail;
       if(kind==='ready'){void read();return;}
       if(kind==='usage-invalidated'){invalidate();return;}
-      if(kind==='usage-error'){usageGeneration.current++;usageRevision.current++;if(value?.code==='ACCOUNT_CHANGED')invalidate();setError(text(value?.message,'用量更新失败'));setNow(Date.now());return;}
-      if(kind==='usage')try{if(accept(value))usageRevision.current++;}catch(e:any){setError(e.message);}
+      if(kind==='usage-error'){usageGeneration.current++;usageRevision.current++;if(value?.code==='ACCOUNT_CHANGED')invalidate();setError(typeof value?.message==='string'&&value.message.trim()?value.message:msg('account.update.failed'));setNow(Date.now());return;}
+      if(kind==='usage')try{if(accept(value))usageRevision.current++;}catch(e:any){setError(e);}
     };
     const storage=()=>{restorePending(current.current?.accountId??null);};
     window.addEventListener(sharedStateEvent,shared);window.addEventListener('auth-lost',lost);window.addEventListener('storage',storage);
@@ -69,61 +75,61 @@ export function AccountUsageProvider({children}:{children:ReactNode}){
   const choose=async(credit:ResetCredit,source:HTMLElement)=>{
     if(locked.current||!canReset)return;locked.current=true;setBusy(true);setNotice('');const accountId=current.current?.accountId;
     try{const value=await read(true),latest=credits(value).find(item=>item.id===credit.id),count=creditCount(value?.rateLimitResetCredits?.availableCount);
-      if(!freshEnough(value)||!value?.accountId||value.accountId!==accountId||!value.resetSupported||!latest||!usableCredit(latest)||count===null||BigInt(count)===0n){if(alive.current)setNotice('账户或机会状态已变化，无法确认使用。请刷新后重新选择。');return;}
+      if(!freshEnough(value)||!value?.accountId||value.accountId!==accountId||!value.resetSupported||!latest||!usableCredit(latest)||count===null||BigInt(count)===0n){if(alive.current)setNotice(msg('account.reset.changedBeforeChoose'));return;}
       if(readPending(value.accountId)){restorePending(value.accountId);return;}if(source.isConnected&&source.closest('dialog')?.open!==false)setSelected({accountId:value.accountId,credit:latest});
-    }catch(e:any){if(alive.current)setStorageError(e.message);}finally{locked.current=false;if(alive.current)setBusy(false);}
+    }catch(e:any){if(alive.current)setStorageError(e);}finally{locked.current=false;if(alive.current)setBusy(false);}
   };
   const submit=async(operation:ResetOperation)=>{
     try{
       const result=await api('/account/usage/reset',operation),message=typeof result?.outcome==='string'&&Object.hasOwn(results,result.outcome)?results[result.outcome]:null;
-      if(!message)throw Error('服务返回了无法识别的结果');
+      if(!message)throw Object.assign(Error('服务返回了无法识别的结果'),{i18n:msg('account.reset.unknownResult')});
       try{if(readPending(operation.accountId)?.idempotencyKey===operation.idempotencyKey)localStorage.removeItem(pendingKey(operation.accountId));}catch{}
       if(!alive.current||current.current?.accountId!==operation.accountId)return;
       setPending(null);setNotice(message);await read(true);
     }catch(e:any){
       const rejected=rejectedCodes.has(e.data?.code)||e.status===400;
       if(rejected){try{if(readPending(operation.accountId)?.idempotencyKey===operation.idempotencyKey)localStorage.removeItem(pendingKey(operation.accountId));}catch{}}
-      if(alive.current&&current.current?.accountId===operation.accountId){setPending(rejected?null:operation);setNotice((rejected?'未执行重置：':'结果待核实：')+(e.message||'连接中断'));await read(true);}
+      if(alive.current&&current.current?.accountId===operation.accountId){setPending(rejected?null:operation);setNotice(msg(rejected?'account.reset.rejected':'account.reset.unverified',e?.message?e:msg('account.reset.disconnected')));await read(true);}
     }
     finally{locked.current=false;if(alive.current)setBusy(false);}
   };
   const confirm=()=>{
     if(locked.current||!selected)return;
     const latest=credits(current.current).find(credit=>credit.id===selected.credit.id),count=creditCount(current.current?.rateLimitResetCredits?.availableCount);
-    if(current.current?.accountId!==selected.accountId||!current.current.resetSupported||!freshEnough(current.current)||!latest||!usableCredit(latest)||count===null||BigInt(count)===0n){setSelected(null);setNotice('账户或机会状态已变化，请重新选择。');return;}
+    if(current.current?.accountId!==selected.accountId||!current.current.resetSupported||!freshEnough(current.current)||!latest||!usableCredit(latest)||count===null||BigInt(count)===0n){setSelected(null);setNotice(msg('account.reset.changed'));return;}
     try{
       if(readPending(selected.accountId)){restorePending(selected.accountId);setSelected(null);return;}
       const operation={accountId:selected.accountId,creditId:selected.credit.id as string,idempotencyKey:crypto.randomUUID()};
       localStorage.setItem(pendingKey(operation.accountId),JSON.stringify(operation));
-      if(readPending(operation.accountId)?.idempotencyKey!==operation.idempotencyKey)throw Error('无法保存操作标识');
-      locked.current=true;setBusy(true);setPending(operation);setSelected(null);setNotice('正在使用重置机会…');void submit(operation);
-    }catch(e:any){setSelected(null);setStorageError('无法安全保存待核实操作：'+e.message);}
+      if(readPending(operation.accountId)?.idempotencyKey!==operation.idempotencyKey)throw Object.assign(Error('无法保存操作标识'),{i18n:msg('account.storage.cannotSave')});
+      locked.current=true;setBusy(true);setPending(operation);setSelected(null);setNotice(msg('account.reset.using'));void submit(operation);
+    }catch(e:any){setSelected(null);setStorageError(msg('account.storage.pendingFailure',e));}
   };
   const retry=async()=>{
     if(locked.current||!pending)return;locked.current=true;setBusy(true);const operation=pending;
-    const value=await read(true);if(!freshEnough(value)||value?.accountId!==operation.accountId||!value.resetSupported){locked.current=false;if(alive.current){setBusy(false);setNotice('暂时无法核对账户，请稍后重试本次操作。');}return;}
+    const value=await read(true);if(!freshEnough(value)||value?.accountId!==operation.accountId||!value.resetSupported){locked.current=false;if(alive.current){setBusy(false);setNotice(msg('account.reset.cannotVerify'));}return;}
     await submit(operation);
   };
   const groups=usageGroups(data),main=groups.find(isCodex),others=groups.filter(group=>!isCodex(group)),count=creditCount(data?.rateLimitResetCredits?.availableCount),items=credits(data),value=headlineRemaining(data),stale=!!data&&(!!error||!!data.stale||!!data.error||!finite(data.updatedAt)||now-data.updatedAt>60000);
   const incomplete=count!==null&&BigInt(count)>BigInt(items.filter(item=>usableCredit(item,now)).length);
   const content=<div className="usage-content">
-      <p className="muted">当前 Codex 账户，所有客户端共享</p>
-      <div className="usage-heading"><p className="small muted">最近成功更新：{finite(data?.updatedAt)&&data.updatedAt>0?absoluteTime(Math.floor(data.updatedAt/1000)):'暂不可用'}</p><button type="button" disabled={loading} onClick={()=>void read(true)}>{loading?'刷新中…':'刷新'}</button></div>
-      {loading?<p role="status">正在读取账户用量…</p>:null}{notice?<p role="status" className="notice">{notice}</p>:null}{error?<p role="alert" className="notice error">用量更新失败：{error}</p>:null}{stale?<p className="usage-stale">以下为上次读取的数据，待更新。</p>:null}
-      {main?<Group name="Codex" group={main[1]} now={now}/>:<section className="usage-group"><h3>Codex</h3><p className="muted">主额度暂不可用</p></section>}
-      {others.length?<details className="usage-others"><summary>其他额度（{others.length}）</summary>{others.map(([id,group])=><Group key={id} name={text(group.limitName,id)} group={group} now={now}/>)}</details>:null}
-      <section className="usage-group usage-balance"><div className="usage-balance-row"><div><h3>额度余额</h3><p className="muted small">当前 Codex 账户的原生余额</p></div><strong className="balance-value">{balanceText(codexCredits(data))}</strong></div></section>
-      <section className="usage-group"><h3>重置机会 <span className="muted">可用 {count??'暂不可用'}{count!==null?' 次':''}</span></h3>
-        {!data?.resetSupported?<p className="muted">{data?.resetUnavailableReason||'当前原生账户暂不支持安全重置。'}</p>:null}{storageError?<p role="alert" className="notice error">{storageError}</p>:null}
-        {pending?<div className="notice"><p>有一次操作结果待核实。核对后可使用原操作标识重试，不会改用另一条机会。</p><button type="button" disabled={busy||!data?.resetSupported||loading} onClick={()=>void retry()}>核对并重试本次操作</button></div>:null}
-        {incomplete||(!items.length&&count!=='0')?<p className="muted">{items.length?'部分':'全部'}机会详情暂不可用。</p>:null}
-        {items.map((credit,index)=><article className="usage-credit" key={typeof credit.id==='string'?credit.id:index}><h4>{text(credit.title,'重置机会')}</h4><p>重置范围：{credit.resetType==='codexRateLimits'?'Codex 额度':'暂不可用（未知类型）'}</p>{typeof credit.description==='string'?<p className="muted">{credit.description}</p>:null}<p className="small muted">到期时间：{expiry(credit)}</p>{usableCredit(credit,now)?<button type="button" disabled={!canReset||count===null||BigInt(count)===0n||loading} onClick={event=>void choose(credit,event.currentTarget)}>使用</button>:<span className="muted small">{credit.status==='redeeming'?'正在使用':credit.status==='redeemed'?'已使用':timestamp(credit.expiresAt)!==null&&timestamp(credit.expiresAt)!<=now?'已过期':'暂不可用'}</span>}</article>)}
+      <p className="muted">{t('account.description')}</p>
+      <div className="usage-heading"><p className="small muted">{t('account.updatedAt',finite(data?.updatedAt)&&data.updatedAt>0?absoluteTime(Math.floor(data.updatedAt/1000),locale):t('account.unavailable'))}</p><button type="button" disabled={loading} onClick={()=>void read(true)}>{loading?t('account.refreshing'):t('account.refresh')}</button></div>
+      {loading?<p role="status">{t('account.reading')}</p>:null}{notice?<p role="status" className="notice">{text(notice)}</p>:null}{error?<p role="alert" className="notice error">{text(msg('account.update.error',error))}</p>:null}{stale?<p className="usage-stale">{t('account.stale.description')}</p>:null}
+      {main?<Group name="Codex" group={main[1]} now={now}/>:<section className="usage-group"><h3>Codex</h3><p className="muted">{t('account.mainUnavailable')}</p></section>}
+      {others.length?<details className="usage-others"><summary>{t('account.otherQuotas',others.length)}</summary>{others.map(([id,group])=><Group key={id} name={nativeText(group.limitName,id)} group={group} now={now}/>)}</details>:null}
+      <section className="usage-group usage-balance"><div className="usage-balance-row"><div><h3>{t('account.balance.title')}</h3><p className="muted small">{t('account.balance.description')}</p></div><strong className="balance-value">{balanceText(codexCredits(data),locale)}</strong></div></section>
+      <section className="usage-group"><h3>{t('account.credits.title')} <span className="muted">{t('account.credits.available',count??t('account.unavailable'),count!==null)}</span></h3>
+        {!data?.resetSupported?<p className="muted">{data?.resetUnavailableReason||t('account.reset.unsupported')}</p>:null}{storageError?<p role="alert" className="notice error">{text(storageError)}</p>:null}
+        {pending?<div className="notice"><p>{t('account.reset.pending')}</p><button type="button" disabled={busy||!data?.resetSupported||loading} onClick={()=>void retry()}>{t('account.reset.retry')}</button></div>:null}
+        {incomplete||(!items.length&&count!=='0')?<p className="muted">{t('account.credits.detailsUnavailable',!!items.length)}</p>:null}
+        {items.map((credit,index)=><article className="usage-credit" key={typeof credit.id==='string'?credit.id:index}><h4>{nativeText(credit.title,t('account.credits.title'))}</h4><p>{t('account.credits.scope',credit.resetType==='codexRateLimits'?t('account.credits.scopeCodex'):t('account.credits.scopeUnknown'))}</p>{typeof credit.description==='string'?<p className="muted">{credit.description}</p>:null}<p className="small muted">{t('account.credits.expires',expiry(credit,locale))}</p>{usableCredit(credit,now)?<button type="button" disabled={!canReset||count===null||BigInt(count)===0n||loading} onClick={event=>void choose(credit,event.currentTarget)}>{t('account.credits.use')}</button>:<span className="muted small">{credit.status==='redeeming'?t('account.credits.redeeming'):credit.status==='redeemed'?t('account.credits.redeemed'):timestamp(credit.expiresAt)!==null&&timestamp(credit.expiresAt)!<=now?t('account.credits.expired'):t('account.unavailable')}</span>}</article>)}
       </section>
   </div>;
   return <Context.Provider value={{open:source=>{opener.current=source;setOpen(true);setNow(Date.now());void read();},label:value===null||stale?'':` · ${Math.round(value)}%`,remaining:value,stale:stale||!!error,content,watch}}>{children}
     <dialog ref={panel} className="account-usage-dialog" aria-labelledby="account-usage-title" onCancel={event=>{event.preventDefault();setOpen(false);}} onClick={event=>{if(event.target===event.currentTarget)setOpen(false);}}><div className="usage-content usage-dialog-heading">
-      <div className="usage-heading"><h2 id="account-usage-title">账户用量</h2><button type="button" className="quiet" aria-label="关闭账户用量" onClick={()=>setOpen(false)}>关闭</button></div>
+      <div className="usage-heading"><h2 id="account-usage-title">{t('account.title')}</h2><button type="button" className="quiet" aria-label={t('account.close.title')} onClick={()=>setOpen(false)}>{t('account.close')}</button></div>
     </div><AccountUsagePanel active={open}/></dialog>
-    <dialog ref={confirmation} className="account-usage-dialog usage-confirm" aria-labelledby="usage-confirm-title" onCancel={event=>{event.preventDefault();setSelected(null);}} onClick={event=>{if(event.target===event.currentTarget)setSelected(null);}}><div className="usage-content"><h2 id="usage-confirm-title">使用重置机会？</h2>{selected?<><h3>{text(selected.credit.title,'重置机会')}</h3><p>重置范围：Codex 额度</p><p>到期时间：{expiry(selected.credit)}</p><p>当前可用：{count??'暂不可用'} 次</p><p>确认后将尝试消耗 1 次重置机会。成功消耗后，本页面不提供撤销操作。</p></>:null}<div className="usage-actions"><button type="button" ref={cancel} onClick={()=>setSelected(null)}>取消</button><button type="button" className="primary" disabled={busy} onClick={confirm}>确认消耗 1 次</button></div></div></dialog>
+    <dialog ref={confirmation} className="account-usage-dialog usage-confirm" aria-labelledby="usage-confirm-title" onCancel={event=>{event.preventDefault();setSelected(null);}} onClick={event=>{if(event.target===event.currentTarget)setSelected(null);}}><div className="usage-content"><h2 id="usage-confirm-title">{t('account.confirm.title')}</h2>{selected?<><h3>{nativeText(selected.credit.title,t('account.credits.title'))}</h3><p>{t('account.confirm.scope')}</p><p>{t('account.credits.expires',expiry(selected.credit,locale))}</p><p>{t('account.confirm.available',count??t('account.unavailable'))}</p><p>{t('account.confirm.description')}</p></>:null}<div className="usage-actions"><button type="button" ref={cancel} onClick={()=>setSelected(null)}>{t('account.confirm.cancel')}</button><button type="button" className="primary" disabled={busy} onClick={confirm}>{t('account.confirm.use')}</button></div></div></dialog>
   </Context.Provider>;
 }

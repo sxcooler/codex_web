@@ -22,7 +22,7 @@ const server=await createServer({...viteConfig,configFile:false,cacheDir:'.local
  if(path.endsWith('/status'))return json(res,{resync:false});
  if(path==='/api/models')return json(res,{data:[]});if(path==='/api/permission-modes')return json(res,{modes:[]});if(path.endsWith('/git/files'))return json(res,{files:[]});if(path.endsWith('/files'))return json(res,{files:[]});return json(res,{});
  });}}]});await server.listen();const origin='http://127.0.0.1:'+server.httpServer.address().port;
-const browser=await chromium.launch({channel:'chrome',headless:true}),context=await browser.newContext({viewport:{width:1280,height:900}}),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+const browser=await chromium.launch({channel:'chrome',headless:true}),context=await browser.newContext({locale:'zh-CN',viewport:{width:1280,height:900}}),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
 const until=async(check,message,budget=8000)=>{const end=Date.now()+budget;while(!await check()){assert.ok(Date.now()<end,message);await new Promise(resolve=>setTimeout(resolve,25));}};
 const submit=async()=>{await page.goto(origin);await page.getByLabel('任务',{exact:true}).fill('首条仅发送一次');await page.getByLabel('项目',{exact:true}).selectOption('native:native');historyReads=0;await page.getByRole('button',{name:'开始任务 →'}).click();};
 const emit=(event,data)=>{for(const stream of streams)if(stream.thread==='created')stream.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);};

@@ -1,13 +1,18 @@
+import {createTranslator,type MessageKey} from './i18n/messages.ts';
+import type {Locale} from './i18n/types.ts';
 type Item=Record<string,any>;
-export const modelOverloadNotice=(error?:Item):string|undefined=>error?.codexErrorInfo==='serverOverloaded'?'模型服务过载，本轮曾中断':undefined;
+export const modelOverloadNotice=(error?:Item,locale:Locale='zh-CN'):string|undefined=>error?.codexErrorInfo==='serverOverloaded'?createTranslator(locale)('session.overload'):undefined;
 export const stepLabels:Record<string,string>={reasoning:'思考',commandExecution:'命令',fileChange:'文件修改',mcpToolCall:'MCP 工具',dynamicToolCall:'工具调用',webSearch:'搜索',plan:'计划',collabAgentToolCall:'协作',subAgentActivity:'子 Agent',functionCallOutput:'工具输出',sleep:'等待'};
 
-export function executionIssue(item:Item):string{
-  if(item.type==='commandExecution'&&typeof item.exitCode==='number'&&item.exitCode!==0)return `命令退出码 ${item.exitCode}`;
-  if(item.status==='declined')return '已拒绝';
-  if(item.status==='interrupted'||item.type==='subAgentActivity'&&item.kind==='interrupted')return '已中止';
-  if(item.status==='failed')return '失败';
-  if(item.error||item.isError===true||item.result?.isError===true||item.success===false)return '工具错误';
+const stepKeys:Record<string,MessageKey>={reasoning:'session.step.reasoning',commandExecution:'session.step.command',fileChange:'session.step.fileChange',mcpToolCall:'session.step.mcp',dynamicToolCall:'session.step.dynamic',webSearch:'session.step.search',plan:'session.step.plan',collabAgentToolCall:'session.step.collaboration',subAgentActivity:'session.step.subagent',functionCallOutput:'session.step.output',sleep:'session.step.sleep'};
+export const stepLabel=(type:string,locale:Locale='zh-CN')=>stepKeys[type]?createTranslator(locale)(stepKeys[type]):undefined;
+export function executionIssue(item:Item,locale:Locale='zh-CN'):string{
+  const t=createTranslator(locale);
+  if(item.type==='commandExecution'&&typeof item.exitCode==='number'&&item.exitCode!==0)return t('session.issue.exit',item.exitCode);
+  if(item.status==='declined')return t('session.issue.declined');
+  if(item.status==='interrupted'||item.type==='subAgentActivity'&&item.kind==='interrupted')return t('session.issue.interrupted');
+  if(item.status==='failed')return t('session.issue.failed');
+  if(item.error||item.isError===true||item.result?.isError===true||item.success===false)return t('session.issue.toolError');
   return '';
 }
 

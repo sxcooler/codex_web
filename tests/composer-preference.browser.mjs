@@ -7,7 +7,7 @@ const browser=await chromium.launch({channel:'chrome',headless:true});
 const url=`http://127.0.0.1:${server.httpServer.address().port}/tests/session-toolbar.html`,key='codex-web:panels:v1',failures=[];
 let passed=0;
 async function scenario(width,name,seed,run,denied){
- const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];
+ const context=await browser.newContext({locale:'zh-CN',viewport:{width,height:900}}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await context.addInitScript(({key,seed,denied})=>{
   if(!sessionStorage.getItem('composer-preference-seeded')){if(seed!==null)localStorage.setItem(key,seed);sessionStorage.setItem('composer-preference-seeded','yes');}

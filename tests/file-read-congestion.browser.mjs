@@ -6,7 +6,7 @@ let browser;
 try{
  browser=await chromium.launch({channel:'chrome',headless:true});
  for(const width of [1280,390]){
-  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
+  const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/tests/file-read-congestion.html`);
   await page.locator('.preview-content [role="alert"]').waitFor({timeout:3000});
   assert.match(await page.locator('.preview-content').innerText(),/读取超时/);

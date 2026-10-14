@@ -37,7 +37,7 @@ let browser;
 const until=async(check,message)=>{const deadline=Date.now()+8000;while(!await check()){assert.ok(Date.now()<deadline,message);await new Promise(resolve=>setTimeout(resolve,25));}};
 try{
  await server.listen();await server.transformRequest('/src/web/style.css');const origin=`http://127.0.0.1:${server.httpServer.address().port}`;
- browser=await chromium.launch({channel:'chrome',headless:true});const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(8000);page.on('pageerror',error=>errors.push(error.message));
+ browser=await chromium.launch({channel:'chrome',headless:true});const page=await browser.newPage({locale:'zh-CN',viewport:{width:1280,height:900}});page.setDefaultTimeout(8000);page.on('pageerror',error=>errors.push(error.message));
  await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};});
  await page.goto(origin+'/sessions/alpha');await until(()=>page.locator('.connection').textContent().then(text=>text==='运行中'),'Initial view reads running state');
  assert.equal(writes().length,0,'Viewing must not acquire or cancel ownership');

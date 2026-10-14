@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, cp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, cp, copyFile, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -87,19 +87,22 @@ test('Linux user systemd starts and stops the isolated workspace with its child 
 test('Linux Serve helper preserves config and refuses existing mappings or failed CLI operations', { skip: process.platform !== 'linux' }, async () => {
   const root = await fixture();
   try {
+    await mkdir(join(root,'src/server'),{recursive:true});
+    for(const file of ['scripts/tailscale.ts','src/server/origins.ts'])await copyFile(new URL('../'+file,import.meta.url),join(root,file));
     const bin = join(root, 'bin'); await mkdir(bin);
     const calls = join(root, 'calls');
     await writeFile(join(bin, 'tailscale'), `#!/usr/bin/env node
-const fs=require('node:fs'); const args=process.argv.slice(2); fs.appendFileSync(process.env.CALLS,JSON.stringify(args)+'\\n');
+import fs from 'node:fs'; const args=process.argv.slice(2); fs.appendFileSync(process.env.CALLS,JSON.stringify(args)+'\\n');
 if(args[0]==='status') console.log(JSON.stringify({BackendState:'Running',Self:{DNSName:'example.test.ts.net.'}}));
-else if(args[1]==='status') console.log(process.env.MAPPINGS||'{}');
-else if(process.env.FAIL_SERVE) process.exit(1);
+else if(args[1]==='status') console.log(process.env.MAPPINGS||(fs.existsSync(process.env.CALLS+'.mapping')?fs.readFileSync(process.env.CALLS+'.mapping','utf8'):'{}'));
+else if(args[0]==='serve'){if(process.env.FAIL_SERVE)process.exit(1);fs.writeFileSync(process.env.CALLS+'.mapping',JSON.stringify({TCP:{443:{HTTPS:true}},Web:{'example.test.ts.net:443':{Handlers:{'/':{Proxy:'http://127.0.0.1:3412'}}}}}));}
 `, { mode: 0o700 });
     const configPath=join(root,'.local/web/config.json');
     const initial={workRoot:'/tmp/example',port:3412};
     await writeFile(configPath,JSON.stringify(initial));
     const env={...process.env,PATH:`${bin}:${process.env.PATH}`,CALLS:calls};
     const args=[join(root,'scripts/linux/configure-serve.sh'),'3412'];
+    await assert.rejects(exec('bash',[args[0],'--interactive'],{env}),error=>/交互式终端/.test((error as any).stderr));
     await assert.rejects(exec('bash',args,{env:{...env,MAPPINGS:'{"TCP":{"443":{}}}'}}));
     await assert.rejects(exec('bash',args,{env:{...env,FAIL_SERVE:'1'}}));
     assert.deepEqual(JSON.parse(await readFile(configPath,'utf8')),initial);
@@ -107,6 +110,6 @@ else if(process.env.FAIL_SERVE) process.exit(1);
     assert.deepEqual(JSON.parse(await readFile(configPath,'utf8')),{...initial,origin:'https://example.test.ts.net',allowedOrigins:['http://localhost:3412']});
     const commands=(await readFile(calls,'utf8')).trim().split('\n').map(line=>JSON.parse(line));
     assert.equal(commands.filter(args=>args.includes('--bg')).length,2);
-    assert.deepEqual(commands.at(-1),['serve','--bg','--https=443','http://127.0.0.1:3412']);
+    assert.deepEqual(commands.at(-1),['serve','status','--json']);
   } finally { await rm(root,{recursive:true,force:true}); }
 });
