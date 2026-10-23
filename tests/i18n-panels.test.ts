@@ -9,3 +9,9 @@ test('stored repository notices and nested errors resolve at display time',()=>{
 test('report counts retain passed failed skipped and error denominators in both languages',()=>{
  const result=msg('panels.report.summary',0,1,2,3);assert.equal(formatText(result,'zh-CN'),'通过 0 · 失败 1 · 跳过 2 · 错误 3');assert.equal(formatText(result,'en'),'Passed 0 · Failed 1 · Skipped 2 · Errors 3');
 });
+test('history file navigation and position are localized without changing original paths',()=>{
+ assert.equal(formatText(msg('panels.history.previousFile'),'zh-CN'),'上一文件');
+ assert.equal(formatText(msg('panels.history.nextFile'),'en'),'Next file');
+ assert.equal(formatText(msg('panels.history.filePosition',2,3),'zh-CN'),'第 2 / 3 个文件');
+ assert.equal(formatText(msg('panels.history.filePosition',2,3),'en'),'File 2 of 3');
+});

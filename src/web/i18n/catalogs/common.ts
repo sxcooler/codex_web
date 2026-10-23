@@ -1,6 +1,7 @@
 import type {MessageSchema} from '../types.ts';
 const plural=new Intl.PluralRules('en');
 export const zh={
+ 'common.closeNotice':'关闭此提示',
  'common.cancel':'取消','common.close':'关闭','common.save':'保存','common.retry':'重试','common.refresh':'刷新','common.refreshing':'刷新中…','common.loading':'读取中…','common.unknown':'未知','common.unknownError':'发生未知错误。',
  'common.errorDetail':(detail:string)=>`操作失败：${detail}`,
  'common.items':(count:number)=>`${count} 项`,
@@ -15,6 +16,7 @@ export const zh={
  'error.auth.invalid':'密码不正确，请重试。','error.auth.required':'登录已失效，请重新登录。','error.auth.rateLimited':'密码尝试过多，请稍后重试。','error.auth.busy':'密码验证服务繁忙，请稍后重试。','error.request.forbidden':'此请求不被允许。','error.request.invalid':'请求参数不合法，请检查输入。','error.route.missing':'此接口不存在，请检查版本或重新同步。','error.internal':'服务器内部错误，请检查服务状态。','error.thread.busy':'会话正在执行任务，请等待任务结束。',
 } as const;
 export const en={
+ 'common.closeNotice':'Dismiss this notice',
  'common.cancel':'Cancel','common.close':'Close','common.save':'Save','common.retry':'Retry','common.refresh':'Refresh','common.refreshing':'Refreshing…','common.loading':'Loading…','common.unknown':'Unknown','common.unknownError':'An unknown error occurred.',
  'common.errorDetail':(detail:string)=>`Operation failed: ${detail}`,
  'common.items':(count:number)=>`${count} ${plural.select(count)==='one'?'item':'items'}`,

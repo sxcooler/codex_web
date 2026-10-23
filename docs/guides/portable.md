@@ -88,6 +88,8 @@ bash Update.sh /path/to/codex-web-版本-linux-x64-update.zip 发布页中的64�
 
 0.1.5 没有 Update 入口：先将应用更新 ZIP 解压到安装目录以外的新目录，用旧包的 `runtime/node.exe`（Linux 为 `runtime/node`）运行其中 `scripts/update-portable.ts 更新ZIP SHA256 --root 旧安装目录`。旧服务不支持安全更新准备接口，需要先确认无活动任务并通过旧 Stop 入口停止。指纹相同时无需重新下载运行环境。不要将更新 ZIP 直接覆盖解压到安装目录。
 
+0.1.9 继续固定 Node 24.20.0、Codex CLI 最低稳定版本 0.160.1，运行依赖锁定内容不变。应用更新仍要求同平台运行环境指纹及安装文件校验一致；官方 0.1.8 到 0.1.9 的实际升级结果见 [发布验收](../verification/2026-10-23-release-019.md) 和发布页。更早版本不在本轮直接升级验收范围。
+
 ## 构建
 
 在对应平台原生构建，不交叉复制依赖。共同需要 Node >=24.20.0、npm 和 Git；Windows 构建需要 PowerShell 7，Linux x64 glibc 构建需要 Bash、curl、tar/xz 和 Python 3（用于通用源码 ZIP）。在普通用户下运行：

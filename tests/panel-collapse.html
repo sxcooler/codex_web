@@ -33,19 +33,20 @@ try{
   await click(control);visible=false;render();await tick();visible=true;render();await tick();check(toggle(tab==='变更'?'变更文件':'文件列表').getAttribute('aria-expanded')==='false','关闭重开丢失折叠');
  }
  await click(find('Git 日志'));await click(document.querySelector('.git-commit'));await click(fileList().querySelector('button'));
- const log=document.querySelector('.git-graph-list'),list=fileList(),area=preview();log.scrollTop=100;list.scrollTop=60;area.scrollTop=120;area.scrollLeft=80;await tick();const before=reads,fullHeight=area.clientHeight;
- await click(toggle('提交记录'));const halfHeight=area.clientHeight;check(halfHeight>fullHeight+60,'折叠记录未扩大预览');check(shown(list),'记录折叠影响提交文件');
- await click(toggle('提交文件'));check(area.clientHeight>halfHeight+20,'折叠提交文件未扩大预览');check(area.scrollTop===120&&area.scrollLeft===80,'Git 预览滚动丢失');check(reads===before,'Git 折叠触发请求');assertLayout();
+ const log=document.querySelector('.git-graph-list'),list=fileList(),area=preview();area.scrollTop=120;area.scrollLeft=80;await tick();await click(document.querySelector('.preview-close'));log.scrollTop=100;list.scrollTop=60;await tick();const before=reads,fullHeight=list.clientHeight;
+ await click(toggle('提交记录'));check(list.clientHeight>fullHeight+60,'折叠记录未扩大提交文件列表');check(shown(list),'记录折叠影响提交文件');
+ await click(toggle('提交文件'));check(!shown(list),'折叠提交文件未隐藏列表');check(reads===before,'Git 折叠触发请求');
  await click(toggle('提交记录'));check(log.scrollTop===100,'Git 记录滚动未恢复');check(toggle('提交文件').getAttribute('aria-expanded')==='false','Git 两层折叠相互影响');await click(toggle('提交文件'));check(list.scrollTop===60,'Git 文件滚动未恢复');
+ await click(list.querySelector('button'));check(preview()===area&&area.scrollTop===120&&area.scrollLeft===80,'重开预览丢失节点或双轴位置');check(reads===before,'Git 重开已读差异触发请求');check(document.querySelector('dialog:modal').getBoundingClientRect().bottom<=innerHeight,'dialog 超出视口');await click(document.querySelector('.preview-close'));
  await click(find('查看提交信息'));check(document.querySelector('.commit-info-popover').matches(':popover-open'),'信息浮层未打开');check(document.querySelectorAll('.commit-details details').length===0,'仍有嵌套 accordion');
  // The native popover closes on a real outside click / Escape in the Playwright check.
  await click(document.querySelector('[aria-label="关闭提交信息"]'));check(!document.querySelector('.commit-info-popover').matches(':popover-open'),'关闭按钮无效');
  await click(find('查看提交信息'));await click(find('文件'));check(!document.querySelector('.commit-info-popover').matches(':popover-open'),'切换标签仍显示提交信息');await click(find('Git 日志'));
  await click(toggle('提交文件'));await click(document.querySelectorAll('.git-commit')[1]);check(toggle('提交文件').getAttribute('aria-expanded')==='true','切换提交未展开文件列表');check(!preview(),'切换提交残留旧文件');await click(fileList().querySelector('button'));
- await click(toggle('提交记录'));await click(toggle('提交文件'));const saved=stored();root.render(null);await tick();render();await tick(400);check(toggle('提交记录').getAttribute('aria-expanded')==='false'&&toggle('提交文件').getAttribute('aria-expanded')==='false','重载丢失 Git 折叠');check(preview()?.textContent.includes('line 0'),'重载丢失文件选择');
+ await click(document.querySelector('.preview-close'));await click(toggle('提交记录'));await click(toggle('提交文件'));const saved=stored();root.render(null);await tick();render();await tick(400);check(toggle('提交记录').getAttribute('aria-expanded')==='false'&&toggle('提交文件').getAttribute('aria-expanded')==='false','重载丢失 Git 折叠');check(stored().history.path===saved.history.path&&!document.querySelector('dialog:modal'),'重载应保留选择且不自动预览');
  session='two';root.render(null);await tick();render();await tick(300);check(toggle('提交记录').getAttribute('aria-expanded')==='false','同项目切会话丢失状态');
  project='other';render();await tick();check(toggle('变更文件').getAttribute('aria-expanded')==='true','项目状态串线');
- project='collapse';render();await tick(300);assertLayout();await click(toggle('提交文件'));
+ project='collapse';render();await tick(300);check(!document.querySelector('dialog:modal'),'返回项目不应自动打开历史预览');await click(toggle('提交文件'));check(shown(fileList()),'返回项目后无法展开提交文件');
  document.querySelector('#result').textContent='PASS: 三标签折叠 / Git 独立折叠 / 空间与双轴滚动 / 请求与状态保留 / 切提交 / 浮层 / 项目隔离';
 }catch(e){document.querySelector('#result').textContent='FAIL: '+e.message;console.error(e);}
 </script></html>

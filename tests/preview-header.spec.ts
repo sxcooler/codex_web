@@ -25,12 +25,12 @@ test('copy failure is honest and a late success does not belong to the next file
 });
 
 for(const repository of ['', 'vendor/sub'])test(`Git history copy includes repository '${repository}'`,async({page})=>{
- await setup(page);await page.evaluate(repo=>(window as any).renderHistory(repo),repository);await expect(page.locator('.diff-line').first()).toBeVisible();const shell=page.locator('.preview-shell:visible');await shell.getByRole('button',{name:'复制文件路径',exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).copied)).toEqual(['C:\\Users\\Developer\\work\\sample-project\\'+(repository?repository.replaceAll('/','\\')+'\\':'')+'nested\\file.txt']);
- await shell.getByRole('button',{name:'全屏查看',exact:true}).click();await expect(page.locator('dialog:modal')).toHaveCount(1);await page.keyboard.press('Escape');await expect(page.locator('dialog:modal')).toHaveCount(0);
+ await setup(page);await page.evaluate(repo=>(window as any).renderHistory(repo),repository);await page.locator('.commit-files-section .file-list button').first().click();await expect(page.locator('.diff-line').first()).toBeVisible();const shell=page.locator('.preview-shell:visible');await shell.getByRole('button',{name:'复制文件路径',exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).copied)).toEqual(['C:\\Users\\Developer\\work\\sample-project\\'+(repository?repository.replaceAll('/','\\')+'\\':'')+'nested\\file.txt']);
+ await expect(page.locator('dialog:modal')).toHaveCount(1);await page.keyboard.press('Escape');await expect(page.locator('dialog:modal')).toHaveCount(0);
 });
 
 test('missing project root disables copy instead of inventing an absolute path',async({page})=>{
- await setup(page);await page.evaluate(()=>(window as any).renderHistory('',true));await expect(page.locator('.diff-line').first()).toBeVisible();await expect(page.getByRole('button',{name:'复制文件路径',exact:true})).toBeDisabled();expect(await page.evaluate(()=>(window as any).copied)).toEqual([]);
+ await setup(page);await page.evaluate(()=>(window as any).renderHistory('',true));await page.locator('.commit-files-section .file-list button').first().click();await expect(page.locator('.diff-line').first()).toBeVisible();await expect(page.getByRole('button',{name:'复制文件路径',exact:true})).toBeDisabled();expect(await page.evaluate(()=>(window as any).copied)).toEqual([]);
 });
 
 test('working tree diff shares the copy header and view controls stay on the second row',async({page})=>{

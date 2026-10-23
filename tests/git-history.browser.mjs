@@ -34,7 +34,7 @@ try{
    }
    if(fixture==='git-repositories'){
     const controls=await page.locator('.git-history-controls>label').evaluateAll(labels=>labels.map(label=>{const box=label.getBoundingClientRect();return {top:box.top,bottom:box.bottom,left:box.left,right:box.right};}));
-    assert.equal(controls.length,2);assert.ok(width===390?controls[1].top>=controls[0].bottom:controls[1].left>=controls[0].right,'Repository and branch layout does not match viewport');
+    assert.equal(controls.length,2);assert.ok(controls[1].left>=controls[0].right&&Math.abs(controls[1].top-controls[0].top)<1,'Repository and branch layout does not match viewport');
     const listHeight=await page.locator('.git-graph-list').evaluate(list=>list.clientHeight);
     assert.ok(listHeight>=48,`Repository notice hid the entire commit list (${listHeight}px)`);
    }

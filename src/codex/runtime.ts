@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { isDeepStrictEqual } from 'node:util';
 import {setTimeout as wait} from 'node:timers/promises';
-import { isAbsolute, resolve, relative, sep } from 'node:path';
+import { basename, isAbsolute, resolve, relative, sep } from 'node:path';
 import {realpath,stat} from 'node:fs/promises';
 import { permissionChoices, threadPermissionOptions, type PermissionMode, type PermissionPolicy } from './permissions.ts';
 import { AppServer } from './app-server.ts';
@@ -18,6 +18,11 @@ export type TurnOptions = { model?: string; effort?: string; permissionMode?: Pe
 export type NativeProjectContext={home:string;epoch:string};
 const directoryKey=(path:string)=>process.platform==='win32'?resolve(path.replaceAll('/','\\').replace(/^\\\\\?\\UNC\\/i,'\\\\').replace(/^\\\\\?\\/,'')).toLowerCase():resolve(path);
 export type NativeProject={id:string;name:string;roots:Array<{path:string}>};
+export type RestartSession={threadId:string;turnId?:string;name?:string;projectName?:string;parentThreadId?:string;category:'session'|'subagent'|'temporary';kind:'running'|'approval'|'input'|'writing'|'ending'|'unknown'};
+export type RestartIssue={stage:string;threadId?:string;message:string;code?:string|number};
+export type RestartInspection={checkedAt:string;complete:boolean;sessions:RestartSession[];blockers:string[];issues:RestartIssue[];canRestart:boolean;canForce:boolean;version:string};
+export type RestartSelection={mode?:'normal'|'force';version?:string};
+export type RestartScope={epoch:string;sessions:Array<{threadId:string;turnId?:string}>};
 type Id = string | number;
 type Options = {
   executable: string;
@@ -177,6 +182,7 @@ export class Runtime extends EventEmitter {
   private idleTimer?: ReturnType<typeof setTimeout>;
   private closed = false;
   private updating=false;
+  private reloading?:Promise<any>;
   private epoch = randomUUID();
   private sequence = 0;
   private requestSequence = 0;
@@ -1065,41 +1071,133 @@ export class Runtime extends EventEmitter {
     if(this.starting||this.stopping||this.writes||(!allowReads&&(this.inFlight||this.reads))||(this.server&&nativeTitleCleanupPending(this.server))||[...this.states.values()].some(s=>s.reserved||s.activeTurnId||s.pending.size||s.recoverOnIdle||s.releasePromise||s.titleGeneration||s.nameWrite||['active','systemError'].includes(s.nativeStatus?.type)))throw runtimeError(409,'RUNTIME_THREAD_BUSY',allowReads?'仍有活动任务或正在提交写入。请等待所有任务、审批和输入处理完毕后再操作。':'仍有活动会话、待处理请求或读取操作。请等待所有任务、审批和输入处理完毕后再操作。');
   }
 
-  async assertNativeIdle(){
-    this.assertIdle(true);
+  async inspectRestart():Promise<RestartInspection>{
     const server=this.server,epoch=this.epoch,deadline=Date.now()+20_000;
-    if(!server)return;
+    const sessions=new Map<string,RestartSession>(),issues:RestartIssue[]=[],blockers:string[]=[];
+    const issue=(stage:string,error:any,threadId?:string)=>{
+      const value:RestartIssue={stage,...(threadId?{threadId}:{}),message:String(error?.message??error).slice(0,2000),...(['string','number'].includes(typeof error?.code)?{code:error.code}:{})};
+      issues.push(value);this.options.diagnostic?.({event:'restart_inspection',stage,threadId,outcome:'unverified',errorCode:value.code});
+    };
+    const request=async(method:string,params:any)=>{
+      if(!server||server!==this.server||epoch!==this.epoch)throw Error('Native runtime changed during activity check');
+      if(Date.now()>=deadline)throw Error('Activity check timed out');
+      const result=await server.request<any>(method,params,Math.max(1,deadline-Date.now()));
+      if(server!==this.server||epoch!==this.epoch)throw Error('Native runtime changed during activity check');
+      if(Date.now()>=deadline)throw Error('Activity check timed out');
+      return result;
+    };
+    const describe=(id:string,thread:any,kind:RestartSession['kind'],turnId?:string):RestartSession=>({threadId:id,...(turnId?{turnId}:{}),...(typeof thread?.name==='string'&&thread.name?{name:thread.name}:{}),...(typeof thread?.cwd==='string'&&thread.cwd?{projectName:basename(thread.cwd)}:{}),...(typeof thread?.parentThreadId==='string'?{parentThreadId:thread.parentThreadId}:{}),category:isSubagentThread(thread)?'subagent':thread?.ephemeral||this.temporaryThreads.has(id)?'temporary':'session',kind});
+    const checked=new Map<string,any>();
     this.reads++;
     try{
-      let cursor:string|null=null;const seen=new Set<string>();
-      do{
-        const page=await this.call<any>('thread/loaded/list',{cursor,limit:100});
-        if(Date.now()>=deadline)throw Error('Activity check timed out');
-        if(!Array.isArray(page?.data)||!page.data.every((id:unknown)=>typeof id==='string'&&id.length>0))throw Error('Invalid native loaded thread list');
-        for(const threadId of page.data){
-          const result=await this.call<any>('thread/read',{threadId,includeTurns:false});
-          if(Date.now()>=deadline)throw Error('Activity check timed out');
-          const status=result?.thread?.status?.type;
-          if(result?.thread?.id!==threadId)throw Error('Invalid native thread status');
-          if(status==='active')throw runtimeError(409,'RUNTIME_THREAD_BUSY','本机 Codex App Server 仍有活动任务（含待审批或待输入），暂不能重启。');
-          if(status!=='idle'&&status!=='notLoaded')throw Error('Unknown native activity');
-        }
-        cursor=page.nextCursor;
-        if(cursor!==null&&(typeof cursor!=='string'||!cursor||seen.has(cursor)))throw Error('Invalid native loaded thread cursor');
-        if(cursor)seen.add(cursor);
-      }while(cursor);
-      if(server!==this.server||epoch!==this.epoch)throw Error('Native runtime changed during activity check');
-    }catch(error:any){
-      if(error.code==='RUNTIME_THREAD_BUSY')throw error;
-      throw runtimeError(503,'RUNTIME_UNAVAILABLE','无法可靠查询本机 Codex App Server 的活动状态，请稍后重试。');
+      if(server){
+        let cursor:string|null=null;const cursors=new Set<string>(),ids=new Set<string>();
+        do{
+          let page:any;
+          try{
+            page=await request('thread/loaded/list',{cursor,limit:100});
+            if(!Array.isArray(page?.data)||!page.data.every((id:unknown)=>typeof id==='string'&&id.length>0&&id.length<=1024))throw Error('Invalid native loaded thread list');
+          }catch(error){issue('thread/loaded/list',error);break;}
+          for(const threadId of page.data){
+            if(ids.has(threadId))continue;ids.add(threadId);
+            let stage='thread/read',thread:any;
+            const state=this.states.get(threadId),activityRevision=state?.activityRevision;
+            try{
+              const result=await request(stage,{threadId,includeTurns:false});thread=result?.thread;
+              if(thread?.id!==threadId)throw Error('Invalid native thread status');
+              const status=thread?.status?.type;
+              if(status==='active'||status==='systemError'){
+                stage='thread/turns/list';const turns:any[]=[],seen=new Set<string>();let turnCursor:string|null=null;
+                do{
+                  const page=await request(stage,{threadId,cursor:turnCursor,limit:100,sortDirection:'desc',itemsView:'notLoaded'});
+                  if(!Array.isArray(page?.data)||!page.data.every((turn:any)=>typeof turn?.id==='string'&&['inProgress','completed','interrupted','failed'].includes(turn.status)))throw Error('Invalid native turn status');
+                  turns.push(...page.data);turnCursor=page.nextCursor;
+                  if(turnCursor!==null&&(typeof turnCursor!=='string'||!turnCursor||seen.has(turnCursor)))throw Error('Invalid native turn cursor');
+                  if(turnCursor)seen.add(turnCursor);
+                }while(turnCursor);
+                thread={...thread,turns};
+                const active=turns.filter(turn=>turn.status==='inProgress');
+                if(status==='active'){
+                  const flags=thread.status.activeFlags??[],kind=flags.includes('waitingOnUserInput')?'input':flags.includes('waitingOnApproval')?'approval':'running';
+                  sessions.set(threadId,describe(threadId,thread,kind,active.length===1?active[0].id:state?.activeTurnId??undefined));
+                  if(active.length!==1&&!state?.activeTurnId)issue(stage,Error('Active native turn could not be identified'),threadId);
+                }else if(!state||state.activityRevision!==activityRevision||!this.canUnload(state,thread))throw Error('Native systemError has not been verified as terminal and owned');
+                else state.nativeStatus={type:'idle'};
+              }else if(!['idle','notLoaded'].includes(status))throw Error('Unknown native activity: '+String(status));
+              else if(state&&state.activityRevision===activityRevision&&!state.activeTurnId&&!state.pending.size)state.nativeStatus=thread.status;
+              if(state===this.states.get(threadId)&&state?.activityRevision===activityRevision)checked.set(threadId,thread);
+            }catch(error){
+              issue(stage,error,threadId);
+              if(!sessions.has(threadId))sessions.set(threadId,describe(threadId,thread,'unknown'));
+            }
+          }
+          cursor=page.nextCursor;
+          if(cursor!==null&&(typeof cursor!=='string'||!cursor||cursors.has(cursor))){issue('thread/loaded/list',Error('Invalid native loaded thread cursor'));break;}
+          if(cursor)cursors.add(cursor);
+        }while(cursor);
+        if(server!==this.server||epoch!==this.epoch)issue('runtime',Error('Native runtime changed during activity check'));
+      }
+      for(const [id,state] of this.states){
+        const pending=[...state.pending.values()],thread=checked.get(id),previous=sessions.get(id);
+        const kind:RestartSession['kind']|undefined=pending.length?pending.some(request=>['item/tool/requestUserInput','mcpServer/elicitation/request'].includes(request.method))?'input':'approval':state.reserved||state.nameWrite?'writing':state.releasePromise?'ending':state.activeTurnId||state.titleGeneration?'running':state.recoverOnIdle||(!checked.has(id)&&['active','systemError'].includes(state.nativeStatus?.type))?'unknown':undefined;
+        if(kind)sessions.set(id,{...describe(id,thread??{name:state.nativeName,cwd:state.cwd},kind,state.activeTurnId??undefined),...previous,kind,...(state.activeTurnId?{turnId:state.activeTurnId}:{})});
+        if(state.reserved||state.nameWrite||state.releasePromise)blockers.push('thread-write');
+        if(state.externalWriter&&(kind||previous)){blockers.push('external-writer');issue('ownership',Error('Native writer ownership is external'),id);}
+        if(kind==='unknown')issue('state',Error('Local activity has not been reconciled'),id);
+      }
+      if(this.starting||this.stopping)blockers.push('lifecycle');
+      if(this.updating)blockers.push('maintenance');
+      if(this.writes)blockers.push('write');
+      if(server&&nativeTitleCleanupPending(server))blockers.push('native-cleanup');
+      const values=[...sessions.values()].sort((a,b)=>a.threadId.localeCompare(b.threadId)),unique=[...new Set(blockers)].sort();
+      const version=createHash('sha256').update(JSON.stringify([epoch,values.map(({threadId,turnId,kind})=>[threadId,turnId,kind]),unique,issues.map(({stage,threadId,code})=>[stage,threadId,code])])).digest('hex');
+      return {checkedAt:new Date().toISOString(),complete:!issues.length,sessions:values,blockers:unique,issues,canRestart:!issues.length&&!values.length&&!unique.length,canForce:!issues.length&&!!values.length&&!unique.length,version};
     }finally{this.reads--;this.scheduleIdle();}
+  }
+
+  async assertNativeIdle(){
+    const report=await this.inspectRestart();
+    this.requireRestartReport(report,false);
     this.assertIdle(true);
   }
 
-  async prepareRestart(){
-    await this.assertNativeIdle();
-    this.assertIdle(true);
-    this.updating=true;
+  private requireRestartReport(report:RestartInspection,force:boolean){
+    if(report.canRestart||(force&&report.canForce))return;
+    if(report.sessions.some(session=>session.kind!=='unknown')||report.blockers.length)throw Object.assign(runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务或正在提交写入。请等待所有任务、审批和输入处理完毕后再操作。'),{inspection:report});
+    throw Object.assign(runtimeError(503,'RUNTIME_UNAVAILABLE','无法可靠查询本机 Codex App Server 的活动状态，请稍后重试。'),{inspection:report});
+  }
+
+  async authorizeRestart(selection:RestartSelection={}):Promise<RestartScope|undefined>{
+    if(!isObject(selection)||!exactKeys(selection,['mode','version'])||(selection.mode!==undefined&&!['normal','force'].includes(selection.mode))||(selection.version!==undefined&&!/^[a-f0-9]{64}$/.test(selection.version))||(selection.mode==='force'&&!selection.version))throw runtimeError(400,'RUNTIME_INVALID_INPUT','A checked restart version is required for force restart');
+    const report=await this.inspectRestart();
+    if(selection.version&&selection.version!==report.version)throw Object.assign(runtimeError(409,'RUNTIME_RESTART_CHANGED','活动会话已变化，请查看更新后的检查结果再确认。'),{inspection:report});
+    this.requireRestartReport(report,selection.mode==='force');
+    return selection.mode==='force'?{epoch:this.epoch,sessions:report.sessions.map(({threadId,turnId})=>({threadId,...(turnId?{turnId}:{})}))}:undefined;
+  }
+
+  async prepareRestart(scope?:RestartScope){
+    if(scope===undefined){await this.assertNativeIdle();this.assertIdle(true);this.updating=true;return;}
+    if(!isObject(scope)||!exactKeys(scope,['epoch','sessions'])||typeof scope.epoch!=='string'||scope.epoch.length>100||!Array.isArray(scope.sessions)||scope.sessions.length>1000||!scope.sessions.every((value:any)=>isObject(value)&&exactKeys(value,['threadId','turnId'])&&typeof value.threadId==='string'&&value.threadId.length>0&&value.threadId.length<=1024&&(value.turnId===undefined||typeof value.turnId==='string'&&value.turnId.length>0&&value.turnId.length<=1024)))throw runtimeError(400,'RUNTIME_INVALID_INPUT','Invalid restart authorization scope');
+    const report=await this.inspectRestart();
+    if(scope.epoch!==this.epoch||report.sessions.some(session=>!scope.sessions.some(approved=>approved.threadId===session.threadId&&approved.turnId===session.turnId)))throw Object.assign(runtimeError(409,'RUNTIME_RESTART_CHANGED','活动会话或后台实例已变化，已取消重启。'),{inspection:report});
+    this.requireRestartReport(report,true);
+    if(this.starting||this.stopping||this.updating||this.writes||[...this.states.values()].some(state=>state.reserved||state.nameWrite||state.releasePromise))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有正在提交的写入，暂不能强制重启。');
+    const server=this.server;this.updating=true;
+    try{
+      for(const state of this.states.values())state.titleGeneration?.controller.abort();
+      if(server){
+        await Promise.all(report.sessions.filter(session=>session.turnId).map(async session=>{
+          try{await server.request('turn/interrupt',{threadId:session.threadId,turnId:session.turnId},1000);}
+          catch{this.options.diagnostic?.({event:'restart_interrupt',threadId:session.threadId,outcome:'unconfirmed'});}
+        }));
+        if(this.server===server)await this.closeIdleServer(true,true);
+        else await server.close(true);
+      }
+    }catch(error){
+      // An unconfirmed exit must retain ownership and keep new work closed.
+      if(server)this.server??=server;else this.updating=false;
+      throw error;
+    }
   }
 
   prepareUpdate(){
@@ -1107,11 +1205,18 @@ export class Runtime extends EventEmitter {
     this.updating=true;
   }
 
-  async reloadModels(){
-    await this.assertNativeIdle();
-    this.assertIdle(true);
-    if(this.server&&!await this.closeIdleServer(true))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务或正在提交写入，请稍后重启。');
-    return this.models(true);
+  reloadModels(selection:RestartSelection={}):Promise<any>{
+    if(this.reloading)return this.reloading;
+    const operation=async()=>{
+      const scope=await this.authorizeRestart(selection);
+      if(scope){await this.prepareRestart(scope);this.updating=false;}
+      else{
+        this.assertIdle(true);
+        if(this.server&&!await this.closeIdleServer(true))throw runtimeError(409,'RUNTIME_THREAD_BUSY','仍有活动任务或正在提交写入，请稍后重启。');
+      }
+      return this.models(true);
+    };
+    return this.reloading=operation().finally(()=>{this.reloading=undefined;});
   }
 
   async models(refresh=false,allowStale=false): Promise<{ data: any[]; nextCursor: null; stale?: boolean }> {
@@ -2041,7 +2146,7 @@ export class Runtime extends EventEmitter {
     this.idleTimer.unref?.();
   }
 
-  private async closeIdleServer(allowReads=false): Promise<boolean> {
+  private async closeIdleServer(allowReads=false,force=false): Promise<boolean> {
     // An uncertain temporary start never blocks stopping our otherwise idle child;
     // AppServer.close settles its retained outcome and the process owns the remaining resource.
     if (this.stopping) { await this.stopping; return true; }
@@ -2049,16 +2154,25 @@ export class Runtime extends EventEmitter {
     const deadline = Date.now() + 2000;
     while (!allowReads && (this.inFlight || this.reads) && !busy() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     const server = this.server;
-    if (!server || (!allowReads&&(this.inFlight||this.reads)) || busy()) return false;
+    if (!server || (!allowReads&&(this.inFlight||this.reads)) || (!force&&busy())) return false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.server = undefined;
-    this.stopping = server.close().finally(()=>settleNativeTitleCleanup(server));
+    this.stopping = server.close(force).finally(()=>settleNativeTitleCleanup(server));
     try {
       await this.stopping;
       for (const [id, state] of this.states) {
         state.loaded = false;
+        if(force){
+          const interrupted=!!state.activeTurnId||!!state.pending.size;
+          state.waiter?.resolve('failed');state.completion?.resolve();
+          state.activeTurnId=null;state.recoverOnIdle=false;
+          for(const pending of state.pending.values())this.nativeRequests.delete(nativeKey(pending.nativeId));
+          state.pending.clear();
+          if(interrupted)state.error='Native runtime restarted; the last operation may have an unknown result';
+        }
         this.clearLiveState(state);
         await this.discardWriterLease(state);
+        if(force)this.change(id,'resync');
         if (state.released&&!state.handoffReady) { state.handoffReady = true; this.change(id, 'release'); }
       }
     } finally { this.stopping = undefined; }

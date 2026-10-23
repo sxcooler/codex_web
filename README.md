@@ -45,7 +45,7 @@ All screenshots use demo data.
 
 Running from source requires Node **>=24.20.0**, npm, the official standalone Codex CLI **>=0.160.1**, and Git for project/Git features. `.node-version` declares the baseline; it does not switch Node automatically. Install and sign in using the [official Codex instructions](https://learn.chatgpt.com/docs/codex/cli). Linux/WSL must use the Linux CLI and its own environment's login. Do not rely on binaries inside the VS Code extension's private directory.
 
-**Codex Web 0.1.8 requires Codex CLI >=0.160.1 (the development and verified baseline)** and a recognizable stable version. Before updating an older installation, upgrade Codex CLI separately if needed and check `codex --version`, then apply the 0.1.8 update. App updates do not upgrade the CLI. Older, prerelease, or unrecognized versions prevent startup; the updater preserves or rolls back the app under its existing rules.
+**Codex Web 0.1.9 requires Codex CLI >=0.160.1 (the development and verified baseline)** and a recognizable stable version. Before updating an older installation, upgrade Codex CLI separately if needed and check `codex --version`, then apply the 0.1.9 update. App updates do not upgrade the CLI. Older, prerelease, or unrecognized versions prevent startup; the updater preserves or rolls back the app under its existing rules.
 
 ## Run from source
 
@@ -72,7 +72,7 @@ The Files, Changes, and Git History tabs preview PNG, JPEG, WebP, GIF, AVIF, and
 
 Git History uses icons and short names for local branches, remote-tracking branches, and tags. You can select branches such as `origin/main`; All branches also includes remote-only history. All three tabs share the Refresh button beside Project: local content reloads immediately while fetch runs in the background, then the graph updates. Browsing and chat remain available; failures retain local content and show a message. Fetch is skipped when no remote exists. Concurrent requests for a project are merged, with results reused for 10 seconds; limits are 30 seconds per remote and 60 seconds overall. Only remote-tracking branches are updated or pruned; local branches, tags, the index, and working files remain unchanged. Automatic refreshes and tab switches do not trigger fetch. See the [workspace design](docs/design/workspace-panels.md).
 
-Markdown documents support repository-local images and restricted `<img>` tags. Prefer `![description](relative/path)`; integer dimensions are available when needed. Paths resolve relative to the document, with `/` referring to the project root, through the authenticated image preview endpoint. External images, scripts, event attributes, and arbitrary styles are not loaded or executed. Keep GitHub-compatible relative paths in document source, without local machine paths, private domains, or Web API addresses. See the [Markdown compatibility and safety rules](docs/design/markdown.md#仓内图片与-github-兼容2026-09-26).
+Markdown documents support repository-local images and restricted `<img>` tags. Prefer `（本地审查截图不随公开版本提供。）`; integer dimensions are available when needed. Paths resolve relative to the document, with `/` referring to the project root, through the authenticated image preview endpoint. External images, scripts, event attributes, and arbitrary styles are not loaded or executed. Keep GitHub-compatible relative paths in document source, without local machine paths, private domains, or Web API addresses. See the [Markdown compatibility and safety rules](docs/design/markdown.md#仓内图片与-github-兼容2026-09-26).
 
 ## Local and cross-device access
 
@@ -178,7 +178,7 @@ A timeout or lost connection can leave a submission's outcome unknown. Check nat
 
 Web Push requires HTTPS, browser support, and explicit user permission. Physical-phone background delivery and real VS Code handoff for phase-two features still have verification gaps. The PWA does not cache APIs, conversations, or credentials; tasks cannot be submitted offline.
 
-For the 0.1.8 release scope and checks, see the [release record](docs/verification/2026-10-14-release-018.md). Portable updates require matching platform/runtime fingerprints and file checks; see the [portable guide](docs/guides/portable.md#数据与升级).
+For the 0.1.9 release scope and checks, see the [release record](docs/verification/2026-10-23-release-019.md). Portable updates require matching platform/runtime fingerprints and file checks; see the [portable guide](docs/guides/portable.md#数据与升级).
 
 ## Documentation and verification
 

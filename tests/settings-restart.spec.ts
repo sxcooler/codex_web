@@ -12,13 +12,12 @@ async function setup(page:Page, scenario='idle'){
     else if(path==='/api/sessions')data={data:[],nextCursor:null};
     else if(path==='/api/settings')data={origin:'http://localhost',nodeVersion:'test',runtime:{},...(scenario==='legacy'?{}:{webRestart:restart})};
     else if(path==='/api/runtime/restart-check'){
-      if(scenario==='busy')return route.fulfill({status:409,json:{error:'本机 Codex App Server 仍有活动任务'}});
-      data={idle:true};
+      data={checkedAt:'2026-10-22T06:00:00Z',complete:true,sessions:scenario==='busy'?[{threadId:'fixture-active',turnId:'fixture-turn',name:'Fixture active',kind:'running',category:'session'}]:[],blockers:[],issues:[],canRestart:scenario!=='busy',canForce:scenario==='busy',version:'a'.repeat(64)};
     }
     else if(path==='/api/models/reload'){calls.push(path);data={data:[]};}
     else if(path==='/api/server/restart'){
       if(scenario==='legacy')return route.fulfill({status:404,json:{error:'Not found'}});
-      if(route.request().method()==='POST'){calls.push(path);expect(route.request().postDataJSON()).toEqual({confirmed:true});restart={available:true,status:'scheduled',scheduledAt:new Date(Date.now()+90_000).toISOString()};}
+      if(route.request().method()==='POST'){calls.push(path);expect(route.request().postDataJSON()).toEqual({confirmed:true,mode:'normal',version:'a'.repeat(64)});restart={available:true,status:'scheduled',scheduledAt:new Date(Date.now()+90_000).toISOString()};}
       data=restart;
     }
     await route.fulfill({json:data});
@@ -36,15 +35,15 @@ for(const width of [390,1440])test(`settings uses an in-page confirmation and ch
     await button.click();
     const dialog=page.getByRole('dialog',{name:name+'？'});
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('本机 Codex App Server');
+    await expect(dialog).toContainText('此 Web 服务管理的 Codex 后台');
     await expect(dialog).not.toContainText('其他设备');
     await expect(dialog.getByRole('button',{name:'取消',exact:true})).toBeFocused();
-    await expect(dialog.getByRole('button',{name:'确认重启',exact:true})).toBeEnabled();
+    await expect(dialog.getByRole('button',{name:'重启',exact:true})).toBeEnabled();
     await page.screenshot({path:`.local/web/restart-dialog-${name==='重启Codex'?'codex':'web'}-${width}.png`});
     await page.keyboard.press('Escape');await expect(dialog).not.toBeVisible();await expect(button).toBeFocused();
     expect(calls).toHaveLength(before);
     await button.click();await dialog.getByRole('button',{name:'取消',exact:true}).click();expect(calls).toHaveLength(before);
-    await button.click();await dialog.getByRole('button',{name:'确认重启',exact:true}).click();
+    await button.click();await dialog.getByRole('button',{name:'重启',exact:true}).click();
     await expect.poll(()=>calls.length).toBe(before+1);await expect(dialog).not.toBeVisible();
     if(name==='重启Codex')await expect(button).toBeEnabled();
   }
@@ -58,8 +57,8 @@ for(const scenario of ['legacy','busy'])test(`restart explains ${scenario} only 
   const button=page.getByRole('button',{name:'重启 Web 服务',exact:true});await expect(button).toBeEnabled();
   await expect(page.getByText(/当前后端尚不支持|仍有活动任务/)).not.toBeVisible();
   await button.click();const dialog=page.getByRole('dialog',{name:'重启 Web 服务？'});
-  await expect(dialog.getByRole('alert')).toContainText(scenario==='legacy'?'后端尚未加载重启接口':'仍有活动任务');
-  await expect(dialog.getByRole('button',{name:'确认重启',exact:true})).toBeDisabled();
+  if(scenario==='legacy'){await expect(dialog.getByRole('alert')).toContainText('后端尚未加载重启接口');await expect(dialog.getByRole('button',{name:'重启',exact:true})).toBeDisabled();}
+  else{await expect(dialog).toContainText('Fixture active');await expect(dialog.getByRole('button',{name:'强制重启',exact:true})).toBeEnabled();}
   await dialog.getByRole('button',{name:'取消',exact:true}).click();
   expect(calls).toEqual([]);expect(errors).toEqual([]);
 });

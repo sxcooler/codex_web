@@ -8,11 +8,12 @@ let browser;
 try{
  browser=await chromium.launch({channel:'chrome',headless:true});
  for(const width of [1280,390]){
-  const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}}),errors=[];let result={remotes:[{name:'origin',status:'updated'},{name:'upstream',status:'updated'}]},held,hold=false,calls=0;
+  const page=await browser.newPage({locale:'zh-CN',viewport:{width,height:900}}),errors=[];let result={remotes:[{name:'origin',status:'updated'},{name:'upstream',status:'updated'}]},held,hold=false,calls=0,holdList=false,heldList;
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/api/**',async route=>{
    const path=new URL(route.request().url()).pathname;
    if(path.endsWith('/git/fetch')){calls++;assert.equal(route.request().method(),'POST');if(hold){held=route;return;}await route.fulfill({json:result});return;}
+   if(path.endsWith('/git/files')&&holdList){heldList=route;return;}
    if(path.endsWith('/git/repositories')){await route.fulfill({json:{repositories:[{path:'',name:'Main',kind:'main',available:true},{path:'sdk',name:'SDK',kind:'submodule',available:true}],complete:true}});return;}
    await route.fulfill({json:path.endsWith('/git/log')?{repository:true,commits:[],branches:[],nextCursor:null}:{files:[]}});
   });
@@ -22,12 +23,21 @@ try{
   const refresh=page.locator('.panel-refresh'),notice=page.locator('.fetch-result');
   const waitReady=async()=>{await page.waitForFunction(()=>document.querySelector('.panel-refresh')&&!document.querySelector('.panel-refresh').disabled);};
   const fetchResult=async value=>{result=value;await waitReady();await refresh.click();await notice.waitFor();};
+  for(const automatic of [false,true]){
+   await waitReady();holdList=true;heldList=null;await fetchResult({remotes:[{name:'origin',status:'updated'}]});await page.waitForFunction(()=>document.querySelector('.panel-refresh').disabled);
+   await notice.getByRole('button',{name:'关闭此提示',exact:true}).focus();
+   await page.screenshot({path:`.local/git-feedback-${width}-${automatic?'expiry':'close'}.png`,fullPage:true});
+   if(automatic)await page.clock.fastForward(5000);else await notice.getByRole('button',{name:'关闭此提示',exact:true}).click();
+   await notice.waitFor({state:'detached'});assert.equal(await page.locator('.tabs > button.active').evaluate(button=>button===document.activeElement),true,'focus returns to the current tab while refresh is disabled');
+   holdList=false;await heldList.fulfill({json:{files:[]}});await waitReady();
+  }
   await fetchResult(result);assert.equal(await notice.getAttribute('role'),'status');
   await page.clock.fastForward(4999);assert.equal(await notice.count(),1,'success must remain visible before five seconds');
-  await page.clock.fastForward(1);await notice.waitFor({state:'detached'});
+  await notice.getByRole('button',{name:'关闭此提示',exact:true}).focus();await page.clock.fastForward(1);await notice.waitFor({state:'detached'});assert.equal(await refresh.evaluate(button=>button===document.activeElement),true,'expiry restores focus when the notice contained it');
   for(const skipped of ['no-remotes','not-repository']){await fetchResult({skipped,remotes:[]});await page.clock.fastForward(5000);await notice.waitFor({state:'detached'});}
   await fetchResult({remotes:[{name:'origin',status:'updated'},{name:'upstream',status:'failed',error:'upstream fixture failure'}]});
   await page.clock.fastForward(6000);assert.equal(await notice.getAttribute('role'),'alert');assert.match(await notice.textContent(),/upstream fixture failure/);
+  const beforeDismiss=calls;await notice.getByRole('button',{name:'关闭此提示',exact:true}).click();await notice.waitFor({state:'detached'});assert.equal(calls,beforeDismiss,'closing a result must not fetch again');assert.equal(await refresh.evaluate(button=>button===document.activeElement),true,'closing restores refresh focus');
   await fetchResult({error:'uncertain fixture result'});await page.clock.fastForward(6000);assert.match(await notice.textContent(),/uncertain fixture result/);
   await fetchResult({remotes:[{name:'origin',status:'updated'}]});await page.clock.fastForward(4000);
   await fetchResult({remotes:[{name:'origin',status:'timeout',error:'new timeout must stay'}]});await page.clock.fastForward(6000);assert.match(await notice.textContent(),/new timeout must stay/,'old success timer cannot erase new failure');

@@ -64,12 +64,12 @@ function matchedApiRoute(request: FastifyRequest): string | undefined {
   return route?.startsWith('/api/') ? route : undefined;
 }
 
-function passwordSchema(properties: Record<string, unknown>) {
+function passwordSchema(properties: Record<string, unknown>,required=Object.keys(properties)) {
   return {
     body: {
       type: 'object',
       additionalProperties: false,
-      required: Object.keys(properties),
+      required,
       properties,
     },
   };
@@ -167,7 +167,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
       } catch { /* An unreadable exception must still receive the safe error response. */ }
     }
     if (known) {
-      return reply.code(error.statusCode ?? 500).send({ error: error.message, code: error.code, partial: (error as any).partial });
+      return reply.code(error.statusCode ?? 500).send({ error: error.message, code: error.code, partial: (error as any).partial,...((error as any).inspection?{inspection:(error as any).inspection}:{}) });
     }
     return reply.code(500).send({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
   });
@@ -241,16 +241,16 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     workRoot: options.projects?.root, runtime: options.runtime ? await options.runtime.diagnostics({currentOnly:true}) : undefined,modelSource:options.runtime?.modelInfo?.(),
     diagnostics:options.diagnostics?.status()??{enabled:false,lastWriteAt:null,dropped:0,writeFailures:0},
     webRestart: options.webRestart ? await options.webRestart.status() : {available:false,status:'idle',reason:'当前启动方式不支持从页面重启 Web 服务。'} }));
-  app.post('/api/server/restart', {schema:passwordSchema({confirmed:{type:'boolean',const:true}})}, async () => {
+  app.post('/api/server/restart', {schema:passwordSchema({confirmed:{type:'boolean',const:true},mode:{enum:['normal','force']},version:{type:'string',pattern:'^[a-f0-9]{64}$'}},['confirmed'])}, async request => {
     if (!options.webRestart || !options.runtime) throw Object.assign(new Error('当前启动方式不支持从页面重启 Web 服务。'), {statusCode:503,code:'RUNTIME_RESTART_UNAVAILABLE'});
-    await options.runtime.assertNativeIdle();
-    return options.webRestart.schedule();
+    const {confirmed,...selection}=request.body as {confirmed:true;mode?:'normal'|'force';version?:string};
+    const scope=await options.runtime.authorizeRestart(selection);
+    return options.webRestart.schedule(scope);
   });
   app.get('/api/server/restart', async () => options.webRestart ? options.webRestart.status() : {available:false,status:'idle'});
   app.get('/api/runtime/restart-check', async () => {
     if(!options.runtime)throw Object.assign(new Error('无法查询本机 Codex App Server 的活动状态。'),{statusCode:503,code:'RUNTIME_UNAVAILABLE'});
-    await options.runtime.assertNativeIdle();
-    return {idle:true};
+    return options.runtime.inspectRestart();
   });
   try {
   if (options.runtime && options.projects) {

@@ -9,8 +9,8 @@ test('locale switch updates preview and copy feedback without rereading or repla
  expect(await page.evaluate(()=>(window as any).copied)).toEqual(['C:\\fixture\\project\\docs\\guides\\long-preview.md']);
 });
 test('history details, selection and copy preserve original Git content across locale switch',async({page})=>{
- await page.goto('/tests/i18n-panels.html');await page.evaluate(()=>(window as any).renderHistory('vendor/sub'));await expect(page.locator('.diff-line').first()).toBeVisible();await expect(page.getByRole('button',{name:'Commit files',exact:false})).toBeVisible();
- await page.evaluate(()=>(window as any).readCount=(window as any).requests.length);await page.getByRole('button',{name:'zh-CN',exact:true}).click();await expect(page.getByRole('button',{name:'提交文件',exact:false})).toBeVisible();await expect(page.locator('.diff-line').first()).toContainText('changed line 0');expect(await page.evaluate(()=>(window as any).requests.length)).toBe(await page.evaluate(()=>(window as any).readCount));
+ await page.goto('/tests/i18n-panels.html');await page.evaluate(()=>(window as any).renderHistory('vendor/sub'));await page.locator('.commit-files-section .file-list button').first().click();await expect(page.locator('dialog:modal .diff-line').first()).toBeVisible();await expect(page.locator('.commit-files-section .panel-section-toggle')).toContainText('Commit files');
+ await page.evaluate(()=>{(window as any).readCount=(window as any).requests.length;localStorage.setItem('codex-web:locale:v1','zh-CN');window.dispatchEvent(new Event('locale-changed'));});await expect(page.locator('.commit-files-section .panel-section-toggle')).toContainText('提交文件');await expect(page.locator('.diff-line').first()).toContainText('changed line 0');await expect(page.getByRole('button',{name:'关闭预览',exact:true})).toBeVisible();expect(await page.evaluate(()=>(window as any).requests.length)).toBe(await page.evaluate(()=>(window as any).readCount));
 });
 
 test('Markdown and Mermaid controls update while copied source and expanded state stay intact',async({page})=>{

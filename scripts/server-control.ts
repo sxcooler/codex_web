@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import {Lifecycle} from '../src/server/lifecycle.ts';
+import type {RestartScope} from '../src/codex/runtime.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const data = join(root, '.local', 'web');
@@ -14,28 +15,30 @@ const windows = process.platform === 'win32';
 type Instance = { token: string; port: number; pid: number; root: string; origin: string; diagnosticsEnabled?: boolean };
 
 // A private local control endpoint proves ownership without trusting a reusable PID.
-export async function managedServer(stop: boolean | 'idle' | 'prepare' = false): Promise<Instance | null> {
+export async function managedServer(stop: boolean | 'idle' | 'prepare' | 'restart' = false,scope?:RestartScope): Promise<Instance | null> {
+  if(stop==='restart'&&!scope)throw Error('Force restart requires an authorized scope');
   let state: Instance;
   try { state = JSON.parse(await readFile(record, 'utf8')); } catch (error: any) { if (error.code === 'ENOENT') return null; throw error; }
   if (state.root !== root || !/^[a-f0-9]{64}$/.test(state.token) || !Number.isInteger(state.port) || state.port < 1 || state.port > 65535) throw new Error('Invalid local server record; no process was stopped.');
   return new Promise((resolve, reject) => {
-    const req = request({ hostname: '127.0.0.1', port: state.port, path: stop === 'idle' ? '/stop-idle' : stop === 'prepare' ? '/prepare-update' : stop ? '/stop' : '/status', method: stop ? 'POST' : 'GET', headers: { Authorization: `Bearer ${state.token}`, Connection: 'close' }, timeout: stop === 'idle' ? 30_000 : 1000 }, res => {
+    const req = request({ hostname: '127.0.0.1', port: state.port, path: stop==='restart'?'/stop-restart':stop === 'idle' ? '/stop-idle' : stop === 'prepare' ? '/prepare-update' : stop ? '/stop' : '/status', method: stop ? 'POST' : 'GET', headers: { Authorization: `Bearer ${state.token}`, Connection: 'close',...(stop==='restart'?{'Content-Type':'application/json'}:{}) }, timeout: stop==='restart'?45_000:stop === 'idle' ? 30_000 : 1000 }, res => {
       if(stop==='idle'&&res.statusCode===404){res.resume();reject(Object.assign(new Error('Legacy control endpoint'),{code:'CONTROL_IDLE_UNSUPPORTED'}));return;}
       let text = '';
       res.on('data', chunk => { text += chunk; if (text.length > 2048) res.destroy(); });
       res.on('error', () => resolve(null));
-      res.on('end', () => { try { const result = JSON.parse(text); resolve(res.statusCode === 200 && result.token === state.token && result.root === root ? state : null); } catch { resolve(null); } });
+      res.on('end', () => { try { const result = JSON.parse(text);if(stop==='restart'&&res.statusCode===409){reject(Object.assign(Error(result.error??'Restart scope changed; no process was stopped'),{code:result.code}));return;} resolve(res.statusCode === 200 && result.token === state.token && result.root === root ? state : null); } catch { resolve(null); } });
     });
-    req.on('error', () => resolve(null)); req.on('timeout', () => req.destroy()); req.end();
+    req.on('error', () => resolve(null)); req.on('timeout', () => req.destroy()); req.end(stop==='restart'?JSON.stringify(scope):undefined);
   });
 }
 
-export async function stopServer(onlyIfIdle = false) {
+export async function stopServer(onlyIfIdle = false,scope?:RestartScope) {
   const state = await managedServer();
   if (!state) { process.stdout.write('No managed Codex Web server is running.\n'); return; }
   let stopped: Instance | null;
-  try { stopped=await managedServer(onlyIfIdle ? 'idle' : true); }
+  try { stopped=await managedServer(scope?'restart':onlyIfIdle ? 'idle' : true,scope); }
   catch(error:any){
+    if(scope)throw error;
     // Bootstrap an older server only through its authenticated idle check and admission lock.
     if(error.code!=='CONTROL_IDLE_UNSUPPORTED'||!await managedServer('prepare'))throw new Error('Legacy idle check refused shutdown; no process was stopped.');
     stopped=await managedServer(true);
@@ -77,11 +80,23 @@ export async function runServer(portable = false, diagnosticsEnabled = false) {
   })();
   const control = createServer(async (req, res) => {
     if (req.headers.origin || req.headers.authorization !== `Bearer ${token}`) { res.writeHead(403).end(); return; }
-    if (!((req.method === 'GET' && req.url === '/status') || (req.method === 'POST' && ['/stop','/stop-idle','/prepare-update'].includes(req.url??'')))) { res.writeHead(404).end(); return; }
+    if (!((req.method === 'GET' && req.url === '/status') || (req.method === 'POST' && ['/stop','/stop-idle','/stop-restart','/prepare-update'].includes(req.url??'')))) { res.writeHead(404).end(); return; }
+    if(req.url==='/stop-restart'){
+      try{
+        let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>128*1024)throw Error('Restart scope exceeds the control limit');}
+        const scope=JSON.parse(body);if(!scope||typeof scope!=='object'||Array.isArray(scope))throw Error('Invalid restart scope');
+        const prepare=(app as any).prepareRestart;if(typeof prepare!=='function')throw Error('Scoped restart is unavailable');await prepare.call(app,scope);
+      }catch(error:any){res.writeHead(409,{'Content-Type':'application/json'}).end(JSON.stringify({error:String(error.message??error).slice(0,1000),code:error.code}));return;}
+    }
     if(req.url==='/prepare-update'||req.url==='/stop-idle'){try{const prepare=(app as any)[req.url==='/stop-idle'?'prepareRestart':'prepareUpdate'];if(typeof prepare!=='function')throw Error('Idle preparation unavailable');await prepare.call(app);}catch{res.writeHead(409).end();return;}}
+    if(['/stop','/stop-idle','/stop-restart'].includes(req.url??'')){
+      const reason=req.url==='/stop-restart'?'control_stop_restart':req.url==='/stop-idle'?'control_stop_idle':'control_stop';let requested=false;
+      const stop=()=>{if(requested)return;requested=true;lifecycle.record('control_stop',{reason});void shutdown(reason).catch(error=>{console.error(error);process.exitCode=1;});};
+      res.once('finish',stop);res.once('close',stop);
+      if(res.destroyed){stop();return;}
+    }
     res.setHeader('Content-Type', 'application/json'); res.setHeader('Connection', 'close');
     res.end(JSON.stringify(state));
-    if (req.url === '/stop' || req.url === '/stop-idle') res.on('finish', () => { lifecycle.record('control_stop',{reason:req.url==='/stop-idle'?'control_stop_idle':'control_stop'});void shutdown(req.url==='/stop-idle'?'control_stop_idle':'control_stop').catch(error => { console.error(error); process.exitCode = 1; }); });
   });
   try {
     await new Promise<void>((resolve, reject) => { control.once('error', reject); control.listen(0, '127.0.0.1', resolve); });
@@ -136,6 +151,12 @@ export async function startBackground(portable = false, diagnosticsEnabled = fal
 
 async function main() {
   const args = process.argv.slice(2);
+  if(args[0]==='--stop-for-restart'){
+    if(args.length!==2)throw Error('Scoped restart requires one request file');
+    const request=JSON.parse((await readFile(args[1],'utf8')).replace(/^\uFEFF/,''));
+    if(!request?.forceScope||typeof request.forceScope!=='object'||Array.isArray(request.forceScope))throw Error('Request has no force restart authorization');
+    return stopServer(false,request.forceScope);
+  }
   if(!args.includes('--stop')&&!args.includes('--stop-if-idle')&&!args.includes('--status')){
     const lock=await readFile(join(root,'.local/update-lock.json'),'utf8').catch((e:any)=>{if(e.code==='ENOENT')return '';throw e;});
     const pending=await stat(join(root,'.local/updates/pending.json')).then(()=>true,(e:any)=>{if(e.code==='ENOENT')return false;throw e;});

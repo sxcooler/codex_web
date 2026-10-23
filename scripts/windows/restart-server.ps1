@@ -6,6 +6,7 @@ param(
     [switch]$RequireIdle,
     [switch]$Diagnostics,
     [switch]$JsonOutput,
+    [string]$ForceScopeFile,
     [ValidateRange(90, 3600)][int]$DelaySeconds = 90,
     [switch]$Worker,
     [string]$RequestFile
@@ -41,8 +42,8 @@ if ($Worker) {
         $message = "Desktop Session $($request.sessionId) and current server verified."
         $newProcessId = 0
         if (-not $CheckOnly) {
-            $stopMode = if ($request.requireIdle) { '--stop-if-idle' } else { '--stop' }
-            & $nodePath (Join-Path $projectRoot 'scripts/server-control.ts') $stopMode 2>&1 | Out-File -LiteralPath $log -Append -Encoding UTF8
+            $stopArgs = @(if ($request.forceScope) { @('--stop-for-restart', $RequestFile) } elseif ($request.requireIdle) { @('--stop-if-idle') } else { @('--stop') })
+            & $nodePath (Join-Path $projectRoot 'scripts/server-control.ts') @stopArgs 2>&1 | Out-File -LiteralPath $log -Append -Encoding UTF8
             if ($LASTEXITCODE -ne 0) { throw 'Managed stop failed; no process was forcibly killed.' }
             for ($attempt = 0; $attempt -lt 100; $attempt++) {
                 if (-not (Get-NetTCPConnection -State Listen -LocalPort $request.port -ErrorAction SilentlyContinue)) { break }
@@ -85,7 +86,8 @@ $taskName = 'CodexWeb-Restart-' + [Guid]::NewGuid().ToString('N')
 $RequestFile = Join-Path $projectRoot ".local/web/$taskName.json"
 $environment = @{}
 foreach ($key in @('PORT', 'WEB_ORIGIN', 'WORK_ROOT', 'CODEX_BIN')) { $environment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
-@{oldPid=$old.ProcessId;oldStarted=$old.CreationDate.ToUniversalTime().ToString('o');sessionId=$desktops[0];port=$port;taskName=$taskName;environment=$environment;requireIdle=[bool]$RequireIdle;diagnosticsEnabled=[bool]$Diagnostics} | ConvertTo-Json | Set-Content -LiteralPath $RequestFile -Encoding UTF8
+$forceScope = if ($ForceScopeFile) { Get-Content -LiteralPath $ForceScopeFile -Raw | ConvertFrom-Json } else { $null }
+@{oldPid=$old.ProcessId;oldStarted=$old.CreationDate.ToUniversalTime().ToString('o');sessionId=$desktops[0];port=$port;taskName=$taskName;environment=$environment;requireIdle=[bool]$RequireIdle;diagnosticsEnabled=[bool]$Diagnostics;forceScope=$forceScope} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $RequestFile -Encoding UTF8
 $shell = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
 $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Worker -RequestFile `"$RequestFile`""
 $level = if ((New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'Highest' } else { 'Limited' }

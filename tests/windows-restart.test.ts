@@ -27,21 +27,25 @@ function Invoke-WebRequest {param($Uri,$Headers,[switch]$UseBasicParsing,$Timeou
 import {readFileSync,writeFileSync} from 'node:fs';
 const path=new URL('../.local/web/state.json',import.meta.url);
 export async function managedServer(){return JSON.parse(readFileSync(path,'utf8'));}
-if(process.argv.includes('--stop-if-idle'))writeFileSync(path,JSON.stringify({...await managedServer(),stopped:true}));
+if(process.argv.includes('--stop-if-idle')||process.argv.includes('--stop-for-restart')){writeFileSync(new URL('../.local/web/stop-args.json',import.meta.url),JSON.stringify(process.argv.slice(2)));if(process.argv.includes('--stop-for-restart')){const request=JSON.parse(readFileSync(process.argv.at(-1),'utf8').replace(/^\\uFEFF/,''));writeFileSync(new URL('../.local/web/received-scope.json',import.meta.url),JSON.stringify(request.forceScope));}writeFileSync(path,JSON.stringify({...await managedServer(),stopped:true}));}
 if(process.argv.includes('--background')){writeFileSync(new URL('../.local/web/start-args.json',import.meta.url),JSON.stringify(process.argv.slice(2)));writeFileSync(path,JSON.stringify({pid:Number(process.env.FIXTURE_WORKER_PID),origin:'http://localhost:3333',diagnosticsEnabled:process.argv.includes('--diagnostics')}));}
 `);
     const session=spawnSync(shell,['-NoProfile','-Command',`(Get-Process -Id ${process.pid}).SessionId`],{encoding:'utf8',windowsHide:true});
     assert.equal(session.status,0,session.stderr);
-    for(const [requested,existing] of [[true,false],[false,true],[false,false]]){
+    for(const [requested,existing,forced] of [[true,false,false],[false,true,false],[false,false,false],[false,true,true]]){
       await writeFile(join(root,'.local/web/state.json'),JSON.stringify({pid:process.pid,origin:'http://localhost:3333',diagnosticsEnabled:existing}));
       const request=join(root,'request.json');
-      await writeFile(request,JSON.stringify({sessionId:Number(session.stdout.trim()),oldPid:process.pid,oldStarted:'2026-10-03T00:00:00.0000000Z',port:3333,environment:{},requireIdle:true,diagnosticsEnabled:requested}));
+      const forceScope={epoch:'approved-native',sessions:[{threadId:'approved-task',turnId:'approved-turn'}]};
+      await writeFile(request,JSON.stringify({sessionId:Number(session.stdout.trim()),oldPid:process.pid,oldStarted:'2026-10-03T00:00:00.0000000Z',port:3333,environment:{},requireIdle:true,diagnosticsEnabled:requested,...(forced?{forceScope}:{})}));
       const run=spawnSync(shell,['-NoProfile','-ExecutionPolicy','Bypass','-File',join(root,'scripts/windows/restart-server.ps1'),'-Worker','-RequestFile',request],{encoding:'utf8',windowsHide:true,timeout:20000});
-      assert.equal(run.status,0,run.stdout+run.stderr);
+      assert.equal(run.status,0,JSON.stringify({requested,existing,forced,error:run.error?.message,stdout:run.stdout,stderr:run.stderr,state:await readFile(join(root,'.local/web/state.json'),'utf8'),stop:await readFile(join(root,'.local/web/stop-args.json'),'utf8').catch(()=>null),log:await readFile(request+'.log','utf8').catch(()=>null)}));
       const result=JSON.parse((await readFile(request+'.result.json','utf8')).replace(/^\uFEFF/,''));
       assert.equal(result.status,'success');
       const args=JSON.parse(await readFile(join(root,'.local/web/start-args.json'),'utf8'));
       assert.equal(args.includes('--diagnostics'),requested||existing);
+      const stopArgs=JSON.parse(await readFile(join(root,'.local/web/stop-args.json'),'utf8'));
+      assert.equal(stopArgs[0],forced?'--stop-for-restart':'--stop-if-idle');
+      if(forced)assert.deepEqual(JSON.parse(await readFile(join(root,'.local/web/received-scope.json'),'utf8')),forceScope);
     }
   }finally{await rm(root,{recursive:true,force:true});}
 });

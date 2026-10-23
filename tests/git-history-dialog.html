@@ -1,0 +1,10 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/icon.svg"><title>Git history dialog QA</title>
+<div id="root" class="git-panel" style="height:calc(100dvh - 24px);max-width:800px;margin:auto;display:flex;flex-direction:column"></div>
+<script type="module">
+import React from 'react';import{createRoot}from'react-dom/client';import{GitHistory}from'/src/web/GitHistory.tsx';import{LocaleProvider}from'/src/web/i18n/LocaleProvider.tsx';import{loadPanelState}from'/src/web/panelState.ts';import '/src/web/style.css';
+const h=React.createElement,root=createRoot(document.querySelector('#root'));let state=loadPanelState(localStorage,'dialog-demo').history,id='dialog-session',project='demo-project',visible=true,tick=0;
+window.historyRenders=0;
+const render=()=>root.render(h(LocaleProvider,null,h('div',{style:{height:'100%',display:visible?'flex':'none',flexDirection:'column'}},h(React.Profiler,{id:'history',onRender:()=>window.historyRenders++},h(GitHistory,{key:project,id,projectRoot:'C:/demo/'+project,tick,visible,state,onChange:patch=>{state={...state,...patch};render();},onScroll:patch=>Object.assign(state,patch)})))));
+window.historyFixture={get state(){return state;},update(patch){state={...state,...patch};render();},context(patch){if(patch.id!==undefined)id=patch.id;if(patch.project!==undefined)project=patch.project;if(patch.visible!==undefined)visible=patch.visible;render();},refresh(){tick++;render();}};
+render();
+</script></html>

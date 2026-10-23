@@ -11,6 +11,8 @@ test('history repository defaults to main for old state and survives project rel
  savePanelState(storage,'one',complete);
  assert.equal(loadPanelState(storage,'one').history.repository,'sdk');
  assert.equal(loadPanelState(storage,'two').history.repository,'');
+ storage.setItem('codex.project-panel.legacy',JSON.stringify({...complete,history:{...complete.history,previewOpen:true}}));
+ assert.deepEqual(loadPanelState(storage,'legacy').history,complete.history,'transient modal flags are not restored with the selected file');
 });
 
 test('project panel state is isolated and only lightweight fields are persisted',()=>{

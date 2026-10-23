@@ -93,7 +93,7 @@ test('release waits for confirmation and reconnect never resubmits an uncertain 
   await route.fulfill({json:data,status});
  });
  await page.goto('/sessions/'+id);
- await expect(page.getByText('Codex 正在重试：暂时断线，正在重试')).toBeVisible();
+ await expect(page.locator('.turn-retry')).toHaveCount(0);
  await page.locator('#message').fill('仅发送一次');await page.getByRole('button',{name:'发送',exact:true}).click();
  await expect(page.getByText('提交结果待核实，请先刷新历史：结果未知')).toBeVisible();expect(sends).toBe(1);expect(body.text).toBe('仅发送一次');
  const sourceCount=await page.evaluate(()=>(window as any).sources.length);

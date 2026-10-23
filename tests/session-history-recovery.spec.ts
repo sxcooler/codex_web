@@ -6,7 +6,7 @@ const evidence=mkdtempSync(join(tmpdir(),'codex-history-recovery-'));
 test.beforeEach(async({page})=>{const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));(page as any).historyErrors=errors;});
 test.afterEach(async({page})=>{expect((page as any).historyErrors).toEqual([]);});
 
-async function setup(page:Page){
+async function setup(page:Page,notificationTurn?:'generic'|'older'){
  const overload={message:'Selected model is at capacity. Please try a different model.',codexErrorInfo:'serverOverloaded'};
  let snapshotReads=0,historyReads:string[]=[],writes:string[]=[],holdSnapshot=false,holdHistory=false,fresh=false;
  let finishSnapshot=()=>{},finishHistory=()=>{};
@@ -28,20 +28,21 @@ async function setup(page:Page){
    data={thread:{id:'history',name:'分页测试',cwd:'C:/project',turns:turns()},epoch:'history-epoch',revision:0,syncCursor:'history-epoch:0',phase:'IDLE',pending:[],history:{nextCursor:'recent'},error:overload};
   }else if(path.endsWith('/history')){
    const cursor=url.searchParams.get('before')!;historyReads.push(cursor);if(holdHistory)await new Promise<void>(resolve=>{finishHistory=resolve;});
-   data={turns:[{id:cursor==='recent'?'older':'oldest',status:'completed',items:[message(cursor+'-message',cursor==='recent'?'更早正文':'最早正文')]}],nextCursor:cursor==='recent'?'older':null};
+   data={turns:[{id:cursor==='recent'?'older':'oldest',status:notificationTurn==='older'?'failed':'completed',error:notificationTurn==='older'?{message:'Paged failure'}:undefined,items:[message(cursor+'-message',cursor==='recent'?'更早正文':'最早正文')]}],nextCursor:cursor==='recent'?'older':null};
   }
   await route.fulfill({json:data}).catch(()=>{});
  });
- await page.goto('/sessions/history');await expect(page.getByText('最新正文',{exact:true})).toBeVisible();
+ await page.goto('/sessions/history'+(notificationTurn?'?notification=1&kind=failed&turnId='+notificationTurn:''));await expect(page.getByText('最新正文',{exact:true})).toBeVisible();
  return {get snapshotReads(){return snapshotReads;},historyReads,writes,set holdSnapshot(v:boolean){holdSnapshot=v;},set holdHistory(v:boolean){holdHistory=v;},set fresh(v:boolean){fresh=v;},finishSnapshot:()=>finishSnapshot(),finishHistory:()=>finishHistory()};
 }
 
 test('overload explains a past interruption without relabeling other failures',async({page})=>{
  await setup(page);
- await expect(page.locator('.execution-process .execution-status').first()).toHaveText('模型服务过载，本轮曾中断');
- await expect(page.locator('.execution-process .execution-status').last()).toHaveText('本轮失败');
- await expect(page.locator('.timeline .notice.error').filter({hasText:'模型服务过载，本轮曾中断'})).toHaveCount(2);
- await expect(page.locator('.timeline .notice.error').filter({hasText:'Other failure'})).toHaveCount(1);
+ await expect(page.locator('.execution-process .execution-status')).toHaveCount(0);
+ await expect(page.locator('#turn-outcome-recent')).toContainText('模型服务过载，本轮曾中断');
+ await expect(page.locator('#turn-outcome-generic')).toContainText('Other failure');
+ await expect(page.locator('.turn-outcome')).toHaveCount(2);
+ await expect(page.locator('.timeline .notice.error').filter({hasText:'模型服务过载，本轮曾中断'})).toHaveCount(1);
 });
 
 test('one click during foreground snapshot loading queues the history request',async({page})=>{
@@ -74,4 +75,10 @@ test('leaving while history is queued does not load the abandoned conversation',
  const state=await setup(page);state.holdSnapshot=true;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await expect.poll(()=>state.snapshotReads).toBe(2);
  await page.getByRole('button',{name:'加载更早消息',exact:true}).click();await expect(page.getByRole('button',{name:'正在加载更早消息…'})).toBeDisabled();
  await page.goto('/');state.holdSnapshot=false;state.finishSnapshot();await expect(page.getByLabel('任务',{exact:true})).toBeVisible();expect(state.historyReads).toEqual([]);expect(state.writes).toEqual([]);
+});
+
+for(const target of ['generic','older'] as const)test('failed notification locates the result card '+target,async({page})=>{
+ const state=await setup(page,target);const card=page.locator('#turn-outcome-'+target);
+ await expect(card).toBeFocused();await expect(card).toHaveClass(/notification-target/);
+ expect(state.historyReads).toEqual(target==='older'?['recent']:[]);expect(state.writes).toEqual([]);
 });

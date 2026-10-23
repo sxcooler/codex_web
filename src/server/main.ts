@@ -45,7 +45,7 @@ export async function startServer(diagnosticsEnabled = false,manageSignals=true)
   catch(error){Lifecycle.record(dataDir,'startup_failure',{reason:'app_build_failed',port,diagnosticsEnabled},error);await diagnostics?.close();throw error;}
   app.addHook('onClose',async()=>{await diagnostics?.close();});
   app.decorate('prepareUpdate',()=>runtime.prepareUpdate());
-  app.decorate('prepareRestart',()=>runtime.prepareRestart());
+  app.decorate('prepareRestart',(scope?:Parameters<Runtime['prepareRestart']>[0])=>runtime.prepareRestart(scope));
   let updateBoot=!!lock;
   app.addHook('onRequest',async(request,reply)=>{if(updateBoot){updateBoot=!!await readOptional(lockPath)||!!await readOptional(pendingPath);if(updateBoot&&request.url!=='/api/auth/session')return reply.code(503).send({error:'应用更新验证中，请稍后重试。'});}});
   try {

@@ -200,27 +200,29 @@ export class AppServer extends EventEmitter {
     this.emit('failure', error);
   }
 
-  close(): Promise<void> {
-    return this.closePromise ??= this.shutdown();
+  close(force=false): Promise<void> {
+    return this.closePromise ??= this.shutdown(force);
   }
 
-  private async shutdown(): Promise<void> {
+  private async shutdown(force:boolean): Promise<void> {
     this.closing = true;
     this.stop(new Error('App-server closed'));
     this.child.stdin.end();
-    let timer!: ReturnType<typeof setTimeout>;
-    const timeout = new Promise<never>((_, reject) => {
+    let timer!: ReturnType<typeof setTimeout>,forcedTimer:ReturnType<typeof setTimeout>|undefined;
+    const timeout = new Promise<void>((resolve, reject) => {
       timer = setTimeout(() => {
         const error = new Error('App-server shutdown timed out after 5000 ms; attempted to stop owned child');
-        this.child.kill();
+        if(this.child.exitCode===null&&this.child.signalCode===null)this.child.kill(force?'SIGKILL':undefined);
         this.child.stdin.destroy();
         this.child.stdout.destroy();
         this.child.stderr.destroy();
-        this.emit('failure', error);
-        reject(error);
+        if(force){
+          this.ended.then(resolve);
+          forcedTimer=setTimeout(()=>reject(error),2000);
+        }else{this.emit('failure', error);reject(error);}
       }, 5000);
     });
     try { await Promise.race([this.ended, timeout]); }
-    finally { clearTimeout(timer); }
+    finally { clearTimeout(timer);clearTimeout(forcedTimer); }
   }
 }

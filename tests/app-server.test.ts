@@ -211,6 +211,21 @@ test('close kills only its unresponsive child after the graceful deadline', { ti
   await assert.rejects(server.close(), /5.*(second|000)|shutdown.*timed out/i);
 });
 
+test('explicit forced close waits for its owned unresponsive child to actually exit',{timeout:9000},async t=>{
+  const server=start(t);await server.request('hang',{});
+  await server.close(true);
+  const child=(server as any).child;
+  assert.ok(child.exitCode!==null||child.signalCode!==null,'success requires owned child exit confirmation');
+});
+
+test('forced close escalates its owned child to SIGKILL instead of relying on SIGTERM',{timeout:9000},async t=>{
+ const server=start(t);await server.request('hang',{ignoreSigterm:true});
+ const child=(server as any).child,kill=child.kill.bind(child),signals:any[]=[];
+ t.mock.method(child,'kill',(signal:any)=>{signals.push(signal);return kill(signal);});
+ try{await server.close(true);assert.ok(signals.includes('SIGKILL'));assert.ok(child.exitCode!==null||child.signalCode!==null);}
+ finally{if(child.exitCode===null&&child.signalCode===null)kill('SIGKILL');}
+});
+
 test('close has a bounded deadline when process close confirmation never arrives', { timeout: 10000 }, async t => {
   const server = start(t);
   await server.request('ready', {});

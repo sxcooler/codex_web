@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn,spawnSync} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
-import {createServer} from 'node:net';
+import {createServer,connect} from 'node:net';
 
 async function fixture(body=''){
  const root=await mkdtemp(join(tmpdir(),'codex exit '));
@@ -24,6 +24,37 @@ function run(root:string,...args:string[]){
  let stderr='';child.stderr.on('data',v=>stderr+=v);child.stdout.resume();
  const done=new Promise<number|null>(resolve=>child.once('close',resolve));return {child,done,stderr:()=>stderr};
 }
+
+test('private force restart passes only the authenticated confirmed scope to the owned runtime',{timeout:10_000},async()=>{
+ const root=await fixture();
+ await writeFile(join(root,'src/server/main.ts'),`export async function startServer(){return {async prepareRestart(scope){if(scope?.epoch!=='approved'||scope.sessions?.[0]?.turnId!=='approved-turn')throw Error('scope changed');},async close(){}};}`);
+ const worker=run(root);
+ try{
+  const state=await ready(root),url='http://127.0.0.1:'+state.port,headers={Authorization:'Bearer '+state.token,'Content-Type':'application/json',Connection:'close'};
+  assert.equal((await fetch(url+'/stop-restart',{method:'POST',body:'{}'})).status,403);
+  assert.equal((await fetch(url+'/stop-restart',{method:'POST',headers,body:JSON.stringify({epoch:'changed',sessions:[]})})).status,409);
+  assert.equal(worker.child.exitCode,null);
+  const stopped=await fetch(url+'/stop-restart',{method:'POST',headers,body:JSON.stringify({epoch:'approved',sessions:[{threadId:'fixture-task',turnId:'approved-turn'}]})});
+  assert.equal(stopped.status,200);assert.equal(await worker.done,0);
+ }finally{await cleanup(root,worker.child);}
+});
+test('authorized forced shutdown continues after its control client disconnects during preparation',{timeout:10_000},async()=>{
+ const root=await fixture();
+ await writeFile(join(root,'src/server/main.ts'),`import {writeFile,readFile} from 'node:fs/promises';import {setTimeout as delay} from 'node:timers/promises';export async function startServer(){return {async prepareRestart(){await writeFile('preparing','yes');while(!await readFile('finish-prepare').catch(()=>null))await delay(10);},async close(){}};}`);
+ const worker=run(root);let client:ReturnType<typeof connect>|undefined;
+ try{
+  const state=await ready(root),body=JSON.stringify({epoch:'approved',sessions:[]});
+  client=connect(state.port,'127.0.0.1');await new Promise<void>(resolve=>client!.once('connect',resolve));
+  client.write(`POST /stop-restart HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer ${state.token}\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+  for(let i=0;i<200&&!await stat(join(root,'preparing')).catch(()=>null);i++)await delay(10);
+  await stat(join(root,'preparing'));
+  const closed=new Promise<void>(resolve=>client!.once('close',()=>resolve()));client.destroy();await closed;await delay(50);
+  await writeFile(join(root,'finish-prepare'),'yes');
+  assert.equal(await Promise.race([worker.done,delay(2000).then(()=> 'still-running')]),0);
+  const events=await records(root);assert.equal(events.filter(v=>v.event==='shutdown_begin').length,1);
+  assert.equal(events.find(v=>v.event==='shutdown_end')?.reason,'control_stop_restart');
+ }finally{client?.destroy();await cleanup(root,worker.child);}
+});
 async function ready(root:string){
  for(let i=0;i<200;i++){const value=await readFile(join(root,'.local/web/server-control.json'),'utf8').then(JSON.parse,()=>null);if(value)return value;await delay(15);}
  throw Error('Fixture did not become ready');

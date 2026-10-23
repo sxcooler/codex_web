@@ -349,6 +349,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return send({ id, result: { turnId: active.id } });
   }
   if (method === 'turn/interrupt') {
+    if(mode==='ignore-restart-interrupt')return;
     interrupts++;
     const value = threads.get(params.threadId);
     const activeTurn = value?.turns.find(({ id: turnId }) => turnId === params.turnId);

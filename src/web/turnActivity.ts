@@ -4,7 +4,8 @@ type Item=Record<string,any>;
 export const modelOverloadNotice=(error?:Item,locale:Locale='zh-CN'):string|undefined=>error?.codexErrorInfo==='serverOverloaded'?createTranslator(locale)('session.overload'):undefined;
 export const stepLabels:Record<string,string>={reasoning:'思考',commandExecution:'命令',fileChange:'文件修改',mcpToolCall:'MCP 工具',dynamicToolCall:'工具调用',webSearch:'搜索',plan:'计划',collabAgentToolCall:'协作',subAgentActivity:'子 Agent',functionCallOutput:'工具输出',sleep:'等待'};
 
-const stepKeys:Record<string,MessageKey>={reasoning:'session.step.reasoning',commandExecution:'session.step.command',fileChange:'session.step.fileChange',mcpToolCall:'session.step.mcp',dynamicToolCall:'session.step.dynamic',webSearch:'session.step.search',plan:'session.step.plan',collabAgentToolCall:'session.step.collaboration',subAgentActivity:'session.step.subagent',functionCallOutput:'session.step.output',sleep:'session.step.sleep'};
+stepLabels.contextCompaction='整理上下文';
+const stepKeys:Record<string,MessageKey>={reasoning:'session.step.reasoning',commandExecution:'session.step.command',fileChange:'session.step.fileChange',mcpToolCall:'session.step.mcp',dynamicToolCall:'session.step.dynamic',webSearch:'session.step.search',plan:'session.step.plan',collabAgentToolCall:'session.step.collaboration',subAgentActivity:'session.step.subagent',functionCallOutput:'session.step.output',sleep:'session.step.sleep',contextCompaction:'session.step.compaction'};
 export const stepLabel=(type:string,locale:Locale='zh-CN')=>stepKeys[type]?createTranslator(locale)(stepKeys[type]):undefined;
 export function executionIssue(item:Item,locale:Locale='zh-CN'):string{
   const t=createTranslator(locale);
@@ -16,11 +17,18 @@ export function executionIssue(item:Item,locale:Locale='zh-CN'):string{
   return '';
 }
 
+function recordIssue(item:Item,locale:Locale='zh-CN'){
+  const normalized=item.type==='commandExecution'&&item.exitCode===1?{...item,exitCode:undefined,status:item.status==='failed'?undefined:item.status}:item;
+  return executionIssue(normalized,locale);
+}
+export function executionGroupIssue(items:Item[],locale:Locale='zh-CN'){
+  const t=createTranslator(locale);
+  return items.some(item=>recordIssue(item,locale))?t('session.feedback.groupIssues'):items.some(item=>item.status==='inProgress')?t('session.feedback.groupUnfinished'):'';
+}
 export function executionRows(items:Item[]){
   const rows:{items:Item[];records:boolean}[]=[];
   for(const item of items){
-    const issueItem=item.type==='commandExecution'&&item.exitCode===1?{...item,exitCode:undefined,status:item.status==='failed'?undefined:item.status}:item;
-    const records=Object.hasOwn(stepLabels,item.type)&&!executionIssue(issueItem),last=rows.at(-1);
+    const records=Object.hasOwn(stepLabels,item.type)&&!recordIssue(item),last=rows.at(-1);
     if(records&&last?.records)last.items.push(item);else rows.push({items:[item],records});
   }
   return rows;

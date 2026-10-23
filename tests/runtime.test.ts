@@ -986,9 +986,9 @@ for(const mode of ['loaded-error','loaded-bad-cursor'])test(`restart fails close
 
 test('a late native idle result cannot authorize stopping the server',async t=>{
   const runtime=start(t);await runtime.models();
-  const call=(runtime as any).call.bind(runtime),now=Date.now();
-  t.mock.method(runtime as any,'call',async(method:string,params:any)=>{
-    const result=await call(method,params);
+  const server=(runtime as any).server,request=server.request.bind(server),now=Date.now();
+  t.mock.method(server,'request',async(method:string,params:any,...args:any[])=>{
+    const result=await request(method,params,...args);
     if(method==='thread/loaded/list')t.mock.method(Date,'now',()=>now+21_000);
     return result;
   });

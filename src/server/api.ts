@@ -129,7 +129,7 @@ export function registerApi(app: FastifyInstance, options: {
   });
   app.post('/api/projects/refresh', async () => {const result=await projects.refresh();await catalog.sync();void catalog.maintain();return {projects:result,workRoot:projects.root,desktopProjectlessRoot};});
   app.get('/api/models',{schema:{querystring:{type:'object',additionalProperties:false,properties:{refresh:{type:'string',enum:['true']}}}}},async request=>({...await runtime.models((request.query as any).refresh==='true',true),source:runtime.modelInfo?.()}));
-  app.post('/api/models/reload',{schema:body({},[])},async()=>({...await runtime.reloadModels(),source:runtime.modelInfo()}));
+  app.post('/api/models/reload',{schema:body({mode:{enum:['normal','force']},version:{type:'string',pattern:'^[a-f0-9]{64}$'}},[])},async request=>({...await runtime.reloadModels(request.body as any),source:runtime.modelInfo()}));
   app.get('/api/permission-modes',{schema:{querystring:{type:'object',additionalProperties:false,properties:{projectId:short}}}},async request=>runtime.permissionModes((request.query as any).projectId?(await projects.resolve((request.query as any).projectId)).path:projects.root));
   const projectFields = { name: short, folderName: { ...short, maxLength: 80 }, initialPrompt: {...text,minLength:0}, clientRequestId: requestId, ...turnFields };
   for (const clone of [false, true]) {

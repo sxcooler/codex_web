@@ -56,7 +56,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     case 'duplicate': send({ id: 'same', method: 'approval' }); send({ id: 'same', method: 'approval' }); break;
     case 'oversize': process.stdout.write('中'.repeat(400)); break;
     case 'stderr': process.stderr.write('diagnostic'.repeat(10000)); send({ id: message.id, result: true }); break;
-    case 'hang': setInterval(() => {}, 1000); send({ id: message.id, result: true }); break;
+    case 'hang': if(message.params?.ignoreSigterm)process.on('SIGTERM',()=>{});setInterval(() => {}, 1000); send({ id: message.id, result: true }); break;
     default: send({ id: message.id, result: message.params });
   }
 });

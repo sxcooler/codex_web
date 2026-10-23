@@ -12,12 +12,13 @@ import {api,type Json} from './api.ts';
 import {AsyncQuestions,QuestionFields} from './Questions.tsx';
 import {TestReport} from './GitPanel.tsx';
 import {validItemTime} from '../codex/itemTimes.ts';
-import {executionIssue,executionRows,modelOverloadNotice,stepLabel,stepLabels,turnActivity,turnElapsedMs} from './turnActivity.ts';
+import {executionGroupIssue,executionIssue,executionRows,stepLabel,stepLabels,turnActivity,turnElapsedMs} from './turnActivity.ts';
+import {CompactionProgress,NativeRetry,TurnOutcome} from './TurnOutcome.tsx';
 const pretty=(value:unknown)=>typeof value==='string'?value:JSON.stringify(value,null,2);
 const statusLabel=(item:Json,locale:Locale='zh-CN')=>{const t=createTranslator(locale);return item.exitCode!==undefined&&item.exitCode!==null?`exit ${item.exitCode}`:({inProgress:t('session.phase.running'),completed:t('session.issue.completed'),failed:t('session.issue.failed'),declined:t('session.issue.declined'),interrupted:t('session.issue.interrupted')} as Record<string,string>)[item.status]??item.status??'';};
 type ItemDetails={open?:boolean;output?:string|null;outputVersion?:string};
 
-export const TurnMessages=memo(function TurnMessages({turn,threadId,attachments,phase,projectRoot,onOpenFile,onChanged,revealItemId,revealToken}:{turn:Json;threadId:string;attachments?:Json[];phase?:string;projectRoot?:string;onOpenFile?:(path:string,fragment?:string)=>void;onChanged?:()=>Promise<void>;revealItemId?:string;revealToken?:string|number}){
+export const TurnMessages=memo(function TurnMessages({turn,threadId,attachments,phase,projectRoot,onOpenFile,onChanged,revealItemId,revealToken,latest=false,retry}:{turn:Json;threadId:string;attachments?:Json[];phase?:string;projectRoot?:string;onOpenFile?:(path:string,fragment?:string)=>void;onChanged?:()=>Promise<void>;revealItemId?:string;revealToken?:string|number;latest?:boolean;retry?:Json}){
   const {t,locale}=useLocale();
   const blocks=turnActivity(turn),running=turn.status==='inProgress',previous=useRef({id:turn.id,status:turn.status}),revealed=useRef<string|undefined>(undefined),[opens,setOpens]=useState<Record<string,boolean>>({}),[recordOpens,setRecordOpens]=useState<Record<string,boolean>>({}),[now,setNow]=useState(Date.now);
   const details=useRef<Record<string,ItemDetails>>({});
@@ -33,8 +34,12 @@ export const TurnMessages=memo(function TurnMessages({turn,threadId,attachments,
   const elapsed=turnElapsedMs(turn,now),duration=elapsed===undefined?undefined:formatDuration(elapsed,locale);
   const firstUser=turn.items?.find((item:Json)=>item.type==='userMessage'),lastAgent=turn.items?.filter((item:Json)=>item.type==='agentMessage').at(-1),lastOrdinaryAgent=turn.items?.filter((item:Json)=>item.type==='agentMessage'&&item.delivery!=='async').at(-1);
   const renderItem=(item:Json,visible=true)=><div key={itemKey(item)} className={'turn-item'+(executionIssue(item,locale)?' execution-issue':'')} data-item-id={item.id} tabIndex={-1}><Message item={item} threadId={threadId} turnId={turn.id} attachments={attachments} projectRoot={projectRoot} onOpenFile={onOpenFile} streaming={running} visible={visible} savedDetails={details.current[turn.id+'|'+itemKey(item)]??={}} revealKey={item.id===revealItemId?JSON.stringify([turn.id,revealItemId,revealToken]):undefined} canFork={turn.status==='completed'&&item===lastOrdinaryAgent} showCitation={turn.status==='completed'} onChanged={onChanged} timestamp={item===firstUser?turn.startedAt:item===lastAgent&&!running?turn.completedAt:undefined} timeLabel={item===firstUser?t('session.turn.start'):t('session.turn.end')}/></div>;
-  const firstProcess=blocks.find(block=>block.process);
-  return <div className="turn-messages" data-turn-id={turn.id} tabIndex={-1}>{blocks.map(block=>{if(!block.process)return renderItem(block.items[0]);const chosen=block.items.filter(item=>Object.hasOwn(opens,itemKey(item))),open=chosen.some(item=>opens[itemKey(item)])||(chosen.length?false:running);return <ExecutionGroup key={block.key} items={block.items} status={turn.status} error={turn.error} phase={phase} open={open} onOpen={value=>choose(block.items,value)} recordOpens={recordOpens} onRecordsOpen={chooseRecords} itemKey={itemKey} renderItem={renderItem} duration={block===firstProcess?duration:undefined}/>;})}</div>;
+  const processes=blocks.filter(block=>block.process),currentProcess=processes.filter(block=>block.items.some(item=>item.status==='inProgress')).at(-1)??processes.at(-1);
+  const lastItem=turn.items?.at(-1),compacting=running&&lastItem?.type==='contextCompaction'&&!validItemTime(lastItem.completedAtMs)&&(lastItem.status==='inProgress'||lastItem.status==null&&validItemTime(lastItem.startedAtMs));
+  return <div className="turn-messages" data-turn-id={turn.id} tabIndex={-1}>{blocks.map(block=>{if(!block.process)return renderItem(block.items[0]);const current=running&&block===currentProcess,chosen=block.items.filter(item=>Object.hasOwn(opens,itemKey(item))),open=chosen.some(item=>opens[itemKey(item)])||(chosen.length?false:running);return <ExecutionGroup key={block.key} items={block.items} running={current} phase={current?phase:undefined} open={open} onOpen={value=>choose(block.items,value)} recordOpens={recordOpens} onRecordsOpen={chooseRecords} itemKey={itemKey} renderItem={renderItem} duration={current?duration:undefined}/>;})}
+    {running&&retry?<NativeRetry retry={retry}/>:compacting?<CompactionProgress key={lastItem.id} item={lastItem}/>:null}
+    {!running||turn.error?<TurnOutcome turn={turn} latest={latest} duration={!running?duration:undefined}/>:null}
+  </div>;
 });
 
 function MessageHeader({item,user=false,timestamp,timeLabel}:{item:Json;user?:boolean;timestamp?:number;timeLabel?:string}){
@@ -60,13 +65,13 @@ function ExecutionRecords({items,open,visible,onOpen,renderItem}:{items:Json[];o
   return <details className="execution-records" open={open}><summary aria-expanded={open} aria-controls={detailsId} onClick={event=>{event.preventDefault();onOpen(!open);}}><span>{t('session.process.records',items.length)}</span>{current?<span className="muted execution-status">{current.type==='subAgentActivity'?t('session.step.subagent')+' · ':''}{activityLabel(current,locale)}</span>:null}</summary><div className="execution-record-items" id={detailsId}>{visited||open?items.map(item=>renderItem(item,visible&&open)):null}</div></details>;
 }
 
-function ExecutionGroup({items,status,error,phase,open,onOpen,recordOpens,onRecordsOpen,itemKey,renderItem,duration}:{items:Json[];status:string;error?:Json;phase?:string;open:boolean;onOpen:(open:boolean)=>void;recordOpens:Record<string,boolean>;onRecordsOpen:(items:Json[],open:boolean)=>void;itemKey:(item:Json)=>string;renderItem:(item:Json,visible:boolean)=>ReactNode;duration?:string}){
+function ExecutionGroup({items,running,phase,open,onOpen,recordOpens,onRecordsOpen,itemKey,renderItem,duration}:{items:Json[];running:boolean;phase?:string;open:boolean;onOpen:(open:boolean)=>void;recordOpens:Record<string,boolean>;onRecordsOpen:(items:Json[],open:boolean)=>void;itemKey:(item:Json)=>string;renderItem:(item:Json,visible:boolean)=>ReactNode;duration?:string}){
   const {t,locale}=useLocale();
-  const [visited,setVisited]=useState(open),stepsId=useId(),running=status==='inProgress';
+  const [visited,setVisited]=useState(open),stepsId=useId();
   useEffect(()=>{if(open)setVisited(true);},[open]);
   const current=items.filter(item=>item.status==='inProgress').at(-1)??items.at(-1)!;
-  const label=running?phase==='WAITING_APPROVAL'?t('session.phase.approval'):phase==='WAITING_INPUT'?t('session.phase.input'):current.type==='reasoning'&&!current.status?t('session.activity.reasoning'):activityLabel(current,locale)||(stepLabel(current.type,locale)??t('session.activity.description')):status==='failed'?modelOverloadNotice(error,locale)??t('session.turn.failure'):status==='interrupted'?t('session.issue.interrupted'):t('session.issue.completed');
-  return <details className="execution-process" open={open}><summary aria-expanded={open} aria-controls={stepsId} onClick={event=>{event.preventDefault();onOpen(!open);}}><span>{running?t('session.process.running'):t('session.process.label')}</span>{duration?<span className="execution-duration">{running?t('session.process.elapsed'):t('session.process.duration')} {duration}</span>:null}<span className="muted">{t('session.process.count',items.length)}</span><span className="execution-status">{label}</span></summary>
+  const label=running?phase==='WAITING_APPROVAL'?t('session.phase.approval'):phase==='WAITING_INPUT'?t('session.phase.input'):current.type==='reasoning'&&!current.status?t('session.activity.reasoning'):activityLabel(current,locale)||(stepLabel(current.type,locale)??t('session.activity.description')):executionGroupIssue(items,locale);
+  return <details className="execution-process" open={open}><summary aria-expanded={open} aria-controls={stepsId} onClick={event=>{event.preventDefault();onOpen(!open);}}><span>{running?t('session.process.running'):t('session.process.label')}</span>{duration?<span className="execution-duration">{t('session.feedback.runningElapsed')} {duration}</span>:null}<span className="muted">{t('session.process.count',items.length)}</span>{label?<span className="execution-status">{label}</span>:null}</summary>
     <div className="execution-steps" id={stepsId}>{visited||open?executionRows(items).map(row=>row.records?<ExecutionRecords key={itemKey(row.items[0])} items={row.items} open={row.items.some(item=>recordOpens[itemKey(item)])} visible={open} onOpen={value=>onRecordsOpen(row.items,value)} renderItem={renderItem}/>:renderItem(row.items[0],open)):null}</div>
   </details>;
 }

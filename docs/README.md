@@ -13,6 +13,10 @@
 
 ## 当前设计
 
+- [Git 日志两区与文件预览弹窗](../codex-drive/specs/2026-10-23-git-history-two-sections-dialog.arch.md)：提交／文件两区，点击文件直接预览，支持连续切换、状态保留及桌面／手机布局；对应[实施计划](superpowers/plans/2026-10-23-git-history-two-sections-dialog.md)和[验收记录](verification/2026-10-23-git-history-two-sections-dialog.md)。代码已实施，尚未更新运行服务的前端资源。
+- [重启前活动检查与强制重启](../codex-drive/specs/2026-10-22-restart-activity-and-force.arch.md)：同一弹窗自动列出活动，直接提供绿色“重启”或警告色“强制重启”，修复终态错误判定及检查原因丢失；[计划](superpowers/plans/2026-10-22-restart-activity-and-force.md)与[验收](verification/2026-10-22-restart-activity-and-force.md)已完成，真实服务尚未部署／重启。
+- [会话轮次结果与执行过程反馈](superpowers/specs/2026-10-20-turn-outcome-feedback.md)：轮次末尾显示失败原因，区分空闲、原生重连与上一轮未完成；对应[实施计划](superpowers/plans/2026-10-20-turn-outcome-feedback.md)和[验收记录](verification/2026-10-20-turn-outcome-feedback.md)。
+- [操作结果提示收敛与重启记录](superpowers/plans/2026-10-15-operation-feedback.md)：区分当前操作与历史结果，检查重启、Git、配置和额度反馈，保留未知状态保护。
 - [便携更新、自启动、提问与模型目录](design/portable-updates-and-input.md)：轻量更新与恢复、品牌启动器、原生异步提问和目录刷新。
 - [多访问地址](design/multiple-origins.md)：localhost 与 HTTPS 白名单、Cookie/CSRF 边界和首次可选域名。
 - [国际化方案](../codex-drive/specs/2026-10-14-internationalization.arch.md)：简体中文／英文、类型安全文案、语言偏好与错误展示边界；对应[实施计划](superpowers/plans/2026-10-14-internationalization.md)和[验收记录](verification/2026-10-14-internationalization.md)。
