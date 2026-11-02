@@ -92,3 +92,19 @@ test('failed manual release does not create a deferred release intention',async 
   assert.equal(unsubscribes,1);assert.ok(runtime.diagnosticState().native);
   for(const id of [busy.threadId,idle.threadId])assert.equal((runtime as any).state(id).released,false);
 });
+
+test('release intent, thread unload and compaction do not fabricate a terminal turn',async t=>{
+  const runtime=new Runtime({executable:process.execPath,args:[fileURLToPath(new URL('./fixtures/runtime-server.mjs',import.meta.url))],cwd:process.cwd(),idleMs:60_000});
+  t.after(()=>runtime.close());
+  const {threadId,turnId}=await runtime.create({cwd:process.cwd(),clientRequestId:'no-terminal',prompt:'hold'});
+  await runtime.requestRelease(threadId);
+  const notify=(method:string,params:any)=>(runtime as any).onNotification({method,params:{threadId,turnId,...params}});
+  notify('item/started',{item:{id:'compact',type:'contextCompaction'}});
+  notify('item/completed',{item:{id:'compact',type:'contextCompaction'}});
+  notify('thread/closed',{});
+  const snapshot=await runtime.snapshot(threadId),state=(runtime as any).state(threadId);
+  assert.equal(snapshot.activeTurnId,turnId);assert.equal(snapshot.thread.turns.at(-1).status,'inProgress');
+  assert.equal(snapshot.release.requested,true);assert.equal(state.completedTurns.has(turnId),false);assert.notEqual(snapshot.phase,'IDLE');
+  const stats=await (runtime as any).call('fixture/stats',{});
+  assert.equal(stats.turnStarts,1);assert.equal(stats.resumes,0);assert.equal(stats.interrupts,0);assert.equal(stats.unsubscribes,0);
+});

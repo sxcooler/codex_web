@@ -93,7 +93,7 @@ try{
   await timeline.evaluate(e=>{e.scrollTop=e.scrollHeight;e.dispatchEvent(new Event('scroll'));});
   await collapse.click();await page.waitForFunction(()=>{const e=document.querySelector('.timeline');return e.scrollHeight-e.scrollTop-e.clientHeight<5;});
   await page.screenshot({path:`.local/session-toolbar-${width}-collapsed.png`});
-  await page.evaluate(()=>{testState.snapshot.phase='RUNNING';testState.snapshot.activeTurnId='turn';});await refresh();
+  await page.evaluate(()=>{testState.snapshot.phase='RUNNING';testState.snapshot.activeTurnId='turn';testState.snapshot.thread.turns[0].status='inProgress';});await refresh();
   assert.equal(await page.getByRole('button',{name:'中止',exact:true}).isVisible(),true);
   await page.getByRole('button',{name:'中止',exact:true}).click();await page.waitForFunction(()=>testState.calls.some(p=>p.endsWith('/abort')));
   await page.evaluate(()=>{testState.snapshot.phase='WAITING_INPUT';testState.snapshot.pending=[{requestId:'request',method:'item/tool/requestUserInput',params:{questions:[{id:'choice',header:'选择',question:'演示问题',options:[{label:'继续',description:'继续演示'}]}]}}];});await refresh();
@@ -141,7 +141,7 @@ try{
   else await page.locator('#message').press('Enter');
   await page.getByRole('button',{name:'重新编辑',exact:true}).waitFor();assert.equal(await page.evaluate(()=>testState.messages.length),1);
   await page.getByRole('button',{name:'重新编辑',exact:true}).click();await collapse.click();
-  await page.evaluate(()=>{testState.snapshot.phase='RUNNING';testState.snapshot.activeTurnId='turn';testState.unknownSend=true;});await refresh();
+  await page.evaluate(()=>{testState.snapshot.phase='RUNNING';testState.snapshot.activeTurnId='turn';testState.snapshot.thread.turns[0].status='inProgress';testState.unknownSend=true;});await refresh();
   await page.getByRole('button',{name:'插话',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.composer-notice')?.textContent.includes('提交结果待核实'));
   const steer=await page.evaluate(()=>testState.messages[1]);assert.equal(steer.expectedTurnId,'turn');assert.equal(steer.model,undefined);assert.equal(steer.permissionMode,undefined);
   assert.equal(await page.getByRole('button',{name:'插话',exact:true}).isDisabled(),true);
@@ -193,7 +193,7 @@ try{
   await page.locator('#message').fill('');await page.locator('#message').focus();await page.keyboard.press('Control+V');
   assert.equal(await page.locator('#message').inputValue(),'native plain text');
   await page.evaluate(()=>{const other=document.body.appendChild(document.createElement('textarea'));other.id='other-textbox';const data=new DataTransfer();data.items.add(new File(['mock'],'other.png',{type:'image/png'}));other.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));other.remove();});
-  assert.equal(await page.evaluate(()=>{const data=new DataTransfer();data.items.add(new File(['plain'],'plain.txt',{type:'text/plain'}));return document.querySelector('#message').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}),true,'Non-image clipboard prevented normal paste');
+  assert.equal(await page.evaluate(()=>{const data=new DataTransfer();data.setData('text/plain','plain text');return document.querySelector('#message').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}),true,'Plain-text clipboard prevented normal paste');
   assert.equal(await page.evaluate(()=>testState.calls.filter(p=>p==='/api/uploads').length),clipboardUploads+3,'Text/other textbox triggered an upload');
   await expand.click();
   if(width<680){

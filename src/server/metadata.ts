@@ -43,6 +43,15 @@ export class MetadataStore {
     return changed;
   }
   knownForks(before=Number.MAX_SAFE_INTEGER){return (this.db.prepare('SELECT seq,thread_id,header FROM known_forks WHERE seq<? ORDER BY seq DESC LIMIT 32').all(before) as Array<{seq:number;thread_id:string;header:string}>).map(row=>({seq:row.seq,id:row.thread_id,header:JSON.parse(row.header)}));}
+  nextForkTitle(source:{name?:string|null;preview?:string}):string{
+    const title=source.name?.trim()||source.preview?.trim()||'Untitled',base=title.replace(/（\d+）$/,'');
+    const names=new Set((this.db.prepare("SELECT json_extract(header,'$.name') name FROM known_forks WHERE json_type(header,'$.name')='text'").all() as Array<{name:string}>).map(row=>row.name));
+    names.add(title);
+    for(let number=1;;number++){
+      const suffix=`（${number}）`,name=base.slice(0,120-suffix.length).replace(/[\uD800-\uDBFF]$/,'').trimEnd()+suffix;
+      if(!names.has(name))return name;
+    }
+  }
   hasForksBefore(before:number){return !!this.db.prepare('SELECT 1 FROM known_forks WHERE seq<? LIMIT 1').get(before);}
   clear(id:string){this.db.prepare('DELETE FROM session_meta WHERE thread_id=?').run(id);}
   close(){this.db.close();}

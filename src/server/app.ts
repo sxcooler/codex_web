@@ -118,7 +118,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'same-origin');
     // Mermaid generates SVG styles and layout attributes; script sources remain self-only.
-    reply.header('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    reply.header('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://files.openai.com https://chatgpt.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     if (matchedApiRoute(request)) reply.header('cache-control', 'no-store');
     return payload;
   });
@@ -158,7 +158,7 @@ export async function buildServer(options: { dataDir: string; origin: string; al
     if (error.validation || error.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || error.statusCode === 400) {
       return reply.code(400).send({ error: 'Invalid request', code: 'REQUEST_VALIDATION_FAILED' });
     }
-    const known = ['PROJECT_ERROR', 'RUNTIME_ERROR', 'UPLOAD_ERROR', 'PUSH_ERROR', 'REPORT_ERROR'].includes(error.code ?? '') || ['RUNTIME_', 'ACCOUNT_', 'SETTINGS_', 'INSTRUCTIONS_', 'PLUGINS_', 'SHARED_'].some(prefix => error.code?.startsWith(prefix));
+    const known = ['PROJECT_ERROR', 'RUNTIME_ERROR', 'UPLOAD_ERROR', 'PUSH_ERROR', 'REPORT_ERROR'].includes(error.code ?? '') || ['RUNTIME_', 'ACCOUNT_', 'SETTINGS_', 'INSTRUCTIONS_', 'PLUGINS_', 'EXTENSION_', 'SHARED_', 'RICH_'].some(prefix => error.code?.startsWith(prefix));
     if (request.routeOptions.url?.startsWith('/api/') && (!known || (error.statusCode ?? 500) >= 500)) {
       try {
         const event = {event:'api_error',time:new Date().toISOString(),pid:process.pid,requestId:request.id,method:request.method,route:request.routeOptions.url,name:error.name,code:error.code,message:error.message,stack:error.stack};

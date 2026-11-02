@@ -104,4 +104,4 @@ flowchart LR
 5. 普通文件／变更的内嵌及全屏、复制反馈、Markdown／Mermaid 层级、图片版本与路径边界、折叠／分页／阅读性能回归通过；记录所有失败、跳过及未验证范围。
 6. 先 RED 再 GREEN，完成相关浏览器、Node、类型与独立构建检查。只使用演示 API／隔离 fixture，不在真实会话执行 Git 写入或重启。发布、dist 更新及真实重启需另有用户指示。
 
-实施见[plan](../../docs/superpowers/plans/2026-10-23-git-history-two-sections-dialog.md)与[验收记录](../../docs/verification/2026-10-23-git-history-two-sections-dialog.md)。关联：[工作区面板](../../docs/design/workspace-panels.md) · [既有文件全屏](../../docs/design/2026-10-11-file-preview-fullscreen.md) · [预览头部](../../docs/design/2026-10-13-preview-header-and-copy-path.md)。本方案取代 Git 日志的三段比例与内嵌历史预览规则；普通文件／变更的内嵌预览仍沿用原规则。
+实施见[plan](../superpowers/plans/2026-10-23-git-history-two-sections-dialog.md)与[验收记录](../verification/2026-10-23-git-history-two-sections-dialog.md)。关联：[工作区面板](workspace-panels.md) · [既有文件全屏](2026-10-11-file-preview-fullscreen.md) · [预览头部](2026-10-13-preview-header-and-copy-path.md)。本方案取代 Git 日志的三段比例与内嵌历史预览规则；普通文件／变更的内嵌预览仍沿用原规则。

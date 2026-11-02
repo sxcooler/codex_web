@@ -14,6 +14,7 @@ import type { UploadService } from './uploads.ts';
 import {renderNativeImage} from './native-images.ts';
 import {settingsError} from '../codex/settings.ts';
 import type {DiagnosticEvent} from './diagnostics.ts';
+import {registerRichPreviewRoutes} from './rich-preview.ts';
 
 const text = { type: 'string', minLength: 1, maxLength: 12_000 };
 const short = { type: 'string', minLength: 1, maxLength: 120 };
@@ -201,7 +202,7 @@ export function registerApi(app: FastifyInstance, options: {
     const result=await runtime.setThreadCwd(id,workspace.path,thread.projectId);shared.invalidateSessions('metadata');return {...result,workspaceId};
   });
   app.post('/api/sessions/:threadId/fork', { schema: body({ lastTurnId: { ...short, maxLength: 256, pattern: '^[a-zA-Z0-9:_-]+$' }, clientRequestId: requestId }) }, async request => {
-    const result = await runtime.fork(params(request).threadId, request.body as { lastTurnId: string; clientRequestId: string });
+    const result = await runtime.fork(params(request).threadId, request.body as { lastTurnId: string; clientRequestId: string },source=>metadata.nextForkTitle(source));
     let warning: string | undefined;
     try{saveFork(result.header);}catch{warning='Web fork metadata could not be saved; native thread history remains available.';}
     try { const project = await projectForCwd(result.cwd); warning = saveMeta(result.threadId, project?.path ?? null, null)??warning; }
@@ -252,6 +253,8 @@ export function registerApi(app: FastifyInstance, options: {
   app.post('/api/sessions/:threadId/requests/:requestId/respond', { schema: body({ answer: { type: 'object', maxProperties: 8 } }) }, async request => runtime.respond(params(request).threadId, params(request).requestId, (request.body as any).answer));
 
   const boundProject=async(threadId:string)=>{const project=await projectForCwd(await runtime.threadCwd(threadId));if(!project)throw Object.assign(new Error('This thread is not bound to a project in WORK_ROOT'),{statusCode:404,code:'PROJECT_ERROR'});return project;};
+  const boundFiles=async(threadId:string)=>{const cwd=await runtime.threadCwd(threadId),project=await projectForCwd(cwd);if(project)return project.id;if(typeof cwd==='string'&&isAbsolute(cwd)&&pathKey(resolve(cwd))===pathKey(resolve(projects.root)))return undefined;throw Object.assign(new Error('This thread has no readable file root in WORK_ROOT'),{statusCode:404,code:'PROJECT_ERROR'});};
+  registerRichPreviewRoutes(app,projects,boundProject);
   app.get('/api/sessions/:threadId/git/status', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { staged: { type: 'string', enum: ['true','false'] } } } } }, async request => {
     const project = await boundProject(params(request).threadId);
     return projects.gitStatus(project.id);
@@ -265,10 +268,24 @@ export function registerApi(app: FastifyInstance, options: {
   app.get('/api/sessions/:threadId/git/files',{schema:{querystring:{type:'object',additionalProperties:false,properties:{staged:{type:'string',enum:['true','false']}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.gitFiles(project.id,(request.query as any).staged==='true');});
   app.get('/api/sessions/:threadId/git/diff',{schema:{querystring:{type:'object',additionalProperties:false,properties:{staged:{type:'string',enum:['true','false']},path:{type:'string',minLength:1,maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId),q=request.query as any;return q.path?projects.gitFileDiff(project.id,q.path,q.staged==='true'):projects.gitDiff(project.id,q.staged==='true');});
   app.get('/api/sessions/:threadId/git/diff/patch',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{staged:{type:'string',enum:['true','false']},path:{type:'string',minLength:1,maxLength:1024}}}}},async(request,reply)=>{const project=await boundProject(params(request).threadId),q=request.query as any;const patch=await projects.gitPatch(project.id,q.path,q.staged==='true');if(Buffer.byteLength(patch)>5*1024*1024)return reply.code(413).send({error:'Patch exceeds 5 MiB'});return reply.type('text/x-diff; charset=utf-8').header('content-disposition','attachment; filename="change.patch"').send(patch);});
-  app.get('/api/sessions/:threadId/files',{schema:{querystring:{type:'object',additionalProperties:false,properties:{directory:{type:'string',maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.listFiles(project.id,(request.query as any).directory??'');});
-  app.get('/api/sessions/:threadId/files/entry',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{path:{type:'string',minLength:1,maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.fileEntry(project.id,(request.query as any).path);});
-  app.get('/api/sessions/:threadId/files/content',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{path:{type:'string',minLength:1,maxLength:1024}}}}},async request=>{const project=await boundProject(params(request).threadId);return projects.readFile(project.id,(request.query as any).path);});
-  app.get('/api/sessions/:threadId/files/image',{schema:{querystring:{type:'object',additionalProperties:false,required:['path'],properties:{repository:repositoryPath,path:{type:'string',minLength:1,maxLength:1024},v:{type:'string',maxLength:64},revision:{type:'string',pattern:'^(index|[0-9a-fA-F]{40,64})$'}}}}},async(request,reply)=>{const project=await boundProject(params(request).threadId);const image=await projects.readImage(project.id,(request.query as any).path,(request.query as any).revision,(request.query as any).repository);return reply.headers({'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"}).type('image/webp').send(image);});
+  function fileRoutes(base:string,target:(request:FastifyRequest)=>Promise<string|undefined>,gitImages=false){
+    const path={type:'string',minLength:1,maxLength:1024},query=(properties:Record<string,unknown>,required:string[]=[])=>({querystring:{type:'object',additionalProperties:false,properties,required}});
+    app.get(base,{schema:query({directory:{type:'string',maxLength:1024}})},async request=>projects.listFiles(await target(request),(request.query as any).directory??''));
+    app.get(base+'/entry',{schema:query({path},['path'])},async request=>projects.fileEntry(await target(request),(request.query as any).path));
+    app.get(base+'/content',{schema:query({path},['path'])},async request=>projects.readFile(await target(request),(request.query as any).path));
+    app.get(base+'/raw',{schema:query({path},['path'])},async(request,reply)=>{
+      const image=await projects.readRawImage(await target(request),(request.query as any).path);
+      return reply.headers({'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox",'content-disposition':'inline'}).type(image.type).send(image.bytes);
+    });
+    app.get(base+'/image',{schema:query({path,v:{type:'string',maxLength:64},...(gitImages?{repository:repositoryPath,revision:{type:'string',pattern:'^(index|[0-9a-fA-F]{40,64})$'}}:{})},['path'])},async(request,reply)=>{
+      const id=await target(request),q=request.query as any;
+      if(id===undefined&&(q.revision!==undefined||q.repository!==undefined))return reply.code(400).send({error:'Root file previews do not support Git versions'});
+      const image=await projects.readImage(id,q.path,q.revision,q.repository);return reply.headers({'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"}).type('image/webp').send(image);
+    });
+  }
+  fileRoutes('/api/files',async()=>undefined);
+  fileRoutes('/api/projects/:workspaceId/files',async request=>(request.params as {workspaceId:string}).workspaceId);
+  fileRoutes('/api/sessions/:threadId/files',request=>boundFiles(params(request).threadId),true);
   app.post('/api/sessions/:threadId/test-reports',{schema:body({turnId:short,commandItemId:short,relativePath:{type:'string',minLength:1,maxLength:1024},format:{type:'string',enum:['junit']}},['turnId','commandItemId','relativePath','format'])},async request=>{const id=params(request).threadId,input=request.body as any,project=await boundProject(id),command=await runtime.command(id,input.turnId,input.commandItemId);return parseTestReport(projects,project.id,command,input);});
 
   app.get('/api/sessions/:threadId/status', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { epoch: { ...short, pattern: '^[a-zA-Z0-9-]+$' } } } } }, async request => runtime.status(params(request).threadId, (request.query as any).epoch));

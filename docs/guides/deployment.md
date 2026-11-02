@@ -51,6 +51,8 @@ Linux 中先核对 `command -v node`、`command -v codex` 和各自 `--version`�
 | `.local/web/*.sqlite*` | 登录会话与 Web 元数据，禁止公开 |
 | `.local/web/config.json` | 本机入口配置 |
 | `.local/web/server.log`、`.1` | Windows 启动日志，单文件约 1 MiB 轮转；Linux 前台输出到终端，自启服务使用 journal；手动后台日志为 server.log / server-error.log，启动时轮转 |
+| `.local/web/lifecycle.jsonl`、`.1` | 默认开启的启动、退出、致命异常和本地控制拒绝记录 |
+| `.local/web/crash-reports/report.*.json` | 默认开启的 Node 崩溃诊断报告；启动时保留最近 5 份，不公开 |
 | `.local/web/service.env` | 可选 Linux systemd 环境文件，不公开 |
 | 默认用户 CODEX_HOME | Codex 原生历史与登录，由官方 CLI 管理 |
 

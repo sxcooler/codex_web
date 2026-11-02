@@ -69,7 +69,7 @@
 
 ## 已确认交互
 
-2026-10-23：Git 日志“提交／文件两区＋点击文件直接打开预览 dialog”已实施，见[新 spec](../../codex-drive/specs/2026-10-23-git-history-two-sections-dialog.arch.md)、[实施计划](../superpowers/plans/2026-10-23-git-history-two-sections-dialog.md)和[验收记录](../verification/2026-10-23-git-history-two-sections-dialog.md)。新方案取代下文 Git 日志的三段比例与内嵌历史预览规则；下文保留为历史设计，普通文件与变更预览规则不变。本轮未更新运行服务的 dist。
+2026-10-23：Git 日志“提交／文件两区＋点击文件直接打开预览 dialog”已实施，见[新 spec](2026-10-23-git-history-two-sections-dialog.arch.md)、[实施计划](../superpowers/plans/2026-10-23-git-history-two-sections-dialog.md)和[验收记录](../verification/2026-10-23-git-history-two-sections-dialog.md)。新方案取代下文 Git 日志的三段比例与内嵌历史预览规则；下文保留为历史设计，普通文件与变更预览规则不变。本轮未更新运行服务的 dist。
 
 1. 中间会话栏顶部左右两端各有面板图标；工具栏只属于中间栏，右侧项目栏独立从顶部开始，不共享工具栏。两端图标，提示展开/收起左侧栏、右侧栏；图标位置始终保留；没有项目时右侧栏按钮禁用。折叠释放空间，展开恢复宽度。小屏使用互斥抽屉，关闭回到原会话位置。
 2. 右栏标签为“变更｜文件｜Git 日志”。折叠不卸载右栏；重复点击标签不重置；每个标签独立保留选择及滚动。刷新更新数据但不先清空；失败保留旧内容并提示，文件消失明确显示不可用。

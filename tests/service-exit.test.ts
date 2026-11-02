@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,copyFile,writeFile,readFile,rm,stat} from 'node:fs/promises';
+import {mkdtemp,mkdir,copyFile,writeFile,readFile,rm,stat,readdir,utimes} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn,spawnSync} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createServer,connect} from 'node:net';
+const reportArgs=['--report-exclude-env','--report-exclude-network'];
 
 async function fixture(body=''){
  const root=await mkdtemp(join(tmpdir(),'codex exit '));
@@ -19,8 +20,9 @@ async function fixture(body=''){
  return root;
 }
 async function records(root:string){return (await readFile(join(root,'.local/web/lifecycle.jsonl'),'utf8').catch((e:any)=>{if(e.code==='ENOENT')return '';throw e;})).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));}
+async function crashReports(root:string){const directory=join(root,'.local/web/crash-reports');return Promise.all((await readdir(directory)).filter(name=>/^report.*\.json$/.test(name)).map(async name=>({name,text:await readFile(join(directory,name),'utf8')})));}
 function run(root:string,...args:string[]){
- const child=spawn(process.execPath,[join(root,'scripts/server-control.ts'),'--worker',...args],{cwd:root,windowsHide:true});
+ const child=spawn(process.execPath,[...reportArgs,join(root,'scripts/server-control.ts'),'--worker',...args],{cwd:root,windowsHide:true,env:{...process.env,CRASH_REPORT_TEST_SECRET:'SECRET_REPORT_ENV'}});
  let stderr='';child.stderr.on('data',v=>stderr+=v);child.stdout.resume();
  const done=new Promise<number|null>(resolve=>child.once('close',resolve));return {child,done,stderr:()=>stderr};
 }
@@ -88,9 +90,49 @@ test('startup failure retains bounded redacted error fields without expanding pr
  try{assert.equal(await worker.done,1);const events=await records(root);assert.deepEqual(events.map(v=>v.event),['startup','startup_failure','exit']);const error=events[1];assert.equal(error.code,'E_STARTUP');assert.match(error.message,/startup sentinel/);assert.match(error.stack,/startServer/);assert.ok(error.message.length<=2048&&error.stack.length<=8192);assert.doesNotMatch(JSON.stringify(events),/SECRET_|PRIVATE_/);assert.equal(error.config,undefined);assert.equal(error.request,undefined);assert.equal(error.token,undefined);assert.equal(events.at(-1).exitCode,1);}finally{await cleanup(root,worker.child);}
 });
 
-for(const mode of ['exception','rejection'])test(`default fatal ${mode} writes synchronous monitor evidence and still exits 1`,{timeout:10_000},async()=>{
+for(const mode of ['exception','rejection'])test(`default fatal ${mode} writes synchronous evidence and a sanitized crash report before exiting 1`,{timeout:10_000},async()=>{
  const root=await fixture(`setTimeout(()=>{${mode==='exception'?"throw Error('fatal sentinel token=SECRET_FATAL');":"void Promise.reject(Error('fatal sentinel token=SECRET_FATAL'));"}},60);`),worker=run(root);
- try{assert.equal(await worker.done,1);const events=await records(root),fatal=events.find(v=>v.event==='fatal');assert.ok(fatal,'fatal record must survive immediate process termination');assert.equal(fatal.origin,mode==='exception'?'uncaughtException':'unhandledRejection');assert.match(fatal.message,/fatal sentinel/);assert.match(fatal.stack,/main.ts/);assert.doesNotMatch(JSON.stringify(events),/SECRET_FATAL/);assert.equal(events.at(-1).exitCode,1);assert.match(worker.stderr(),/fatal sentinel/,'Node retains its default fatal error output');}finally{await cleanup(root,worker.child);}
+ try{
+  assert.equal(await worker.done,1);const events=await records(root),fatal=events.find(v=>v.event==='fatal');assert.ok(fatal,'fatal record must survive immediate process termination');assert.equal(fatal.origin,mode==='exception'?'uncaughtException':'unhandledRejection');assert.match(fatal.message,/fatal sentinel/);assert.match(fatal.stack,/main.ts/);assert.doesNotMatch(JSON.stringify(events),/SECRET_FATAL/);assert.equal(events.at(-1).exitCode,1);assert.match(worker.stderr(),/fatal sentinel/,'Node retains its default fatal error output');
+  const reports=await crashReports(root);assert.equal(reports.length,1);assert.match(reports[0].name,/^report\..+\.json$/);
+  const report=JSON.parse(reports[0].text);assert.equal(report.header.processId,worker.child.pid);assert.equal(Object.keys(report.environmentVariables??{}).length,0);assert.equal((report.header.networkInterfaces??[]).length,0);
+  assert.equal(reports[0].text.includes('SECRET_REPORT_ENV'),false,'report must exclude environment secrets');assert.equal(reports[0].text.includes('SECRET_FATAL'),false,'report must redact the JS error');
+  assert.equal(JSON.stringify(report.javascriptStack).includes('fatal sentinel'),true,'report retains the safe error stack');
+ }finally{await cleanup(root,worker.child);}
+});
+
+test('native heap exhaustion writes a private crash report without diagnostics',{timeout:15_000},async()=>{
+ const root=await fixture();
+ try{
+  const entry=join(root,'oom.mjs');
+  await writeFile(entry,`import {Lifecycle} from './src/server/lifecycle.ts';new Lifecycle(${JSON.stringify(join(root,'.local/web'))});const kept=[];for(;;)kept.push(new Array(10000).fill(1));`);
+  const result=spawnSync(process.execPath,[...reportArgs,'--max-old-space-size=32',entry],{cwd:root,windowsHide:true,encoding:'utf8',timeout:10_000,env:{...process.env,CRASH_REPORT_TEST_SECRET:'SECRET_REPORT_ENV'}});
+  assert.equal(result.error,undefined);assert.notEqual(result.status,0);assert.equal(/heap out of memory|Allocation failed/i.test(result.stderr),true,'fixture must reach native OOM');
+  const reports=await crashReports(root);assert.equal(reports.length,1);const report=JSON.parse(reports[0].text);
+  assert.equal(['OOMError','FatalError'].includes(report.header.trigger),true);assert.equal(reports[0].text.includes('SECRET_REPORT_ENV'),false,'native report must exclude environment secrets');assert.equal(Object.keys(report.environmentVariables??{}).length,0);assert.equal((report.header.networkInterfaces??[]).length,0);
+ }finally{await cleanup(root);}
+});
+
+test('native crash reports stay disabled without effective startup privacy flags',{timeout:10_000},async()=>{
+ const root=await fixture();
+ try{
+  const entry=join(root,'report-config.mjs');await writeFile(entry,`import {Lifecycle} from './src/server/lifecycle.ts';new Lifecycle(${JSON.stringify(join(root,'.local/web'))});console.log(JSON.stringify({native:process.report.reportOnFatalError,env:process.report.excludeEnv,network:process.report.excludeNetwork}));`);
+  for(const args of [[],[...reportArgs,'--no-report-exclude-env']]){
+   const result=spawnSync(process.execPath,[...args,entry],{cwd:root,windowsHide:true,encoding:'utf8',timeout:5000});assert.equal(result.status,0);assert.deepEqual(JSON.parse(result.stdout),{native:false,env:true,network:true});
+  }
+ }finally{await cleanup(root);}
+});
+
+test('startup retains the newest five crash reports and preserves unrelated entries',{timeout:10_000},async()=>{
+ const root=await fixture(),directory=join(root,'.local/web/crash-reports');let worker:ReturnType<typeof run>|undefined;
+ try{
+  await mkdir(directory,{recursive:true});
+  for(let index=0;index<7;index++){const file=join(directory,`report.${index}.json`);await writeFile(file,'{}');await utimes(file,index+1,index+1);}
+  await writeFile(join(directory,'keep.txt'),'keep');await mkdir(join(directory,'report-directory.json'));
+  worker=run(root);const state=await ready(root);await stop(state);assert.equal(await worker.done,0);
+  const names=await readdir(directory);assert.deepEqual(names.filter(name=>/^report\./.test(name)).sort(),['report.2.json','report.3.json','report.4.json','report.5.json','report.6.json']);
+  assert.equal(await readFile(join(directory,'keep.txt'),'utf8'),'keep');assert.equal((await stat(join(directory,'report-directory.json'))).isDirectory(),true);
+ }finally{await cleanup(root,worker?.child);}
 });
 
 test('unwritable lifecycle log preserves normal shutdown and default fatal outcome',{timeout:10_000},async()=>{

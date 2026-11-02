@@ -45,7 +45,7 @@ All screenshots use demo data.
 
 Running from source requires Node **>=24.20.0**, npm, the official standalone Codex CLI **>=0.160.1**, and Git for project/Git features. `.node-version` declares the baseline; it does not switch Node automatically. Install and sign in using the [official Codex instructions](https://learn.chatgpt.com/docs/codex/cli). Linux/WSL must use the Linux CLI and its own environment's login. Do not rely on binaries inside the VS Code extension's private directory.
 
-**Codex Web 0.1.9 requires Codex CLI >=0.160.1 (the development and verified baseline)** and a recognizable stable version. Before updating an older installation, upgrade Codex CLI separately if needed and check `codex --version`, then apply the 0.1.9 update. App updates do not upgrade the CLI. Older, prerelease, or unrecognized versions prevent startup; the updater preserves or rolls back the app under its existing rules.
+**Codex Web 0.1.10 requires Codex CLI >=0.160.1 (the development and verified baseline)** and a recognizable stable version. Before updating an older installation, upgrade Codex CLI separately if needed and check `codex --version`, then apply the 0.1.10 update. App updates do not upgrade the CLI. Older, prerelease, or unrecognized versions prevent startup; the updater preserves or rolls back the app under its existing rules.
 
 ## Run from source
 
@@ -178,7 +178,7 @@ A timeout or lost connection can leave a submission's outcome unknown. Check nat
 
 Web Push requires HTTPS, browser support, and explicit user permission. Physical-phone background delivery and real VS Code handoff for phase-two features still have verification gaps. The PWA does not cache APIs, conversations, or credentials; tasks cannot be submitted offline.
 
-For the 0.1.9 release scope and checks, see the [release record](docs/verification/2026-10-23-release-019.md). Portable updates require matching platform/runtime fingerprints and file checks; see the [portable guide](docs/guides/portable.md#数据与升级).
+For the 0.1.10 release scope and checks, see the [release record](docs/verification/2026-11-02-release-0110.md). Portable updates require matching platform/runtime fingerprints and file checks; see the [portable guide](docs/guides/portable.md#数据与升级).
 
 ## Documentation and verification
 

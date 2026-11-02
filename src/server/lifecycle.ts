@@ -1,4 +1,4 @@
-import {appendFileSync,mkdirSync,renameSync,statSync} from 'node:fs';
+import {appendFileSync,mkdirSync,readdirSync,renameSync,statSync,unlinkSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 
 type Fields={reason?:string;port?:number;controlPort?:number;signal?:string;diagnosticsEnabled?:boolean;exitCode?:number;origin?:string};
@@ -13,6 +13,7 @@ function text(value:unknown,limit:number){
  if(safe.length<=limit)return safe;
  const half=Math.floor((limit-15)/2);return safe.slice(0,half)+'\n[truncated]\n'+safe.slice(-half);
 }
+export {text as redactLifecycleText};
 
 // Fatal and exit hooks cannot await diagnostics; local evidence must survive Node's default fatal exit.
 export class Lifecycle {
@@ -22,7 +23,31 @@ export class Lifecycle {
  constructor(directory:string,diagnosticsEnabled=false){
   this.diagnosticsEnabled=diagnosticsEnabled;
   this.directory=directory;
-  process.on('uncaughtExceptionMonitor',(error,origin)=>this.record('fatal',{reason:'uncaught_exception',origin},error));
+  const reports=join(directory,'crash-reports');
+  const nativePrivacy=process.execArgv.includes('--report-exclude-env')&&process.execArgv.includes('--report-exclude-network')&&process.report.excludeEnv&&process.report.excludeNetwork;
+  process.report.directory=reports;
+  process.report.filename='';
+  process.report.excludeEnv=true;
+  process.report.excludeNetwork=true;
+  // Native OOM reports require startup flags; runtime excludeEnv only protects JS writeReport.
+  process.report.reportOnFatalError=nativePrivacy;
+  // JS errors use a sanitized Error below; automatic uncaught reports would retain the original.
+  process.report.reportOnUncaughtException=false;
+  try{
+   mkdirSync(reports,{recursive:true,mode:0o700});
+   const files=readdirSync(reports,{withFileTypes:true}).filter(file=>file.isFile()&&/^report\..*\.json$/.test(file.name))
+    .map(file=>{const path=join(reports,file.name);return {path,mtime:statSync(path).mtimeMs};})
+    .sort((a,b)=>b.mtime-a.mtime||b.path.localeCompare(a.path));
+   for(const file of files.slice(5))unlinkSync(file.path);
+  }catch{/* Report retention failure must not stop the service. */}
+  process.on('uncaughtExceptionMonitor',(error,origin)=>{
+   this.record('fatal',{reason:'uncaught_exception',origin},error);
+   try{
+    const safe=new Error(text(error.message,2048));
+    safe.name=text(error.name,128)??'Error';safe.stack=text(error.stack,8192)??safe.stack;
+    process.report.writeReport(undefined,safe);
+   }catch{/* Reporting failure must preserve Node's default fatal exit. */}
+  });
   process.once('exit',exitCode=>this.record('exit',{reason:'node_exit',exitCode}));
  }
  record(event:string,fields:Fields={},error?:unknown){

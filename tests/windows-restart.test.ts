@@ -81,7 +81,7 @@ test('restart worker rejects wrong sessions and reused PIDs; preflight never sto
         sessionId: scenario === 'session' ? -1 : identity.sessionId,
         oldStarted: scenario === 'pid' ? 'stale' : identity.oldStarted,
       }));
-      const run = spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'scripts/windows/restart-server.ps1'), '-Worker', '-CheckOnly', '-RequestFile', request], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+      const run = spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'scripts/windows/restart-server.ps1'), '-DelaySeconds', '5', '-Worker', '-CheckOnly', '-RequestFile', request], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
       const result = JSON.parse((await readFile(request + '.result.json', 'utf8')).replace(/^\uFEFF/, ''));
       assert.equal(result.status, scenario === 'ready' ? 'ready' : 'failed', run.stdout + run.stderr);
       assert.equal(run.status, scenario === 'ready' ? 0 : 1);

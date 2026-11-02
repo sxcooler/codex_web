@@ -39,7 +39,7 @@ export function webRestart(root: string): WebRestart {
     const scopeFile=scope?join(data,'restart-force-'+randomUUID()+'.json'):undefined;
     try {
       if(scopeFile)await writeFile(scopeFile,JSON.stringify(scope),{mode:0o600,flag:'wx'});
-      await execute(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'scripts/windows/restart-server.ps1'), '-RequireIdle', '-JsonOutput',...(scopeFile?['-ForceScopeFile',scopeFile]:[])], { cwd: root, windowsHide: true, timeout: 60_000, maxBuffer: 64 * 1024 });
+      await execute(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', join(root, 'scripts/windows/restart-server.ps1'), '-RequireIdle', '-JsonOutput', '-DelaySeconds', '5',...(scopeFile?['-ForceScopeFile',scopeFile]:[])], { cwd: root, windowsHide: true, timeout: 60_000, maxBuffer: 64 * 1024 });
     } catch {
       // A lost launcher response can follow successful scheduling; never blindly repeat it.
       const latest = await status();

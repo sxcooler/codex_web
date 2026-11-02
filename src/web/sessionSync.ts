@@ -2,6 +2,9 @@ import type {Json} from './api.ts';
 import {msg} from './i18n/messages.ts';
 const object=(value:unknown):value is Json=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const terminal=(turn:Json)=>['completed','interrupted','failed'].includes(turn.status);
+export function hasActiveTurnConflict(snapshot:Json):boolean{
+  return snapshot.syncConflict===true||!!snapshot.activeTurnId&&(snapshot.thread?.turns??[]).some((turn:Json)=>turn.id===snapshot.activeTurnId&&terminal(turn));
+}
 // A recent window refreshes live state without collapsing the history already expanded here.
 export function mergeSnapshot(previous:Json|null,next:Json):Json{
   if(!previous?.history||!next.history||previous.historyPending||next.historyPending||previous.epoch!==next.epoch||previous.thread?.id!==next.thread?.id)return next;
@@ -20,7 +23,7 @@ export function applyChange(snapshot:Json,event:Json):Json|null{
   const next={...snapshot,...patch.state,revision:event.revision,syncCursor:event.id,thread:{...snapshot.thread,...patch.thread,turns:snapshot.thread.turns??[]}};
   const incoming=patch.turn,record=patch.item,delta=patch.delta;
   const turnId=incoming?.id??record?.turnId??delta?.turnId;
-  if(!incoming&&!record&&!delta)return next;
+  if(!incoming&&!record&&!delta)return hasActiveTurnConflict(next)?null:next;
   if(typeof turnId!=='string')return null;
   const turns:Json[]=[...next.thread.turns],index=turns.findIndex(turn=>turn.id===turnId),previous=index<0?{id:turnId,status:'inProgress',items:[]}:turns[index];
   let turn={...previous,items:[...(previous.items??[])]};
@@ -52,7 +55,7 @@ export function applyChange(snapshot:Json,event:Json):Json|null{
     }
   }
   if(index<0)turns.push(turn);else turns[index]=turn;
-  next.thread.turns=turns;return next;
+  next.thread.turns=turns;return hasActiveTurnConflict(next)?null:next;
 }
 
 // Older pages add history only; live state and the SSE cursor stay authoritative.

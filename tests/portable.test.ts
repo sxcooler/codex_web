@@ -34,7 +34,7 @@ test('portable ports are validated and an occupied listener is left untouched', 
 });
 
 test('release exports exclude local state, credentials and history', () => {
-  for (const path of ['.git/config', '.local/web/config.json', '.worktrees/a/README.md', '.superpowers/plan.md', '.env', '.env.production', 'secret.pem', 'a.sqlite-wal', 'releases/a.zip', 'nested/auth.json', 'vapid.json', 'credentials.json']) assert.equal(sourceAllowed(path), false, path);
+  for (const path of ['.git/config', '.local/web/config.json', '.worktrees/a/README.md', '.superpowers/plan.md', '.playwright-mcp/snapshot.yml', '.env', '.env.production', 'secret.pem', 'a.sqlite-wal', 'releases/a.zip', 'nested/auth.json', 'vapid.json', 'credentials.json']) assert.equal(sourceAllowed(path), false, path);
   for (const path of ['.gitignore', '.env.example', 'README.md', 'src/server/auth.ts', 'tests/auth.test.ts']) assert.equal(sourceAllowed(path), true, path);
   assert.ok(runtimeFiles.every(path => sourceAllowed(path) || path === 'dist'));
   const sharedImport = readFileSync(new URL('../src/server/push.ts', import.meta.url), 'utf8').match(/from '([^']+notificationTarget\.ts)'/)![1];
@@ -56,14 +56,15 @@ test('portable documentation preserves bilingual README links and the existing u
   const root=await mkdtemp(join(process.cwd(),'.local','tailscale-docs-'));
   t.after(()=>rm(root,{recursive:true,force:true}));
   const source=join(root,'source'),target=join(root,'portable');
-  for(const directory of ['docs/verification','codex-drive/specs'])await mkdir(join(source,directory),{recursive:true});
-  const architecture='codex-drive/specs/2026-10-14-internationalization.arch.md';
-  await writeFile(join(source,architecture),'[源码](../../src/web/main.tsx)');
-  await writeFile(join(source,'docs/README.md'),`[中文](../README_CN.md) · [English](../README.md)\n[国际化](../${architecture})\n源码文件 \`../README_CN.md\`。`);
+  for(const directory of ['docs/verification','docs/design','docs/assets'])await mkdir(join(source,directory),{recursive:true});
+  const architecture='docs/design/2026-10-14-internationalization.arch.md',asset='docs/assets/review.png';
+  const design='[源码](../../src/web/main.tsx)\n![截图](../assets/review.png)';
+  await writeFile(join(source,architecture),design);await writeFile(join(source,asset),Buffer.from('image fixture'));
+  await writeFile(join(source,'docs/README.md'),`[中文](../README_CN.md) · [English](../README.md)\n[国际化](design/2026-10-14-internationalization.arch.md)\n源码文件 \`../README_CN.md\`。`);
   await writeFile(join(source,'README.md'),'[中文](README_CN.md)\n\nEnglish');
   await writeFile(join(source,'README_CN.md'),'[English](README.md)\n\n中文');
-  await writeFile(join(source,'docs/verification/check.md'),`[方案](../../${architecture})`);
-  await (packaging as any).copyPortableDocs(source,target,[architecture,'docs/README.md','docs/verification/check.md','README.md','README_CN.md']);
+  await writeFile(join(source,'docs/verification/check.md'),'[方案](../design/2026-10-14-internationalization.arch.md)');
+  await (packaging as any).copyPortableDocs(source,target,[architecture,asset,'docs/README.md','docs/verification/check.md','README.md','README_CN.md']);
   assert.equal(await readFile(join(target,'README_EN.md'),'utf8'),'[English](README.md)\n\n中文');
   assert.equal(await readFile(join(target,'README.md'),'utf8'),'[中文](README_EN.md)\n\nEnglish');
   assert.ok(appFile('README.md')&&appFile('README_EN.md'),'Both languages must remain accepted by existing updaters');
@@ -72,10 +73,12 @@ test('portable documentation preserves bilingual README links and the existing u
   assert.match(index,/\[中文\]\(\.\.\/README_EN\.md\)/);
   assert.ok(index.includes('源码文件 `../README_CN.md`。'),'Source file names in prose must remain accurate');
   const linked=index.match(/\[国际化\]\(([^)]+)\)/)![1];
-  assert.equal(await readFile(resolve(target,'docs',linked),'utf8'),'[源码](../../src/web/main.tsx)');
+  assert.equal(await readFile(resolve(target,'docs',linked),'utf8'),design);
+  assert.deepEqual(await readFile(join(target,asset)),Buffer.from('image fixture'));
+  assert.ok(appFile(asset),'Documentation images must remain accepted by existing update paths');
   assert.ok(appFile('docs/'+linked),'Documentation must remain accepted by existing update paths');
   assert.ok(!(await readdir(target)).includes('codex-drive'));
   const verification=await readFile(join(target,'docs/verification/check.md'),'utf8');
   const verificationLink=verification.match(/\]\(([^)]+)\)/)![1];
-  assert.equal(await readFile(resolve(target,'docs/verification',verificationLink),'utf8'),'[源码](../../src/web/main.tsx)');
+  assert.equal(await readFile(resolve(target,'docs/verification',verificationLink),'utf8'),design);
 });

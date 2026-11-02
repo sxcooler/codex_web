@@ -198,7 +198,7 @@ test('creation context survives navigation and late-created tasks are automatica
  });
  await page.goto('/');await page.getByRole('combobox',{name:'项目',exact:true}).selectOption('native:native-p');await page.getByRole('textbox',{name:'任务',exact:true}).fill('项目任务');
  await page.getByRole('link',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');
- await page.getByRole('button',{name:'＋ 新任务'}).click();await expect(page.getByRole('combobox',{name:'项目',exact:true})).toHaveValue('native:native-p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toHaveValue('项目任务');
+ await page.getByRole('link',{name:'＋ 新任务'}).click();await expect(page.getByRole('combobox',{name:'项目',exact:true})).toHaveValue('native:native-p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toHaveValue('项目任务');
  await page.getByRole('button',{name:'开始任务 →'}).click();await expect.poll(()=>!!finishCreate).toBe(true);expect(sent.projectId).toBe('p');await expect(page.getByRole('textbox',{name:'任务',exact:true})).toBeDisabled();
  await page.getByRole('link',{name:'其他会话',exact:true}).click();await expect(page.locator('h1')).toHaveText('其他会话');finishCreate!();
  await expect.poll(()=>released.includes('/api/sessions/late/release-on-leave')).toBe(true);await expect(page).toHaveURL(/sessions\/other$/);

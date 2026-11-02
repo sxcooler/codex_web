@@ -287,3 +287,17 @@ test('cancellation also stops both legacy full-turn fallback paths',async t=>{
     assert.equal(bodies,1);assert.ok(turns.every(turn=>turn.itemsView==='notLoaded'));
   }
 });
+
+test('earlier-history pagination cannot overwrite the current active turn or its terminal guard',async t=>{
+  const {runtime}=setup(t),state=(runtime as any).state('thread');state.loaded=true;
+  (runtime as any).onNotification({method:'turn/started',params:{threadId:'thread',turn:{id:'active',status:'inProgress',items:[]}}});
+  const gate=Promise.withResolvers<any>();t.mock.method(runtime as any,'readThread',()=>gate.promise);
+  const loading=runtime.history('thread','cursor');
+  (runtime as any).onNotification({method:'item/agentMessage/delta',params:{threadId:'thread',turnId:'active',itemId:'message',delta:'fresh'}});
+  gate.resolve({id:'thread',status:{type:'idle'},turns:[{id:'old',status:'interrupted',items:[]},{id:'active',status:'interrupted',items:[]},{id:'cursor',status:'completed',items:[]}]});
+  const history=await loading;
+  assert.equal(history.turns.find((turn:any)=>turn.id==='old').status,'interrupted');
+  assert.equal(history.turns.find((turn:any)=>turn.id==='active').status,'inProgress');
+  assert.equal(history.turns.find((turn:any)=>turn.id==='active').items[0].text,'fresh');
+  assert.equal(state.activeTurnId,'active');assert.equal(state.completedTurns.has('active'),false);
+});

@@ -1,5 +1,6 @@
 import {test,expect,type Page} from '@playwright/test';
 import {mkdir} from 'node:fs/promises';
+import {extensionPlugin,extensionsFixture} from './extensions-fixture.ts';
 
 const account='a'.repeat(64);
 const field=(value:string|boolean|null,extra:Record<string,unknown>={})=>({userValue:value,effectiveValue:value,origin:{type:'user'},writable:true,reason:null,...extra});
@@ -19,7 +20,7 @@ async function setup(page:Page){
    if(request.method()==='POST'){posts.push(request.postDataJSON());if(fail)return route.fulfill({status:504,json:{error:'保存结果待核实'}});for(const [key,value]of Object.entries(request.postDataJSON().values))fields[key]={...fields[key],userValue:value,effectiveValue:value};version++;}
    data={supported:true,writable:true,userVersion:'v'+version,userFile:'C:/test/.codex/config.toml',fields};if(request.method()==='POST')data={snapshot:data};
   }else if(path==='/api/codex/instructions')data={path:'C:/test/.codex/AGENTS.md',content:'same\nold line\nlast',version:'i1',exists:true,writable:true,overriddenBy:null};
-  else if(path==='/api/codex/plugins')data={supported:true,items:Array.from({length:12},(_,i)=>({key:'p'+i,id:'plugin-'+i,name:'插件 '+i,description:'简短说明，工具能力由当前会话连接状态决定。',enabled:i%2===0,marketplace:'Local',localVersion:'1.0',availability:'AVAILABLE'})),partial:false,errorCount:0,updatedAt:Date.now()};
+  else if(path==='/api/codex/extensions')data=extensionsFixture(Array.from({length:12},(_,i)=>extensionPlugin({key:'p'+i,id:'plugin-'+i,name:'插件 '+i,description:'简短说明，工具能力由当前会话连接状态决定。',enabled:i%2===0,source:'Local',version:'1.0'})));
   else if(path==='/api/account/usage')data=usage;
   else if(path==='/api/settings')data={origin:'http://localhost',appVersion:'test',nodeVersion:'24',workRoot:'C:/test/work',modelSource:{version:'test-cli',executable:'C:/test/codex',readAt:Date.now()},diagnostics:{enabled:true,lastWriteAt:1700000000000,dropped:0,writeFailures:0},runtime:{note:'只读诊断'},webRestart:{available:true,status:'idle'}};
   await route.fulfill({json:data});
@@ -27,6 +28,16 @@ async function setup(page:Page){
  return {posts,errors,fields,fail:()=>fail=true,usage:(value:any)=>usage={...usage,...value,updatedAt:Date.now()}};
 }
 async function screenshot(page:Page,name:string){await mkdir('.local/settings-ux',{recursive:true});await page.screenshot({path:'.local/settings-ux/'+name+'.png'});}
+
+for(const width of [1440,390])for(const locale of ['zh-CN','en'])test(`empty reasoning effort choices are disabled and skipped by keyboard at ${width}px in ${locale}`,async({page})=>{
+ const state=await setup(page);await page.setViewportSize({width,height:900});
+ await page.addInitScript(value=>localStorage.setItem('codex-web:locale:v1',value),locale);
+ await page.route('**/api/models',route=>route.fulfill({json:{data:[{model:'model-a',displayName:'Model A',supportedReasoningEfforts:[]}]}}));
+ await page.goto('/settings?section=configuration');await expect(page.locator('#setting-model')).toHaveValue('model-a');
+ await expect(page.locator('#setting-model_reasoning_effort')).toBeDisabled();
+ await page.locator('#setting-model').focus();await page.keyboard.press('Tab');await expect(page.locator('#setting-permission-preset')).toBeFocused();
+ await screenshot(page,`empty-effort-${width}-${locale}`);expect(state.posts).toEqual([]);expect(state.errors).toEqual([]);
+});
 
 for(const width of [1440,390])test(`usage cards have the same inset in settings and quick dialog at ${width}px`,async({page})=>{
  const state=await setup(page);state.usage({rateLimitResetCredits:{availableCount:'1',credits:[{id:'render-only-credit',title:'额外 Codex 限额',description:'仅用于渲染验证的重置机会。',resetType:'codexRateLimits',status:'available',expiresAt:null}]},resetSupported:true});await page.setViewportSize({width,height:width===390?844:900});await page.goto('/settings?section=usage');
@@ -75,7 +86,7 @@ test('settings switches do not change login and chat input padding',async({page}
 test('mobile drawer Tab cycle includes notification scrolling and dismiss while the drawer stays open',async({page})=>{
  const state=await setup(page);let failed=false;await page.setViewportSize({width:390,height:844});
  await page.route('**/api/sessions?*',route=>route.fulfill(failed?{status:503,json:{error:'同步失败，需要人工检查。'.repeat(150)}}:{json:{data:[],nextCursor:null}}));
- await page.goto('/');await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();const previous=page.getByRole('button',{name:'＋ 新任务',exact:true});await expect(previous).toBeFocused();
+ await page.goto('/');await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();const previous=page.getByRole('link',{name:'＋ 新任务',exact:true});await expect(previous).toBeFocused();
  failed=true;await page.evaluate(()=>{window.dispatchEvent(new Event('offline'));window.dispatchEvent(new Event('online'));});await expect(page.getByRole('alert').filter({hasText:'最近会话同步失败'})).toBeVisible();
  const text=page.locator('.app-notification-text'),close=page.getByRole('button',{name:'关闭会话同步提醒',exact:true});let textReached=false,closeReached=false;
  for(let index=0;index<20;index++){await page.keyboard.press('Tab');textReached||=await text.evaluate(el=>el===document.activeElement);closeReached||=await close.evaluate(el=>el===document.activeElement);}
@@ -104,7 +115,7 @@ test('settings cards use independent scroll, preserve navigation and fit both vi
   await page.setViewportSize({width,height:width===390?844:900});
   for(const section of ['general','configuration','personalization','usage','plugins','web']){
    await page.goto('/settings?section='+section);await expect(page.locator('.settings-card,.usage-group').first()).toBeVisible();
-   await expect(page.locator('.settings-section-title')).toBeVisible();
+   await expect(page.locator(section==='plugins'?'.extensions-heading h2':'.settings-section-title')).toBeVisible();
    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
    expect(await page.locator('.workspace-content').evaluate(el=>el.scrollHeight<=el.clientHeight)).toBe(true);
    await screenshot(page,section+'-'+width);

@@ -29,7 +29,7 @@ test('recent sessions are links and new task settings merge with native defaults
   await link.click();await expect(page).toHaveURL(/\/sessions\/old$/);await expect(link).toHaveAttribute('aria-current','page');
   await model.selectOption('model-b');await expect(effort).toHaveValue('low');
   expect(writes).toHaveLength(0);
-  await page.getByRole('button',{name:'＋ 新任务',exact:true}).click();
+  await page.getByRole('link',{name:'＋ 新任务',exact:true}).click();
   await expect(model).toHaveValue('model-a');
   await model.selectOption('model-b');await effort.selectOption('high');
   await page.getByRole('textbox',{name:'任务',exact:true}).fill('开始');
@@ -39,7 +39,7 @@ test('recent sessions are links and new task settings merge with native defaults
   await expect(page.getByRole('status').filter({hasText:'当前项目配置覆盖了模型或推理强度'})).toBeVisible();
   expect(writes[0]).toEqual({model:'model-b',effort:'high',expectedVersion:'user-v1'});
   expect(created[0]).toMatchObject({model:'model-b',effort:'high'});
-  await page.getByRole('button',{name:'＋ 新任务',exact:true}).click();
+  await page.getByRole('link',{name:'＋ 新任务',exact:true}).click();
   await expect(model).toHaveValue('model-b');
   await expect(model.locator('option[value="model-b"]')).toHaveText('model-b（上一次）');
   await expect(effort.locator('option[value="high"]')).toHaveText('high（上一次）');

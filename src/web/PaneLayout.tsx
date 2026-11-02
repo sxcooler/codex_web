@@ -3,7 +3,7 @@ import {defaultLayout,fitLayout,layoutKey,parseLayout,resizeLayout,type Layout} 
 import {useLocale} from './i18n/LocaleProvider.tsx';
 import {AccountUsageButton,AccountUsageProvider} from './AccountUsage.tsx';
 type Side='left'|'right';
-type PaneState={layout:Layout;total:number;mobile:boolean;drawer:Side|null;leftVisible:boolean;rightVisible:boolean;rightAvailable:boolean;setRightAvailable:(value:boolean)=>void;toggle:(side:Side)=>void;adjust:(side:Side,delta:number,base?:Layout)=>void;save:()=>void;reset:()=>void;composerCollapsed:boolean;setComposerCollapsed:(value:boolean)=>void};
+type PaneState={layout:Layout;total:number;mobile:boolean;mobileInput:boolean;drawer:Side|null;leftVisible:boolean;rightVisible:boolean;rightAvailable:boolean;setRightAvailable:(value:boolean)=>void;toggle:(side:Side)=>void;adjust:(side:Side,delta:number,base?:Layout)=>void;save:()=>void;reset:()=>void;composerCollapsed:boolean;setComposerCollapsed:(value:boolean)=>void};
 const Context=createContext<PaneState>(null!);
 const visibilityKey='codex-web:panels:v1';
 export const usePanes=()=>useContext(Context);
@@ -12,18 +12,21 @@ export function PaneLayout({children,className}:{children:ReactNode;className:st
   const [composerCollapsed,setComposerCollapsed]=useState(()=>{try{const v=JSON.parse(localStorage.getItem(visibilityKey)??'null');return v?.version===1&&v.composerCollapsed===true;}catch{return false;}});
   const [layout,setLayout]=useState(()=>{try{return parseLayout(localStorage.getItem(layoutKey))??defaultLayout;}catch{return defaultLayout;}});
   const [shown,setShown]=useState(()=>{try{const v=JSON.parse(localStorage.getItem(visibilityKey)??'null');if(v?.version===1&&typeof v.left==='boolean'&&typeof v.right==='boolean')return {left:v.left as boolean,right:v.right as boolean};}catch{}return {left:true,right:true};});
-  const [mobile,setMobile]=useState(()=>matchMedia('(max-width:1000px)').matches),[drawer,setDrawer]=useState<Side|null>(null);
+  const [mobile,setMobile]=useState(()=>matchMedia('(max-width:1280px)').matches),[drawer,setDrawer]=useState<Side|null>(null);
+  // 抽屉扩展到平板宽度时，保留原有输入快捷键和聚焦规则。
+  const [mobileInput,setMobileInput]=useState(()=>matchMedia('(max-width:1000px)').matches);
   const current=useRef(layout);current.current=layout;
   const [width,setWidth]=useState(window.innerWidth),[rightAvailable,setRightAvailable]=useState(false),root=useRef<HTMLDivElement>(null),lastDrawer=useRef<Side|null>(null);
   const leftVisible=mobile?drawer==='left':shown.left,rightVisible=rightAvailable&&(mobile?drawer==='right':shown.right);
   useEffect(()=>{const observer=new ResizeObserver(entries=>setWidth(entries[0].contentRect.width));if(root.current)observer.observe(root.current);return()=>observer.disconnect();},[]);
-  useEffect(()=>{const media=matchMedia('(max-width:1000px)'),change=()=>{setMobile(media.matches);setDrawer(null);};media.addEventListener('change',change);return()=>media.removeEventListener('change',change);},[]);
+  useEffect(()=>{const media=matchMedia('(max-width:1280px)'),change=()=>{setMobile(media.matches);setDrawer(null);};media.addEventListener('change',change);return()=>media.removeEventListener('change',change);},[]);
+  useEffect(()=>{const media=matchMedia('(max-width:1000px)'),change=()=>setMobileInput(media.matches);media.addEventListener('change',change);return()=>media.removeEventListener('change',change);},[]);
   useEffect(()=>{try{localStorage.setItem(visibilityKey,JSON.stringify({version:1,...shown,composerCollapsed}));}catch{}},[shown,composerCollapsed]);
   useEffect(()=>{if(!rightAvailable)setDrawer(value=>value==='right'?null:value);},[rightAvailable]);
   useEffect(()=>{const close=()=>setDrawer(null);window.addEventListener('popstate',close);return()=>window.removeEventListener('popstate',close);},[]);
   useEffect(()=>{
     const previous=lastDrawer.current;lastDrawer.current=drawer;
-    const frame=requestAnimationFrame(()=>{if(drawer)root.current?.querySelector<HTMLElement>(drawer==='left'?'.sidebar button':'.git-panel button')?.focus();else if(previous)root.current?.querySelector<HTMLElement>('[data-panel-toggle="'+previous+'"]')?.focus();});
+    const frame=requestAnimationFrame(()=>{if(drawer)root.current?.querySelector<HTMLElement>(drawer==='left'?'.sidebar a[href],.sidebar button':'.git-panel button')?.focus();else if(previous)root.current?.querySelector<HTMLElement>('[data-panel-toggle="'+previous+'"]')?.focus();});
     if(!drawer)return()=>cancelAnimationFrame(frame);
     const keyboard=(event:KeyboardEvent)=>{if(event.defaultPrevented||document.querySelector('dialog:modal'))return;if(event.key==='Escape'){event.preventDefault();setDrawer(null);}else if(event.key==='Tab'){
       const panel=root.current?.querySelector(drawer==='left'?'.sidebar':'.git-panel');
@@ -36,7 +39,7 @@ export function PaneLayout({children,className}:{children:ReactNode;className:st
   const toggle=useCallback((side:Side)=>{if(mobile)setDrawer(value=>value===side?null:side);else setShown(value=>({...value,[side]:!value[side]}));},[mobile]);
   const adjust=(side:Side,delta:number,base=current.current)=>{const next=resizeLayout(base,total,side,delta,rightVisible,leftVisible);current.current=next;setLayout(next);};
   const reset=()=>{current.current=defaultLayout;setLayout(defaultLayout);setShown({left:true,right:true});setDrawer(null);try{localStorage.removeItem(layoutKey);}catch{}};
-  return <Context.Provider value={{layout,total,mobile,drawer,leftVisible,rightVisible,rightAvailable,setRightAvailable,toggle,adjust,save,reset,composerCollapsed,setComposerCollapsed}}><AccountUsageProvider><div ref={root} className={className} data-left-open={leftVisible} data-right-open={rightVisible} data-drawer={drawer??''} style={{'--left-width':`${left}px`,'--right-width':`${right}px`} as CSSProperties}>{children}{mobile&&drawer?<button className="drawer-backdrop" aria-label={t('app.pane.close')} onClick={()=>setDrawer(null)}/>:null}</div></AccountUsageProvider></Context.Provider>;
+  return <Context.Provider value={{layout,total,mobile,mobileInput,drawer,leftVisible,rightVisible,rightAvailable,setRightAvailable,toggle,adjust,save,reset,composerCollapsed,setComposerCollapsed}}><AccountUsageProvider><div ref={root} className={className} data-left-open={leftVisible} data-right-open={rightVisible} data-drawer={drawer??''} style={{'--left-width':`${left}px`,'--right-width':`${right}px`} as CSSProperties}>{children}{mobile&&drawer?<button className="drawer-backdrop" aria-label={t('app.pane.close')} onClick={()=>setDrawer(null)}/>:null}</div></AccountUsageProvider></Context.Provider>;
 }
 export function PaneToolbar({children}:{children?:ReactNode}){
   const panes=usePanes(),{t}=useLocale();

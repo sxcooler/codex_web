@@ -51,7 +51,25 @@ const sourcePositionPlugin=()=>function visit(node:MarkdownNode){
  node.children?.forEach(visit);
 };
 const safeRemote=(url:string)=>{if(url.startsWith('#')&&linkFragment(url))return '#'+encodeURIComponent(linkFragment(url));try{const parsed=new URL(url);return ['http:','https:'].includes(parsed.protocol)?parsed.href:'';}catch{return '';}};
-function Copy({text,label}:{text:string;label:string}){const {text:displayText}=useLocale();const [feedback,setFeedback]=useState<UiText>('');useEffect(()=>setFeedback(''),[text]);return <span className="markdown-copy"><button type="button" className="quiet" onClick={async()=>{try{await navigator.clipboard.writeText(text);setFeedback(msg('panels.copy.success'));}catch{setFeedback(msg('panels.copy.select'));}}}>{label}</button><span role="status">{displayText(feedback)}</span></span>;}
+function Copy({text,label}:{text:string;label:string}){
+ const {text:displayText}=useLocale();
+ const [feedback,setFeedback]=useState<UiText>(''),[pending,setPending]=useState(false),busy=useRef(false),request=useRef(0);
+ useEffect(()=>{setFeedback('');setPending(false);busy.current=false;return()=>{request.current++;};},[text]);
+ const copy=async()=>{
+  if(busy.current)return;
+  busy.current=true;const attempt=++request.current;
+  setPending(true);setFeedback(msg('panels.copy.pending'));
+  try{
+   await navigator.clipboard.writeText(text);
+   if(request.current===attempt)setFeedback(msg('panels.copy.success'));
+  }catch{
+   if(request.current===attempt)setFeedback(msg('panels.copy.select'));
+  }finally{
+   if(request.current===attempt){busy.current=false;setPending(false);}
+  }
+ };
+ return <span className="markdown-copy"><button type="button" className="quiet" disabled={pending} aria-busy={pending} onClick={()=>void copy()}>{label}</button><span role="status">{displayText(feedback)}</span></span>;
+}
 function MarkdownImage({src,alt,title,width,height}:ComponentProps<'img'>){const {t}=useLocale();const [failed,setFailed]=useState(false);useEffect(()=>setFailed(false),[src]);return failed?<span className="muted" role="status">{t('panels.markdown.imageFailed',alt||t('panels.markdown.imageReason'))}</span>:<img className="markdown-image" src={src} alt={alt??''} title={title} width={width} height={height} style={height?{height}:undefined} loading="lazy" decoding="async" onError={()=>setFailed(true)}/>;}
 function MarkdownImageNode(props:ComponentProps<'img'>|Record<string,unknown>){return <MarkdownImage {...props as ComponentProps<'img'>}/>;}
 function MarkdownCode(props:ComponentProps<'code'>&{node?:MarkdownNode;'data-block'?:string}){const {t}=useLocale();const incomplete=useIsCodeFenceIncomplete();if(!('data-block' in props))return <code>{props.children}</code>;const text=String(props.children??''),language=/language-([^\s]+)/.exec(props.className??'')?.[1]??'text';return <div data-source-start={props.node?.position?.start.line} data-source-end={props.node?.position?.end.line}>{language==='mermaid'?<MermaidBlock text={text} incomplete={incomplete}><Copy text={text} label={t('panels.markdown.copySource')}/></MermaidBlock>:<CodeBlock key={text} code={text} language={language} isIncomplete={incomplete} lineNumbers={false}><Copy text={text} label={t('panels.markdown.copyCode')}/></CodeBlock>}</div>;}

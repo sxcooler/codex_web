@@ -5,6 +5,12 @@
 - 讨论阶段可以进行必要的只读检查；修改代码、配置、依赖、运行状态，以及提交、推送、发布等实施操作，应在用户明确授权的范围内进行。
 - 用户已明确确认的范围可持续执行，不必反复请求同一授权；新增范围需另行确认。
 
+## 文档与临时目录
+
+- 架构与设计文档统一放在 `docs/design/`，相关图片放在 `docs/assets/`；计划、规格和报告沿用 `docs/superpowers/` 下的对应目录。
+- 不得创建或重新生成仓库根目录的 `codex-drive/`、`.superpowers/`；技能中的默认输出目录与此冲突时，以本规则为准。
+- 临时协作记录、调试日志等放在被忽略的 `.local/` 下；Playwright 自动生成的 `.playwright-mcp/` 也不纳入版本控制。
+
 ## Windows Web 服务重启
 
 - 调用 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/restart-server.ps1 -RequireIdle`：自动预检交互式桌面会话，并安排 90 秒后重启；执行前检查活动任务，有任务则取消。只验证、不重启时加 `-CheckOnly`。

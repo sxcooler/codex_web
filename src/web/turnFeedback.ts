@@ -5,7 +5,8 @@ import {validItemTime} from '../codex/itemTimes.ts';
 type Turn=Record<string,any>;
 type Outcome={kind:'failed'|'interrupted'|'warning';title:string;reason?:string;detail:string};
 
-export function turnOutcome(turn:Turn,locale:Locale='zh-CN'):Outcome|undefined{
+export function turnOutcome(turn:Turn,locale:Locale='zh-CN',activeTurnId?:string|null):Outcome|undefined{
+  if(activeTurnId&&turn.id===activeTurnId&&['completed','interrupted','failed'].includes(turn.status))return undefined;
   const t=createTranslator(locale);
   if(turn.status==='interrupted')return {kind:'interrupted',title:t('session.feedback.interrupted'),detail:t('session.feedback.stopped')};
   if(turn.status!=='failed')return turn.error?{kind:'warning',title:t('session.feedback.warning'),detail:t('session.feedback.warningDetail')}:undefined;

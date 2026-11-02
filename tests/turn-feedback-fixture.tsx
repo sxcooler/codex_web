@@ -1,9 +1,11 @@
 import {createRoot} from 'react-dom/client';
 import {LocaleProvider,useLocale} from '../src/web/i18n/LocaleProvider.tsx';
 import {PaneLayout} from '../src/web/PaneLayout.tsx';
+import {drafts} from '../src/web/drafts.ts';
 import {Session} from '../src/web/SessionView.tsx';
 import '../src/web/style.css';
 const changed=async()=>{};
+const initial=(window as any).fixtureInitial;if(initial)drafts.set('i18n-test',{initialSnapshot:initial,text:'Preserved history draft',settings:{},attachments:[]});
 function Fixture(){
  const {setPreference}=useLocale();
  return <div style={{height:'100dvh',display:'flex',flexDirection:'column',overflow:'hidden'}}>

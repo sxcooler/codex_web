@@ -21,6 +21,7 @@ async function setup(page:Page){
     else if(path==='/api/projects'||path==='/api/projects/refresh')data={projects:[{id:'one',name:'项目一',path:'C:/work/One'},{id:'two',name:'项目二',path:'C:/work/Two'}],workRoot:'C:/work'};
     else if(path==='/api/models')data={data:[]};
     else if(path==='/api/permission-modes')data={modes:[]};
+    else if(path==='/api/codex/settings')data={supported:true,writable:false,fields:Object.fromEntries(['model','model_reasoning_effort','approval_policy','approvals_reviewer','sandbox_mode','workspaceNetworkAccess','web_search','service_tier','memoriesEnabled','generateMemories','useMemories','allowExternalMemory'].map(key=>[key,{userValue:null,effectiveValue:null,writable:false}]))};
     else if(path==='/api/sessions/one')data={thread:{id:'one',name:'普通会话',turns:[]},phase:'IDLE',pending:[],epoch:'test',revision:0,syncCursor:'test:0'};
     else if(path.endsWith('/status'))data={resync:false};
     else if(path==='/api/sessions'){
@@ -34,7 +35,29 @@ async function setup(page:Page){
   });
   return state;
 }
-async function openSidebar(page:Page,width:number){if(width<1001)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();}
+async function openSidebar(page:Page,width:number){if(width<=1280)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();}
+
+for(const width of [390,1440])test(`sidebar navigation links preserve browser actions and keyboard routing at ${width}px`,async({page,context})=>{
+  const state=await setup(page);await page.setViewportSize({width,height:900});await page.goto('/?fixture=links');await openSidebar(page,width);
+  const sidebar=page.locator('.sidebar'),newTask=sidebar.getByRole('link',{name:'＋ 新任务',exact:true}),settings=sidebar.getByRole('link',{name:/设置$/});
+  await expect(newTask).toHaveAttribute('href','/');await expect(settings).toHaveAttribute('href','/settings');
+  await expect(sidebar.getByRole('button',{name:/退出$/})).toBeVisible();
+  if(width<=1280)await expect(newTask).toBeFocused();
+  for(const modifier of ['ctrlKey','metaKey','shiftKey','altKey']){
+    const prevented=await settings.evaluate((element,modifier)=>{
+      let prevented=false;window.addEventListener('click',event=>{prevented=event.defaultPrevented;event.preventDefault();},{once:true});
+      element.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,[modifier]:true}));return prevented;
+    },modifier);
+    expect(prevented).toBe(false);await expect(page).toHaveURL(/\?fixture=links$/);
+  }
+  const popupPromise=context.waitForEvent('page');await settings.click({button:'middle'});const popup=await popupPromise;
+  await popup.waitForURL('**/settings');await popup.close();await expect(page).toHaveURL(/\?fixture=links$/);
+  await settings.focus();await page.keyboard.press('Enter');await expect(page).toHaveURL(/\/settings$/);
+  if(width<=1280){await expect(page.locator('.shell')).toHaveAttribute('data-drawer','');await openSidebar(page,width);await expect(newTask).toBeFocused();}
+  await newTask.focus();await page.keyboard.press('Enter');await expect(page).toHaveURL(/\/$/);
+  if(width<=1280)await expect(page.locator('.shell')).toHaveAttribute('data-drawer','');
+  expect(state.errors).toEqual([]);
+});
 
 for(const width of [1280,390])test(`sidebar search, grouping, pagination and project picker at ${width}px`,async({page})=>{
   const state=await setup(page);await page.setViewportSize({width,height:900});await page.goto('/');await openSidebar(page,width);
@@ -60,7 +83,7 @@ for(const width of [1280,390])test(`sidebar search, grouping, pagination and pro
   expect(await sidebar.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.reload();await openSidebar(page,width);await expect(grouping).toHaveValue('project');
   await page.evaluate(()=>{localStorage.setItem('codex-web:session-grouping:v2','flat');window.dispatchEvent(new StorageEvent('storage',{key:'codex-web:session-grouping:v2',newValue:'flat'}));});await expect(grouping).toHaveValue('flat');
-  await sidebar.getByRole('button',{name:'＋ 新任务'}).click();
+  await sidebar.getByRole('link',{name:'＋ 新任务'}).click();
   await page.getByRole('combobox',{name:'项目',exact:true}).selectOption('workspace:two');await page.getByRole('button',{name:'刷新项目'}).click();await expect(page.getByRole('combobox',{name:'项目',exact:true})).toHaveValue('workspace:two');
   expect(state.posts.filter(path=>path!=='/api/auth/renew')).toEqual(['/api/projects/refresh']);expect(state.errors).toEqual([]);
   await page.goto('/sessions/one');await openSidebar(page,width);await expect.poll(()=>page.evaluate(()=>(window as any).__sources.length)).toBe(1);

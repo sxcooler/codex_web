@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as sync from '../src/web/sessionSync.ts';
+const hasActiveTurnConflict=(snapshot:any)=>{assert.equal(typeof sync.hasActiveTurnConflict,'function');return sync.hasActiveTurnConflict(snapshot);};
 import {applyChange,mergeSnapshot,prependHistory} from '../src/web/sessionSync.ts';
 const baseline=()=>({thread:{id:'thread',turns:[{id:'old',status:'completed',items:[{id:'history',type:'agentMessage',text:'old history'}]},{id:'turn',status:'inProgress',items:[{id:'item',type:'agentMessage',text:'hello'}]}]},epoch:'epoch',revision:5,phase:'RUNNING',activeTurnId:'turn',pending:[]});
 const event=(revision=6,patch:any={})=>({id:'epoch:'+revision,threadId:'thread',revision,patch});
@@ -19,7 +21,7 @@ test('snapshot overlap and repeated events do not duplicate text; gaps and resta
 test('authoritative item completion replaces text; late deltas cannot modify it',()=>{const finished=applyChange(baseline(),event(6,{item:{turnId:'turn',item:{id:'item',type:'agentMessage',text:'Final corrected'},completed:true}}))!;assert.equal(finished.thread.turns[1].items[0].text,'Final corrected');const late=applyChange(finished,event(7,delta(15,' late')))!;assert.equal(late.thread.turns[1].items[0].text,'Final corrected');const completed=applyChange(late,event(8,{turn:{id:'turn',status:'completed',items:[]},state:{phase:'IDLE',activeTurnId:null,pending:[],error:null}}))!;assert.equal(completed.thread.turns[1].items.length,1);assert.equal(completed.phase,'IDLE');assert.equal(completed.activeTurnId,null);});
 test('new turn and command output merge by id; malformed events require baseline',()=>{const before=baseline();const next=applyChange(before,event(6,{delta:{turnId:'new',itemId:'cmd',field:'aggregatedOutput',offset:0,text:'output'},state:{phase:'RUNNING',activeTurnId:'new'}}))!;assert.equal(next.thread.turns[2].items[0].aggregatedOutput,'output');assert.equal(next.thread.turns[2].items[0].type,'commandExecution');assert.equal(applyChange(before,event(6)),null);assert.equal(applyChange(before,event(6,{delta:{turnId:'turn',itemId:'item',field:'evil',offset:0,text:'x'}})),null);});
 
-test('late item start cannot overwrite completed snapshot history',()=>{const before=baseline();before.thread.turns[1].status='completed';const next=applyChange(before,event(6,{item:{turnId:'turn',item:{id:'item',type:'agentMessage',text:''},completed:false}}))!;assert.equal(next.thread.turns[1].items[0].text,'hello');});
+test('late item start cannot overwrite completed snapshot history',()=>{const before=baseline();before.thread.turns[1].status='completed';before.activeTurnId='new';const next=applyChange(before,event(6,{item:{turnId:'turn',item:{id:'item',type:'agentMessage',text:''},completed:false}}))!;assert.equal(next.thread.turns[1].items[0].text,'hello');});
 
 test('reasoning parts keep independent offsets, immutable snapshots and terminal text',()=>{
  const patch=(index:number,offset:number,text:string)=>({delta:{turnId:'turn',itemId:'reason',field:'summary',index,offset,text}});
@@ -39,4 +41,34 @@ test('history prepend keeps newer live messages, cursor and attachment reference
   assert.equal(next.inputAnswers['old:question'].status,'accepted');
   assert.equal(next.thread.turns[2],before.thread.turns[1]);assert.equal(next.syncCursor,before.syncCursor);assert.equal(next.phase,before.phase);assert.equal(next.attachmentPreviews[0].url,'current');assert.equal(next.attachmentPreviews.length,2);
   assert.equal(prependHistory(before,page,'expired'),before);assert.throws(()=>prependHistory(before,{...page,nextCursor:'old'},'old'),/历史分页无效/);
+});
+
+
+test('same-turn terminal and fresh active evidence require resync without advancing the baseline',()=>{
+ for(const status of ['completed','interrupted','failed']){
+  const before:any=baseline();before.thread.turns[1].status=status;before.activeTurnId=null;before.phase='IDLE';
+  for(const patch of [
+   {turn:{id:'turn',status:'inProgress',items:[]},state:{phase:'RUNNING',activeTurnId:'turn'}},
+   {state:{phase:'RUNNING',activeTurnId:'turn'}},
+   {...delta(5,' new'),state:{phase:'RUNNING',activeTurnId:'turn'}},
+  ])assert.equal(applyChange(before,event(6,patch)),null);
+  assert.equal(before.revision,5);assert.equal(before.thread.turns[1].status,status);
+ }
+});
+test('full snapshots detect current terminal conflict but allow a different active turn',()=>{
+ const before:any=baseline();before.thread.turns[1].status='interrupted';
+ assert.equal(hasActiveTurnConflict(before),true);
+ assert.equal(hasActiveTurnConflict({...before,activeTurnId:'new'}),false);
+ assert.equal(hasActiveTurnConflict({...before,activeTurnId:null,phase:'IDLE'}),false);
+ assert.equal(hasActiveTurnConflict({...baseline(),syncConflict:true}),true);
+});
+test('confirmed historical terminals resist late starts and deltas while newer turns keep streaming',()=>{
+ for(const status of ['completed','interrupted','failed']){
+  const before:any=baseline();before.thread.turns[0].status=status;
+  const next=applyChange(before,event(6,{turn:{id:'old',status:'inProgress',items:[]}}))!;
+  assert.equal(next.thread.turns[0].status,status);
+  const late=applyChange(next,event(7,{delta:{turnId:'old',itemId:'history',field:'text',offset:11,text:' late'}}))!;
+  assert.equal(late.thread.turns[0].items[0].text,'old history');
+  assert.equal(applyChange(late,event(8,delta(5,' next')))!.thread.turns[1].items[0].text,'hello next');
+ }
 });

@@ -7,7 +7,7 @@ param(
     [switch]$Diagnostics,
     [switch]$JsonOutput,
     [string]$ForceScopeFile,
-    [ValidateRange(90, 3600)][int]$DelaySeconds = 90,
+    [ValidateRange(5, 3600)][int]$DelaySeconds = 90,
     [switch]$Worker,
     [string]$RequestFile
 )

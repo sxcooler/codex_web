@@ -1,6 +1,6 @@
 # 活动检查与单弹窗重启验收
 
-日期：2026-10-22。对应 [spec](../../codex-drive/specs/2026-10-22-restart-activity-and-force.arch.md) 与 [实施计划](../superpowers/plans/2026-10-22-restart-activity-and-force.md)。
+日期：2026-10-22。对应 [spec](../design/2026-10-22-restart-activity-and-force.arch.md) 与 [实施计划](../superpowers/plans/2026-10-22-restart-activity-and-force.md)。
 
 ## 交付行为
 

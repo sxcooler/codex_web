@@ -52,13 +52,14 @@ for(const forced of [false,true])test(`restart scheduling coalesces requests, su
     await mkdir(data, {recursive:true}); await mkdir(join(root, 'scripts/windows'), {recursive:true});
     await writeFile(join(data, 'server-control.json'), JSON.stringify({pid:process.pid}));
     // Only replace the OS task launcher. No test may schedule or stop a real service.
-    await writeFile(join(root, 'scripts/windows/restart-server.ps1'), `param([switch]$RequireIdle,[switch]$JsonOutput,[string]$ForceScopeFile)
+    await writeFile(join(root, 'scripts/windows/restart-server.ps1'), `param([switch]$RequireIdle,[switch]$JsonOutput,[string]$ForceScopeFile,[int]$DelaySeconds)
 if(-not $RequireIdle -or -not $JsonOutput){throw 'Unsafe launch flags'}
+if($DelaySeconds -ne 5){throw 'Web restart must wait five seconds after preflight'}
 $data=Join-Path $PSScriptRoot '../../.local/web'
 if($ForceScopeFile){$scope=Get-Content -LiteralPath $ForceScopeFile -Raw | ConvertFrom-Json;if($scope.epoch -ne 'approved-native' -or $scope.sessions[0].turnId -ne 'approved-turn'){throw 'Wrong scope'};$scope | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $data 'scope-observed.json') -Encoding UTF8}
 Add-Content -LiteralPath (Join-Path $data 'calls') -Value 'launch'
 Start-Sleep -Milliseconds 100
-@{scheduledAt=(Get-Date).AddSeconds(90).ToUniversalTime().ToString('o');file='CodexWeb-Restart-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json'} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $data 'restart-latest.json') -Encoding UTF8
+@{scheduledAt=(Get-Date).AddSeconds($DelaySeconds).ToUniversalTime().ToString('o');file='CodexWeb-Restart-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json'} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $data 'restart-latest.json') -Encoding UTF8
 `);
     const controller = webRestart(root);
     const scope=forced?{epoch:'approved-native',sessions:[{threadId:'approved-task',turnId:'approved-turn'}]}:undefined;

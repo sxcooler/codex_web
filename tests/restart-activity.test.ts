@@ -50,6 +50,51 @@ test('confirmed terminal systemError permits restart while keeping the native hi
  assert.equal((await (runtime as any).call('fixture/stats',{})).unsubscribes,0);
 });
 
+for(const existing of [false,true])test(`terminal systemError subagent permits restart with notification-only state ${existing}`,async t=>{
+ const {runtime}=setup(t);await runtime.models();
+ const thread={id:'finished-child',parentThreadId:'parent',turns:[{id:'done',status:'failed',items:[],error:{message:'original error'}}]};
+ await native(runtime,thread.id,'systemError',thread);
+ if(existing){
+  (runtime as any).onNotification({method:'thread/started',params:{thread}});
+  (runtime as any).onNotification({method:'thread/status/changed',params:{threadId:thread.id,status:{type:'systemError'}}});
+ }
+ const state=(runtime as any).states.get(thread.id);assert.equal(state?.loaded,existing?false:undefined);
+ const server=(runtime as any).server,request=server.request.bind(server),methods:string[]=[];
+ t.mock.method(server,'request',(method:string,...args:any[])=>{methods.push(method);return request(method,...args);});
+ const report=await runtime.inspectRestart();
+ assert.equal(report.complete,true);assert.equal(report.canRestart,true);assert.deepEqual(report.sessions,[]);
+ await runtime.assertNativeIdle();
+ assert.strictEqual((runtime as any).states.get(thread.id),state);assert.equal(state?.loaded,existing?false:undefined);
+ const original=await server.request('thread/read',{threadId:thread.id,includeTurns:true});
+ assert.equal(original.thread.status.type,'systemError');assert.equal(original.thread.turns[0].error.message,'original error');
+ assert.ok(methods.every(method=>['thread/loaded/list','thread/read','thread/turns/list'].includes(method)),'inspection must not resume, unload or interrupt native work');
+});
+
+for(const condition of ['ordinary-unowned','empty-history','native-active','local-active','pending','external-writer','activity-change','state-replaced','new-state'])test(`terminal subagent restart exception stays closed for ${condition}`,async t=>{
+ const {runtime}=setup(t);await runtime.models();
+ await native(runtime,'uncertain-child','systemError',{...(condition==='ordinary-unowned'?{}:{parentThreadId:'parent'}),turns:condition==='empty-history'?[]:[{id:'done',status:condition==='native-active'?'inProgress':'completed',items:[]}]});
+ const state=condition==='new-state'?undefined:(runtime as any).state('uncertain-child');
+ if(state){
+  state.nativeStatus={type:'systemError'};
+  if(condition==='local-active')state.activeTurnId='new-turn';
+  if(condition==='pending')state.pending.set('ask',{method:'item/tool/requestUserInput',turnId:'done'});
+  if(condition==='external-writer')state.externalWriter=true;
+ }
+ const server=(runtime as any).server,request=server.request.bind(server);
+ t.mock.method(server,'request',async(method:string,...args:any[])=>{
+  const result=await request(method,...args);
+  if(method==='thread/turns/list'){
+   if(condition==='activity-change')state.activityRevision++;
+   if(condition==='state-replaced')(runtime as any).states.delete('uncertain-child');
+   if(condition==='state-replaced'||condition==='new-state')(runtime as any).state('uncertain-child');
+  }
+  return result;
+ });
+ const report=await runtime.inspectRestart();
+ assert.equal(report.canRestart,false);assert.equal(report.canForce,false);assert.equal(report.complete,false);
+ assert.ok(report.issues.some(issue=>issue.threadId==='uncertain-child'));
+});
+
 for(const condition of ['empty-history','external-writer'])test(`systemError inspection stays closed for ${condition}`,async t=>{
  const {runtime}=setup(t);await runtime.models();
  await native(runtime,'uncertain','systemError',{turns:condition==='empty-history'?[]:[{id:'done',status:'failed',items:[]}]});

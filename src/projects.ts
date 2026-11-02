@@ -333,8 +333,8 @@ export class Projects {
     return { text, staged, untrackedIncluded: false };
   }
 
-  async #safePath(id: string, value: string, file: boolean|null = false) {
-    const project = await this.resolve(id);
+  async #safePath(id: string|undefined, value: string, file: boolean|null = false) {
+    const project = id===undefined ? {id:'',name:basename(this.root),path:this.root} : await this.resolve(id);
     this.#validateRelative(value);
     this.#checkVisible(value.split(sep).join('/'));
     const requested = value ? join(project.path, value) : project.path;
@@ -364,7 +364,7 @@ export class Projects {
   }
   async #safeGitPath(id:string,value:string){const project=await this.resolve(id);this.#validateRelative(value);const rel=value.split(sep).join('/');const parent=await realpath(dirname(join(project.path,rel))).catch(()=>{throw problem('Parent directory not found',404)});const inside=relative(await realpath(project.path),parent);if(inside.startsWith(`..${sep}`)||inside==='..'||isAbsolute(inside))throw problem('Path escapes project',403);return {project,rel};}
 
-  async listFiles(id: string, directory = '') {
+  async listFiles(id: string|undefined, directory = '') {
     const { target, rel } = await this.#safePath(id, directory, false);
     this.#checkVisible(rel);
     const files: { path: string; type: 'file'|'directory'; size: number }[] = [];
@@ -379,11 +379,12 @@ export class Projects {
     return { files: files.sort((a,b) => a.path.localeCompare(b.path)) };
   }
 
-  async readImage(id: string, path: string, revision?: string, repository = '') {
+  async readImage(id: string|undefined, path: string, revision?: string, repository = '') {
+    if(id===undefined&&(revision!==undefined||repository))throw problem('Root file previews do not support Git versions');
     const limit = 20 * 1024 * 1024;
     let bytes: Buffer;
     if (revision !== undefined) {
-      const project = await this.#repository(await this.resolve(id),repository), rel = this.#historyPath(path);
+      const project = await this.#repository(await this.resolve(id!),repository), rel = this.#historyPath(path);
       if (revision !== 'index') {
         this.#historyCommit(revision);
         const commit = (await git(project.path, ['rev-parse','--verify',revision+'^{commit}']).catch(()=>'')).trim();
@@ -416,12 +417,26 @@ export class Projects {
     } catch { throw problem('Image is invalid, unsupported or exceeds 40 megapixels', 415); }
   }
 
-  async fileEntry(id:string,path:string) {
+  async readRawImage(id:string|undefined,path:string) {
+    const {target,rel}=await this.#safePath(id,path,true);this.#checkVisible(rel);
+    const limit=20*1024*1024;
+    if((await lstat(target)).size>limit)throw problem('Image exceeds 20 MiB',413);
+    const bytes=await this.#readBounded(target,limit);
+    if(bytes.length>limit)throw problem('Image exceeds 20 MiB',413);
+    try {
+      const image=sharp(bytes,{limitInputPixels:40_000_000,failOn:'error'}),metadata=await image.metadata();
+      if(!['png','jpeg'].includes(metadata.format??''))throw new Error('Unsupported original image');
+      await image.stats();
+      return {bytes,type:metadata.format==='png'?'image/png':'image/jpeg'};
+    } catch {throw problem('Original image must be a valid PNG or JPEG within 40 megapixels',415);}
+  }
+
+  async fileEntry(id:string|undefined,path:string) {
     const {target,rel}=await this.#safePath(id,path,null);
     return {path:rel,type:(await lstat(target)).isDirectory()?'directory':'file'};
   }
 
-  async readFile(id: string, path: string) {
+  async readFile(id: string|undefined, path: string) {
     const { project, target, rel } = await this.#safePath(id, path, true);
     this.#checkVisible(rel);
     const info = await lstat(target); const bytes = await this.#readBounded(target,MAX_VIEW_BYTES);
@@ -436,7 +451,7 @@ export class Projects {
 
   #checkVisible(rel:string){if(sensitivePath(rel))throw problem('Sensitive file is not readable',403);}
   async #readBounded(path:string,maxBytes:number){const handle=await open(path,'r');try{const bytes=Buffer.allocUnsafe(maxBytes+1);const {bytesRead}=await handle.read(bytes,0,bytes.length,0);return bytes.subarray(0,bytesRead);}finally{await handle.close();}}
-  async readReportFile(id:string,path:string,maxBytes:number){const {project,target,rel}=await this.#safePath(id,path,true);this.#checkVisible(rel);const info=await lstat(target);if(info.size>maxBytes)throw problem('Report exceeds size limit',413);return {path:rel,bytes:await this.#readBounded(target,maxBytes),mtimeMs:info.mtimeMs};}
+  async readReportFile(id:string,path:string,maxBytes:number){const {project,target,rel}=await this.#safePath(id,path,true);this.#checkVisible(rel);const info=await lstat(target);if(info.size>maxBytes)throw problem('Report exceeds size limit',413);const bytes=await this.#readBounded(target,maxBytes);if(bytes.length>maxBytes)throw problem('Report exceeds size limit',413);return {path:rel,bytes,mtimeMs:info.mtimeMs};}
 
   async #revision(projectPath: string) { try { return (await git(projectPath,['rev-parse','HEAD'])).trim(); } catch { return null; } }
 

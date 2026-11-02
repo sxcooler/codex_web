@@ -8,7 +8,7 @@
 
 **Tech Stack:** React 19、TypeScript、Vite、原生 Intl、Node test、Playwright；不新增运行依赖。
 
-**Spec:** [国际化架构方案](../../../codex-drive/specs/2026-10-14-internationalization.arch.md)。用户已授权按推荐选项实施并要求先落 plan；本计划先保存，再执行。
+**Spec:** [国际化架构方案](../../design/2026-10-14-internationalization.arch.md)。用户已授权按推荐选项实施并要求先落 plan；本计划先保存，再执行。
 
 ## Global Constraints
 

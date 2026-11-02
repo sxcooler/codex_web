@@ -26,7 +26,7 @@ const server=await createServer({...viteConfig,configFile:false,cacheDir:'.local
  if(path.endsWith('/git/files'))return json(res,{files:[]});
  return json(res,{});
  });}}]});await server.listen();
-const browser=await chromium.launch({channel:'chrome',headless:true}),context=await browser.newContext({locale:'zh-CN',viewport:{width:1280,height:900}}),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+const browser=await chromium.launch({channel:'chrome',headless:true}),context=await browser.newContext({locale:'zh-CN',viewport:{width:1440,height:900}}),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
 const loading=new Set();page.on('request',request=>loading.add(request.url()));for(const event of ['requestfinished','requestfailed'])page.on(event,request=>loading.delete(request.url()));
 await page.addInitScript(()=>{window.EventSource=class extends EventTarget{constructor(){super();window.__stream=this;queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};});
 const origin=`http://127.0.0.1:${server.httpServer.address().port}`,until=async(check,msg,timeout=8000)=>{let end=Date.now()+timeout;while(!await check()){assert.ok(Date.now()<end,msg);await new Promise(r=>setTimeout(r,25));}};

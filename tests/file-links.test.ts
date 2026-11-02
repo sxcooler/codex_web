@@ -79,3 +79,18 @@ test('local directory links distinguish the project root from invalid or empty t
 test('absolute Linux project roots cannot become image targets',()=>{
  for(const path of ['/home/project','/home/project/','/home/project///'])assert.equal(fileImageUrl('s','README.md',path,'https://web.example','/home/project'),'');
 });
+
+test('explicit file scopes keep links and images inside the selected root without a session',()=>{
+ const origin='https://web.example';
+ for(const base of ['/files','/projects/workspace-1/files']){
+  const content=origin+'/api'+base+'/content?path=docs%2Fnext.md';
+  assert.equal(fileUrl('','docs/index.md','next.md#L4',origin,base),content+'#L4');
+  assert.equal(linkedFile('','docs/index.md',content+'#L4',origin,base),'docs/next.md');
+  assert.equal(chatFileUrl('','C:/work','C:/work/docs/next.md',origin,base),content);
+  assert.equal(fileImageUrl('','docs/index.md','../photo.png',origin,'C:/work',base),origin+'/api'+base+'/image?path=photo.png');
+  assert.equal(fileImageUrl('','docs/index.md','C:/work/photo.png',origin,'C:/work',base),origin+'/api'+base+'/image?path=photo.png');
+  assert.equal(linkedFile('','',origin+'/api/projects/other/files/content?path=secret.md',origin,base),'');
+  for(const url of ['../../secret.md','javascript:alert(1)','//outside/secret.md'])assert.equal(fileUrl('','docs/index.md',url,origin,base),'');
+  assert.equal(chatFileUrl('','C:/work','C:/work/../secret.md',origin,base),'');
+ }
+});

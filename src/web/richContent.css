@@ -1,0 +1,10 @@
+.rich-message,.rich-parts,.tool-content{min-width:0;max-width:100%}
+.rich-parts>.markdown-message>.message-actions,.rich-card .markdown-message>.message-actions{display:none}
+.rich-card{border:1px solid var(--border,#3c3c42);border-radius:10px;padding:12px 14px;margin:12px 0;overflow-wrap:anywhere;background:var(--panel,transparent)}
+.rich-card>strong{display:block}.rich-card>p{margin:8px 0}.rich-card summary,.rich-original summary{cursor:pointer;min-height:40px;align-content:center;overflow-wrap:anywhere}
+.rich-original{margin:8px 0;min-width:0}.rich-original pre,.rich-card pre,.tool-content pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;max-width:100%}
+.rich-path,.rich-path code{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.rich-fields{font-size:.85em;margin:10px 0}.rich-fields>div{display:flex;gap:12px;margin:6px 0;align-items:baseline}.rich-fields dt{color:var(--muted,#aaa);flex:0 0 auto;max-width:40%;overflow-wrap:anywhere}.rich-fields dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.rich-message>.message-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.rich-message button{min-height:40px}.rich-message :focus-visible,.tool-content :focus-visible{outline:2px solid var(--accent,#8bb9ff);outline-offset:3px}
+.rich-receipt{font-size:.85em}.rich-fallback{border-style:dashed}.tool-content-part{margin:8px 0;min-width:0}.tool-content audio{width:100%;max-width:420px}.tool-text{font-family:inherit;font-size:inherit;margin:0}
+@media(max-width:480px){.rich-card{padding:10px}.rich-fields>div{flex-wrap:wrap;gap:2px 8px}.rich-card summary,.rich-original summary,.rich-message button{min-height:44px}}

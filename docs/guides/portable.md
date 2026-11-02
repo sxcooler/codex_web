@@ -90,6 +90,8 @@ bash Update.sh /path/to/codex-web-版本-linux-x64-update.zip 发布页中的64�
 
 0.1.9 继续固定 Node 24.20.0、Codex CLI 最低稳定版本 0.160.1，运行依赖锁定内容不变。应用更新仍要求同平台运行环境指纹及安装文件校验一致；官方 0.1.8 到 0.1.9 的实际升级结果见 [发布验收](../verification/2026-10-23-release-019.md) 和发布页。更早版本不在本轮直接升级验收范围。
 
+0.1.10 继续固定 Node 24.20.0、Codex CLI 最低稳定版本 0.160.1，运行依赖锁定内容不变；官方 0.1.9 升级结果见 [发布验收](../verification/2026-11-02-release-0110.md) 和发布页。应用更新仍需同平台运行环境指纹及文件校验一致。
+
 ## 构建
 
 在对应平台原生构建，不交叉复制依赖。共同需要 Node >=24.20.0、npm 和 Git；Windows 构建需要 PowerShell 7，Linux x64 glibc 构建需要 Bash、curl、tar/xz 和 Python 3（用于通用源码 ZIP）。在普通用户下运行：

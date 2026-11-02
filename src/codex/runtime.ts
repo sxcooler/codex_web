@@ -10,6 +10,8 @@ import {retainWriterLease,type WriterLease} from './writer-lease.ts';
 import {generateNativeTitle,nativeTitleCleanupPending,settleNativeTitleCleanup} from './nativeTitle.ts';
 import {baseUserLayer,readSettings,writeSettings,type SettingsWriteInput} from './settings.ts';
 import {readInstalledPlugins,type InstalledPluginsSnapshot} from './installed-plugins.ts';
+import {runExtensionCli,type ExtensionMutation,type ExtensionSection} from './extensions.ts';
+import {ExtensionService} from './extension-service.ts';
 import { itemWithTimes } from './itemTimes.ts';
 import {diagnosticId,type DiagnosticEvent} from '../server/diagnostics.ts';
 
@@ -84,7 +86,10 @@ type ThreadState = {
   reserved: boolean;
   revision: number;
   activityRevision: number;
+  syncConflict?: boolean;
+  terminalCheck?: {epoch:string;activityRevision:number;controller:AbortController;promise:Promise<any>};
   snapshotSequence: number;
+  acceptedSnapshotSequence?: number;
   syncHeader?: any;
   syncTurns?: Map<string, string>;
   syncEpoch?: string;
@@ -213,6 +218,7 @@ export class Runtime extends EventEmitter {
     this.idleMs = options.idleMs ?? 10 * 60_000;
     this.sandbox = options.sandbox ?? 'danger-full-access';
     if (!options.executable || !options.cwd || !Number.isSafeInteger(this.idleMs) || this.idleMs < 1) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', 'Invalid runtime options');
+    this.on('accountChanged',(event?:{method?:string})=>this.extensionCatalog.invalidate(event?.method));
   }
 
   async list(cursor?: string, archived = false, sortKey:'updated_at'|'created_at'='updated_at', searchTerm?:string, projectId?:null): Promise<{ data: any[]; nextCursor: string | null }> {
@@ -401,8 +407,9 @@ export class Runtime extends EventEmitter {
     this.requireString(threadId, 'threadId');
     const state = this.state(threadId);
     state.maintenanceOnly=false;
+    if(options?.restartHistory){state.terminalCheck?.controller.abort();state.terminalCheck=undefined;}
     const revision = state.revision;
-    const activityRevision = state.activityRevision;
+    let activityRevision = state.activityRevision;
     const snapshotSequence = ++state.snapshotSequence;
     // Keep content that arrives while native history pages are in flight, including
     // terminal turns that reconcile removes from liveTurns. Offsets handle overlap.
@@ -410,7 +417,30 @@ export class Runtime extends EventEmitter {
     const changed = (event: Change) => { if (event.threadId === threadId) changes.push(event); };
     this.on('snapshotChange', changed);
     let thread: any;
-    try { thread = await this.readThread(threadId, options?.window ? {} : undefined, options?.signal,options?.restartHistory); } finally { this.off('snapshotChange', changed); }
+    try {
+      thread = await this.readThread(threadId, options?.window ? {} : undefined, options?.signal,options?.restartHistory);
+      const readEpoch=this.epoch;
+      // Paginated history can predate a terminal notification even when both look finished.
+      const terminalChanged=thread.turns.some((turn:any)=>{
+        const live=state.liveTurns.get(turn.id);
+        return live&&live.status!==turn.status&&['completed','interrupted','failed'].includes(live.status)&&['completed','interrupted','failed'].includes(turn.status);
+      });
+      if(this.terminalConflict(thread,state,activityRevision)||terminalChanged){
+        const checked=await this.verifyTerminalHistory(threadId,options?.signal);
+        if(readEpoch!==this.epoch)throw runtimeError(503,'RUNTIME_SYNC_RESTARTED','会话运行时已切换，请重新读取历史。');
+        if(checked){
+          const previousTurns=new Map<string,any>(thread.turns.map((turn:any)=>[turn.id,turn]));
+          thread={...thread,...checked.thread,turns:checked.thread.turns.map((turn:any)=>{
+            const previous=previousTurns.get(turn.id);
+            return previous&&turn.itemsView!=='full'&&!turn.items?.length?{...previous,...turn,items:previous.items,itemsView:previous.itemsView}:turn;
+          })};
+          activityRevision=checked.activityRevision;
+        }
+      }else if(state.activityRevision===activityRevision&&state.syncConflict){
+        state.syncConflict=false;
+      }
+    } finally { this.off('snapshotChange', changed); }
+    if((state.acceptedSnapshotSequence??0)>snapshotSequence&&thread.turns.some((turn:any)=>['completed','interrupted','failed'].includes(turn.status)&&state.syncTurns?.has(turn.id)&&state.syncTurns.get(turn.id)!==this.turnSignature(turn)))throw runtimeError(503,'RUNTIME_SYNC_RESTARTED','会话状态已更新，请重新读取历史。');
     const mergedThread = this.mergeThread(thread, state);
     for (const event of changes) this.mergeSnapshotPatch(mergedThread, event.patch);
     // A read started before a newer operation/notification must not unlock that work.
@@ -422,7 +452,7 @@ export class Runtime extends EventEmitter {
         const index=mergedThread.turns.findIndex((turn:any)=>turn.id===recovered.id&&turn.status!=='inProgress');
         if(index>=0)mergedThread.turns[index]=structuredClone(recovered);
       }
-      if (thread.status?.type === 'notLoaded') state.loaded = false;
+      if (!state.syncConflict&&state.activityRevision===activityRevision&&thread.status?.type === 'notLoaded') state.loaded = false;
       if (!state.contextUnknown && state.error && state.recoverOnIdle && ['idle', 'notLoaded'].includes(thread.status?.type)
         && !state.activeTurnId && !state.pending.size && !thread.turns.some((turn: any) => turn.status === 'inProgress')) {
         state.error = undefined;
@@ -432,7 +462,7 @@ export class Runtime extends EventEmitter {
       this.scheduleIdle();
     }
     for (const turn of mergedThread.turns) if (turn.status === 'inProgress' && !state.liveTurns.has(turn.id) && !state.completedTurns.has(turn.id)) state.liveTurns.set(turn.id, structuredClone(turn));
-    if (state.snapshotSequence === snapshotSequence) this.rememberSync(state, mergedThread);
+    if (state.snapshotSequence === snapshotSequence&&!state.syncConflict) {this.rememberSync(state, mergedThread);state.acceptedSnapshotSequence=snapshotSequence;}
     if(state.initialHistory?.epoch===this.epoch&&thread.turns.some((turn:any)=>turn.id===state.initialHistory!.turnId))state.initialHistory=undefined;
     return this.browserSnapshot(mergedThread,state,!!options?.window);
   }
@@ -446,6 +476,7 @@ export class Runtime extends EventEmitter {
       reasoningEffort: state.reasoningEffort !== undefined ? state.reasoningEffort : mergedThread.reasoningEffort ?? null,
       phase: this.phase(state),
       activeTurnId: state.activeTurnId,
+      syncConflict: !!state.syncConflict,
       pending: [...state.pending.values()].map(({ requestId, method, params }) => ({ requestId, method, params: structuredClone(params) })),
       epoch: this.epoch,
       revision: state.revision,
@@ -462,7 +493,7 @@ export class Runtime extends EventEmitter {
   async history(threadId: string, before: string, signal?: AbortSignal): Promise<{ turns: any[]; nextCursor: string | null }> {
     this.requireString(threadId, 'threadId');
     this.requireString(before, 'before');
-    const thread = await this.readThread(threadId, { before }, signal);
+    const thread = this.mergeThread(await this.readThread(threadId, { before }, signal),this.state(threadId),true);
     const page = historyWindow(thread.turns, before);
     return { turns: page.turns.map(browserTurn), nextCursor: page.nextCursor };
   }
@@ -524,7 +555,7 @@ export class Runtime extends EventEmitter {
     const state = this.state(threadId);
     await this.getServer();
     const reply=(resync:boolean)=>({resync,epoch:this.epoch,revision:state.revision});
-    if (!state.syncHeader || !state.syncTurns || state.syncEpoch !== this.epoch || (epoch && epoch !== this.epoch)) return reply(true);
+    if (state.syncConflict || !state.syncHeader || !state.syncTurns || state.syncEpoch !== this.epoch || (epoch && epoch !== this.epoch)) return reply(true);
     const revision = state.revision;
     const result = await this.call<any>('thread/read', { threadId, includeTurns: false });
     if (!isObject(result?.thread)) throw runtimeError(503, 'RUNTIME_UNAVAILABLE', 'Native thread status is unavailable');
@@ -680,7 +711,7 @@ export class Runtime extends EventEmitter {
     });
   }
 
-  fork(threadId: string, input: { lastTurnId: string; clientRequestId: string }): Promise<{ threadId: string; status: 'idle'; cwd: string;header:any }> {
+  fork(threadId: string, input: { lastTurnId: string; clientRequestId: string },titleForFork?:(source:any)=>string): Promise<{ threadId: string; status: 'idle'; cwd: string;header:any }> {
     this.requireString(threadId, 'threadId');
     this.requireString(input?.lastTurnId, 'lastTurnId');
     this.requireRequestId(input?.clientRequestId);
@@ -691,7 +722,10 @@ export class Runtime extends EventEmitter {
       const end = source.turns.findIndex((turn: any) => turn.id === input.lastTurnId);
       if (end < 0) throw runtimeError(404, 'RUNTIME_NOT_FOUND', 'Fork target turn was not found');
       if (source.turns[end].status !== 'completed') throw runtimeError(409, 'RUNTIME_FORK_TURN_INCOMPLETE', 'Only completed turns can be forked');
-      const result = await this.mutation<any>('thread/fork', { threadId, lastTurnId: input.lastTurnId, excludeTurns: true });
+      const model = typeof source.model === 'string' && source.model ? source.model : undefined;
+      const effort = typeof source.reasoningEffort === 'string' && source.reasoningEffort ? source.reasoningEffort : undefined;
+      const result = await this.mutation<any>('thread/fork', { threadId, lastTurnId: input.lastTurnId, excludeTurns: true,
+        ...(model ? { model } : {}), ...(effort ? { config: { model_reasoning_effort: effort } } : {}) });
       const id = result?.thread?.id;
       const unknown = () => runtimeError(504, 'RUNTIME_RESULT_UNKNOWN', 'Fork could not be verified; check Recent Sessions before retrying');
       if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,120}$/.test(id) || id === threadId) throw unknown();
@@ -703,6 +737,7 @@ export class Runtime extends EventEmitter {
           || typeof result.model !== 'string' || !result.model || typeof result.modelProvider !== 'string' || !result.modelProvider
           || (result.serviceTier !== null && typeof result.serviceTier !== 'string')
           || (result.reasoningEffort !== null && typeof result.reasoningEffort !== 'string')
+          || (model !== undefined && result.model !== model) || (effort !== undefined && result.reasoningEffort !== effort)
           || !Array.isArray(result.disabledPluginIds) || !result.disabledPluginIds.every((value: any) => typeof value === 'string')
           || !Array.isArray(result.instructionSources) || !result.instructionSources.every((value: any) => typeof value === 'string')) throw unknown();
         this.requireUserThread(result.thread);
@@ -717,6 +752,7 @@ export class Runtime extends EventEmitter {
         const headers = (turns: any[]) => turns.map(turn => [turn.id, turn.status]);
         if (forked.id !== id || forked.cwd !== result.cwd || forked.status?.type !== 'idle'
           || !isDeepStrictEqual(headers(forked.turns), headers(source.turns.slice(0, end + 1)))) throw unknown();
+        if(titleForFork){const name=titleForFork(source);await this.rename(id,name);forked.name=name;}
         this.change(id, 'thread', { thread: this.threadHeader(forked) });
         return { threadId: id, status: 'idle', cwd: result.cwd,header:this.threadHeader(forked) };
       } catch (error) {
@@ -740,7 +776,7 @@ export class Runtime extends EventEmitter {
       if (input.expectedTurnId !== undefined) {
         if (input.model !== undefined || input.effort !== undefined || input.permissionMode !== undefined) throw runtimeError(400, 'RUNTIME_INVALID_INPUT', '插话沿用当前轮次的模型、推理强度和权限');
         await this.validateTurnOptions(input, state.cwd ?? this.options.cwd, state.model);
-        if (!state.loaded || state.released || state.releasePromise || state.reserved || state.pending.size || state.contextUnknown || state.error || state.activeTurnId !== input.expectedTurnId) throw runtimeError(409, 'RUNTIME_STEER_CONFLICT', '当前轮次已变化或无法插话，请刷新后重新发送');
+        if (!state.loaded || state.released || state.releasePromise || state.reserved || state.pending.size || state.contextUnknown || state.error || state.syncConflict || state.activeTurnId !== input.expectedTurnId) throw runtimeError(409, 'RUNTIME_STEER_CONFLICT', '当前轮次已变化或无法插话，请刷新后重新发送');
         const result = await this.mutation<any>('turn/steer', {
           threadId, expectedTurnId: input.expectedTurnId, clientUserMessageId: input.clientRequestId,
           input: [...(input.text ? [{ type: 'text', text: input.text, text_elements: [] }] : []), ...(input.nativeInput ?? [])],
@@ -754,7 +790,7 @@ export class Runtime extends EventEmitter {
         } catch { this.change(threadId, 'resync'); }
         return { threadId, turnId: result.turnId, status: 'steered' };
       }
-      if (state.releasePromise || state.reserved || state.activeTurnId || state.pending.size || state.contextUnknown || state.error || state.externalWriter || ['active', 'systemError'].includes(state.nativeStatus?.type)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Thread already has active or unresolved work');
+      if (state.releasePromise || state.reserved || state.activeTurnId || state.pending.size || state.contextUnknown || state.error || state.syncConflict || state.externalWriter || ['active', 'systemError'].includes(state.nativeStatus?.type)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Thread already has active or unresolved work');
       state.releaseRequested = false;
       state.handoffReady = false;
       state.reserved = true;
@@ -827,8 +863,14 @@ export class Runtime extends EventEmitter {
         await state.titleGeneration?.promise;
         await state.nameWrite?.catch(()=>{});
         if (!state.released) {
-          const activityRevision = state.activityRevision;
-          const thread = await this.readThread(threadId, { headersOnly: true });
+          let activityRevision = state.activityRevision;
+          let thread = await this.readThread(threadId, { headersOnly: true });
+          const readEpoch=this.epoch;
+          if(this.terminalConflict(thread,state,activityRevision)){
+            const checked=await this.verifyTerminalHistory(threadId);
+            if(readEpoch!==this.epoch)throw runtimeError(503,'RUNTIME_SYNC_RESTARTED','会话运行时已切换，请重新读取历史。');
+            if(checked){thread=checked.thread;activityRevision=checked.activityRevision;}
+          }
           this.reconcile(threadId, thread, activityRevision);
           if (!this.canUnload(state, thread)) throw runtimeError(409, 'RUNTIME_THREAD_BUSY', 'Native thread must be idle or finished before release');
           await this.discardWriterLease(state);
@@ -901,16 +943,19 @@ export class Runtime extends EventEmitter {
   }
 
   private canUnload(state: ThreadState, thread: any): boolean {
-    if(state.activeTurnId||state.pending.size||thread.turns.some((turn:any)=>turn.status==='inProgress'))return false;
+    if(state.syncConflict||state.activeTurnId||state.pending.size||thread.turns.some((turn:any)=>turn.status==='inProgress'))return false;
     if(['idle','notLoaded'].includes(thread.status?.type))return true;
     return thread.status?.type==='systemError'&&state.loaded&&!state.released&&!state.externalWriter&&thread.turns.length>0&&thread.turns.every((turn:any)=>['completed','interrupted','failed'].includes(turn.status));
   }
 
   private reconcile(threadId: string, thread: any, activityRevision: number): void {
     const state = this.state(threadId);
-    state.nativeStatus = thread.status;
+    if(this.terminalConflict(thread,state,activityRevision))state.syncConflict=true;
+    if(state.syncConflict)return;
+    if(state.activityRevision===activityRevision&&!state.syncConflict)state.nativeStatus = thread.status;
     for (const turn of thread.turns) {
       if (!['completed', 'interrupted', 'failed'].includes(turn.status)) continue;
+      if(!state.completedTurns.has(turn.id)&&(state.activeTurnId===turn.id||state.liveTurns.get(turn.id)?.status==='inProgress')&&(state.activityRevision!==activityRevision||state.syncConflict))continue;
       state.completedTurns.add(turn.id);
       state.liveTurns.delete(turn.id);
       if (state.retry?.turnId === turn.id) state.retry = undefined;
@@ -936,6 +981,45 @@ export class Runtime extends EventEmitter {
     // Native systemError is an idle error flag cleared by the next turn, not a writer lock.
     // Keep the raw thread status/error in the snapshot; only reconcile our operation state.
     if(thread.status?.type==='systemError'&&this.canUnload(state,thread))state.nativeStatus={type:'idle'};
+  }
+
+  private terminalConflict(thread:any,state:ThreadState,activityRevision:number):boolean{
+    return thread.turns.some((turn:any)=>['completed','interrupted','failed'].includes(turn.status)&&!state.completedTurns.has(turn.id)
+      &&(state.activeTurnId===turn.id||state.liveTurns.get(turn.id)?.status==='inProgress')
+      &&(state.syncConflict||state.activityRevision!==activityRevision||thread.status?.type==='active'))
+      ||thread.status?.type==='active'&&thread.turns.length>0&&!thread.turns.some((turn:any)=>turn.status==='inProgress');
+  }
+
+  private async verifyTerminalHistory(threadId:string,signal?:AbortSignal):Promise<{thread:any;activityRevision:number}|undefined>{
+    const state=this.state(threadId),epoch=this.epoch,activityRevision=state.activityRevision;
+    state.syncConflict=true;
+    let check=state.terminalCheck;
+    if(!check||check.epoch!==epoch||check.activityRevision!==activityRevision){
+      check?.controller.abort();
+      const controller=new AbortController(),deadline=Date.now()+10_000;
+      check={epoch,activityRevision,controller,promise:Promise.resolve(undefined)};
+      state.terminalCheck=check;
+      const timer=setTimeout(()=>controller.abort(runtimeError(503,'RUNTIME_SYNC_CONFLICT','Native turn status verification timed out')),10_000);
+      const owned=check;
+      owned.promise=(async()=>{
+        try{
+          const thread=await this.abortable(this.loadThread(threadId,{headersOnly:true},controller.signal,deadline),controller.signal);
+          if(epoch!==this.epoch||state.activityRevision!==activityRevision||state.terminalCheck!==owned||this.closed)return;
+          if(this.terminalConflict(thread,{...state,syncConflict:false},activityRevision))return;
+          state.syncConflict=false;
+          return {thread,activityRevision};
+        }catch{return;}
+        finally{
+          clearTimeout(timer);
+          this.options.diagnostic?.({event:'turn_status_check',epoch,threadId:diagnosticId(threadId),turnId:diagnosticId(state.activeTurnId),source:'native-history',activityRevision,currentActivityRevision:state.activityRevision,outcome:epoch!==this.epoch?'epoch-changed':state.syncConflict?'unresolved':'verified'});
+        }
+      })();
+    }
+    const checked=await this.abortable(check.promise,signal);
+    if(checked&&epoch===this.epoch&&state.activityRevision===activityRevision&&state.terminalCheck===check&&!this.closed){
+      state.syncConflict=false;
+      return checked;
+    }
   }
 
   async respond(threadId: string, requestId: string, answer: any): Promise<any> {
@@ -1002,16 +1086,16 @@ export class Runtime extends EventEmitter {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
+    if (this.closed&&!this.server) return;
     this.closed = true;
-    for(const state of this.states.values()){state.titleGeneration?.controller.abort();state.historyRead?.controller.abort();}
+    this.extensionCatalog.invalidate();
+    for(const state of this.states.values()){state.titleGeneration?.controller.abort();state.historyRead?.controller.abort();state.terminalCheck?.controller.abort();}
     await Promise.all([...this.states.values()].map(async state=>{await state.titleGeneration?.promise;await state.nameWrite?.catch(()=>{});}));
     this.listReads.clear();this.headerReads.clear();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const server = this.server;
-    this.server = undefined;
     this.starting = undefined;
-    try{if (server)try{await server.close();}finally{await settleNativeTitleCleanup(server);}}
+    try{if (server){await server.close();await settleNativeTitleCleanup(server);if(this.server===server)this.server=undefined;}}
     finally{await Promise.all([...this.states.values()].map(state=>this.discardWriterLease(state)));}
   }
 
@@ -1121,8 +1205,11 @@ export class Runtime extends EventEmitter {
                   const flags=thread.status.activeFlags??[],kind=flags.includes('waitingOnUserInput')?'input':flags.includes('waitingOnApproval')?'approval':'running';
                   sessions.set(threadId,describe(threadId,thread,kind,active.length===1?active[0].id:state?.activeTurnId??undefined));
                   if(active.length!==1&&!state?.activeTurnId)issue(stage,Error('Active native turn could not be identified'),threadId);
-                }else if(!state||state.activityRevision!==activityRevision||!this.canUnload(state,thread))throw Error('Native systemError has not been verified as terminal and owned');
-                else state.nativeStatus={type:'idle'};
+                }else{
+                  const terminalSubagent=isSubagentThread(thread)&&turns.length>0&&active.length===0&&!state?.activeTurnId&&!state?.pending.size&&!state?.externalWriter;
+                  if(state!==this.states.get(threadId)||state?.activityRevision!==activityRevision||!terminalSubagent&&(!state||!this.canUnload(state,thread)))throw Error('Native systemError has not been verified as terminal and owned');
+                  if(state)state.nativeStatus={type:'idle'};
+                }
               }else if(!['idle','notLoaded'].includes(status))throw Error('Unknown native activity: '+String(status));
               else if(state&&state.activityRevision===activityRevision&&!state.activeTurnId&&!state.pending.size)state.nativeStatus=thread.status;
               if(state===this.states.get(threadId)&&state?.activityRevision===activityRevision)checked.set(threadId,thread);
@@ -1225,10 +1312,11 @@ export class Runtime extends EventEmitter {
     const epoch = this.epoch;
     if (!refresh && this.modelCatalog?.epoch === epoch && this.modelCatalog.expiresAt > Date.now()) return { data: structuredClone(this.modelCatalog.data), nextCursor: null };
     if (this.modelLoading?.epoch === epoch) return structuredClone(await this.modelLoading.promise);
+    this.reads++;
     const promise = this.loadModels().then(result => {
       if (this.epoch === epoch) this.modelCatalog = { epoch, expiresAt: Date.now() + 5 * 60_000, data: structuredClone(result.data) };
       return result;
-    }).finally(() => { if (this.modelLoading?.promise === promise) this.modelLoading = undefined; });
+    }).finally(() => { this.reads--;this.scheduleIdle();if (this.modelLoading?.promise === promise) this.modelLoading = undefined; });
     this.modelLoading = { epoch, promise };
     return structuredClone(await promise);
     }catch(error){
@@ -1292,6 +1380,36 @@ export class Runtime extends EventEmitter {
   async installedPlugins(cwd?:string):Promise<InstalledPluginsSnapshot>{
     if(cwd!==undefined)this.requireString(cwd,'cwd');
     return readInstalledPlugins(this.settingsPeer(),cwd);
+  }
+
+  private extensionWriting=false;
+  private extensionCatalog=new ExtensionService({peer:cwd=>this.extensionPeer(cwd),epoch:()=>this.epoch,normalize:directoryKey});
+  private async extensionPeer(cwd:string){
+    const home=await this.configurationHome();
+    if(!home)throw runtimeError(503,'EXTENSION_HOST_UNAVAILABLE','无法核实原生配置目录。');
+    const context={home,epoch:this.epoch};this.assertProjectContext(context);
+    return {home,request:async(method:string,params:any)=>{
+      this.assertProjectContext(context);
+      return this.call<any>(method,params,false,true,undefined,context);
+    },cli:async(args:string[])=>{
+      this.assertProjectContext(context);
+      const result=await runExtensionCli({executable:this.options.executable,home,cwd},args);
+      this.assertProjectContext(context);return result;
+    }};
+  }
+  async extensions(cwd:string,options:{section?:ExtensionSection;refresh?:boolean;key?:string}={}){
+    this.requireString(cwd,'cwd');this.reads++;
+    try{return await this.extensionCatalog.read(cwd,options);}finally{this.reads--;this.scheduleIdle();}
+  }
+  async searchExtensions(cwd:string,input:{query:string;cursor?:string;refresh?:boolean}){
+    this.requireString(cwd,'cwd');this.reads++;
+    try{return await this.extensionCatalog.search(cwd,input);}finally{this.reads--;this.scheduleIdle();}
+  }
+  async changeExtension(cwd:string,input:ExtensionMutation){
+    this.requireString(cwd,'cwd');
+    if(this.extensionWriting)throw runtimeError(409,'EXTENSION_BUSY','另一项扩展操作仍在进行，请等待并刷新。');
+    this.extensionWriting=true;this.reads++;this.writes++;
+    try{return await this.extensionCatalog.change(cwd,input);}finally{this.extensionWriting=false;this.reads--;this.writes--;this.scheduleIdle();}
   }
 
   async writeSettings(cwd:string,input:SettingsWriteInput){
@@ -1454,7 +1572,7 @@ export class Runtime extends EventEmitter {
       return old.promise;
     }
     if (this.requests.size >= REQUEST_LIMIT) return Promise.reject(runtimeError(503, 'RUNTIME_REQUEST_CAPACITY', 'Runtime request capacity is full'));
-    const promise = (async()=>{this.writes++;try{return await operation();}finally{this.writes--;this.scheduleIdle();}})();
+    const promise = (async()=>{this.writes++;this.listReads.clear();this.headerReads.clear();try{return await operation();}finally{this.writes--;this.listReads.clear();this.headerReads.clear();this.scheduleIdle();}})();
     this.requests.set(clientRequestId, { signature, promise });
     return promise;
   }
@@ -1520,6 +1638,7 @@ export class Runtime extends EventEmitter {
     if (this.starting) return this.starting;
     if (this.server) return Promise.resolve(this.server);
     this.epoch = randomUUID();
+    this.extensionCatalog.invalidate();
     for(const state of this.states.values())state.historyRead?.controller.abort(runtimeError(503,'RUNTIME_SYNC_RESTARTED','会话运行时已切换，请重新读取历史。'));
     this.listReads.clear();this.headerReads.clear();
     this.forkHeaders.clear();
@@ -1536,8 +1655,7 @@ export class Runtime extends EventEmitter {
       this.initializeInfo = structuredClone(result);
       return server;
     }).catch(async (error) => {
-      if (this.server === server) this.server = undefined;
-      try { await server.close(); } catch {}
+      try { await server.close();await settleNativeTitleCleanup(server);if(this.server===server)this.server=undefined; } catch {this.updating=true;}
       throw this.mapError(error);
     }).finally(() => { this.starting = undefined; });
     return this.starting;
@@ -1545,10 +1663,10 @@ export class Runtime extends EventEmitter {
 
   private onFailure(server: AppServer): void {
     if (this.server !== server) return;
+    this.extensionCatalog.invalidate();
     this.failures++;
     this.listReads.clear();this.headerReads.clear();
-    this.server = undefined;
-    this.starting = undefined;
+    if(!this.stopping&&!this.closed&&!this.starting)this.server=undefined;
     for (const [threadId, state] of this.states) {
       const maintenanceOnly=state.maintenanceOnly&&!state.loaded&&state.cwd===undefined&&!state.error&&!state.contextUnknown&&!state.externalWriter&&!state.activeTurnId&&!state.pending.size&&!state.liveTurns.size&&!state.openPromise&&!state.nameWrite&&!state.waiter&&!state.completion&&!state.writerLease&&!state.pendingCwdIdentity&&!['active','systemError'].includes(state.nativeStatus?.type);
       state.historyRead?.controller.abort(runtimeError(503,'RUNTIME_UNAVAILABLE','Native Codex runtime is unavailable'));
@@ -1577,6 +1695,7 @@ export class Runtime extends EventEmitter {
     if(params.thread?.ephemeral===true){if(typeof params.thread.id==='string')this.temporaryThreads.add(params.thread.id);return;}
     if(this.temporaryThreads.has(params.threadId))return;
     if(method==='thread/started'&&isObject(params.thread)){this.rememberThreadSource(params.thread);return;}
+    if(method==='app/list/updated')this.extensionCatalog.invalidate(method);
     if(method==='account/updated'||method==='account/rateLimits/updated')this.emit('accountChanged',{method});
     if (method === 'serverRequest/resolved') {
       const pending = this.nativeRequests.get(nativeKey(params.requestId));
@@ -1605,7 +1724,7 @@ export class Runtime extends EventEmitter {
       state.nativeName=params.threadName??null;state.nameRevision=(state.nameRevision??0)+1;
       this.change(params.threadId,'name',{thread:{name:state.nativeName}});return;
     }
-    if(['thread/status/changed','thread/closed','turn/started','turn/completed'].includes(method)){state.activityRevision++;if(method==='turn/started'||params.status?.type==='active')state.maintenanceOnly=false;}
+    if(['thread/status/changed','thread/closed','turn/started','turn/completed'].includes(method)||typeof method==='string'&&method.startsWith('item/')&&typeof params.turnId==='string'&&!state.completedTurns.has(params.turnId)){state.activityRevision++;if(method==='turn/started'||params.status?.type==='active')state.maintenanceOnly=false;}
     if (method === 'thread/status/changed' || method === 'thread/closed') {
       if(method==='thread/closed'){state.nativeUnloaded=true;state.unloadReceipt?.resolve();}
       state.nativeStatus = method === 'thread/closed' ? { type: 'notLoaded' } : params.status;
@@ -1615,8 +1734,8 @@ export class Runtime extends EventEmitter {
       return;
     }
     if (method === 'turn/started' && isObject(params.turn)) {
-      const turn = this.mergeLiveTurn(state, params.turn);
       if (state.completedTurns.has(params.turn.id)) return;
+      const turn = this.mergeLiveTurn(state, params.turn);
       state.activeTurnId = params.turn.id;
       state.nativeStatus = { type: 'active', activeFlags: [] };
       state.reserved = false;
@@ -1627,12 +1746,14 @@ export class Runtime extends EventEmitter {
       return;
     }
     if (method === 'turn/completed' && isObject(params.turn)) {
+      if(state.completedTurns.has(params.turn.id)){this.change(params.threadId,'resync');return;}
       if (state.retry?.turnId === params.turn.id) state.retry = undefined;
       const turn = this.mergeLiveTurn(state, params.turn);
       const finalItem=state.liveTurns.get(params.turn.id)?.items?.findLast((item:any)=>item?.type==='agentMessage'&&item.phase==='final_answer'&&typeof item.id==='string');
       this.notification(params.threadId, `turn:${params.turn.id}`, params.turn.status === 'failed' ? 'failed' : 'complete',
         {turnId:params.turn.id,...(finalItem?{itemId:finalItem.id}:{})});
       state.completedTurns.add(params.turn.id);
+      if(!state.activeTurnId||state.activeTurnId===params.turn.id)state.syncConflict=false;
       if (!state.activeTurnId || state.activeTurnId === params.turn.id) {
         state.activeTurnId = null;
         state.nativeStatus = { type: 'idle' };
@@ -1647,6 +1768,7 @@ export class Runtime extends EventEmitter {
     }
     if (typeof method === 'string' && method.startsWith('item/') && state.retry?.turnId === params.turnId) state.retry = undefined;
     if ((method === 'item/started' || method === 'item/completed') && isObject(params.item) && typeof params.turnId === 'string') {
+      if(state.completedTurns.has(params.turnId))return;
       const itemKey = `${params.turnId}:${params.item.id}`;
       if (method === 'item/started' && state.completedItems.has(itemKey)) return;
       const activeTurn = state.liveTurns.get(params.turnId) ?? { id: params.turnId, items: [], itemsView: 'full', status: 'inProgress', error: null, startedAt: null, completedAt: null, durationMs: null };
@@ -2039,14 +2161,14 @@ export class Runtime extends EventEmitter {
     turns.set(incoming.id, { ...old, ...structuredClone(incoming), items: [...items.values()] });
   }
 
-  private mergeThread(nativeThread: any, state: ThreadState): any {
+  private mergeThread(nativeThread: any, state: ThreadState, preserveActive=false): any {
     const thread = structuredClone(nativeThread);
     thread.turns = Array.isArray(thread.turns) ? thread.turns : [];
     for (const live of state.liveTurns.values()) {
       const index = thread.turns.findIndex((turn: any) => turn.id === live.id);
       if (index < 0) thread.turns.push(structuredClone(live));
       else {
-        if (['completed', 'interrupted', 'failed'].includes(thread.turns[index].status)) {
+        if (['completed', 'interrupted', 'failed'].includes(thread.turns[index].status)&&!((preserveActive||state.syncConflict)&&state.activeTurnId===live.id&&live.status==='inProgress')) {
           // Sparse terminal notifications can omit items already streamed. Keep native
           // replacements, while retaining live items absent from that terminal page.
           const items = thread.turns[index].items ??= [];
@@ -2071,7 +2193,7 @@ export class Runtime extends EventEmitter {
     if (state.reserved || state.activeTurnId) return 'RUNNING';
     if (state.externalWriter) return 'EXTERNAL';
     if (state.nativeStatus?.type === 'active') return state.loaded && !state.released ? 'UNKNOWN' : 'EXTERNAL';
-    if (state.contextUnknown || state.error || state.nativeStatus?.type === 'systemError') return 'UNKNOWN';
+    if (state.contextUnknown || state.error || state.syncConflict || state.nativeStatus?.type === 'systemError') return 'UNKNOWN';
     if (state.released) return 'RELEASED';
     return 'IDLE';
   }
@@ -2109,7 +2231,7 @@ export class Runtime extends EventEmitter {
     if (state.syncHeader && patch.thread) Object.assign(state.syncHeader, structuredClone(patch.thread));
     if (state.syncTurns && patch.turn?.status) state.syncTurns.set(patch.turn.id, this.turnSignature(patch.turn));
     if (state.syncHeader && state.syncTurns && (patch.thread || patch.turn?.status)) this.cacheSync(threadId, state);
-    const metadata = { phase: this.phase(state), activeTurnId: state.activeTurnId, pending: [...state.pending.values()].map(({requestId, method, params}) => ({requestId, method, params})), error: state.error ?? null, permissions: state.permissions ?? null, retry: state.retry ?? null, release: this.releaseState(state), model: state.model ?? null, ...(state.reasoningEffort !== undefined ? {reasoningEffort:state.reasoningEffort} : {}), titlePending: !!state.titleGeneration, unmaterialized: state.emptyThreadEpoch === this.epoch };
+    const metadata = { phase: this.phase(state), activeTurnId: state.activeTurnId, syncConflict: !!state.syncConflict, pending: [...state.pending.values()].map(({requestId, method, params}) => ({requestId, method, params})), error: state.error ?? null, permissions: state.permissions ?? null, retry: state.retry ?? null, release: this.releaseState(state), model: state.model ?? null, ...(state.reasoningEffort !== undefined ? {reasoningEffort:state.reasoningEffort} : {}), titlePending: !!state.titleGeneration, unmaterialized: state.emptyThreadEpoch === this.epoch };
     let change: Change = structuredClone({ id: `${this.epoch}:${sequence}`, threadId, kind, revision: state.revision, patch: { state: metadata, ...patch } });
     this.emit('snapshotChange', change);
     // Keep authoritative snapshot merges complete; only the browser journal is projected.
@@ -2156,8 +2278,7 @@ export class Runtime extends EventEmitter {
     const server = this.server;
     if (!server || (!allowReads&&(this.inFlight||this.reads)) || (!force&&busy())) return false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.server = undefined;
-    this.stopping = server.close(force).finally(()=>settleNativeTitleCleanup(server));
+    this.stopping = Promise.resolve().then(async()=>{await server.close(force);await settleNativeTitleCleanup(server);if(this.server===server)this.server=undefined;});
     try {
       await this.stopping;
       for (const [id, state] of this.states) {
@@ -2175,7 +2296,7 @@ export class Runtime extends EventEmitter {
         if(force)this.change(id,'resync');
         if (state.released&&!state.handoffReady) { state.handoffReady = true; this.change(id, 'release'); }
       }
-    } finally { this.stopping = undefined; }
+    } catch(error){this.updating=true;throw error;} finally { this.stopping = undefined; }
     return true;
   }
 
@@ -2211,6 +2332,7 @@ export class Runtime extends EventEmitter {
   }
 
   private clearLiveState(state: ThreadState): void {
+    state.terminalCheck?.controller.abort();state.terminalCheck=undefined;state.syncConflict=false;
     state.retry = undefined;
     state.nativeStatus = undefined;
     state.liveTurns.clear();

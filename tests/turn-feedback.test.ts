@@ -47,3 +47,12 @@ test('native retry labels do not invent progress or diagnose arbitrary disconnec
  assert.equal(feedback.nativeRetryText({message:compact},'zh-CN'),'原生执行正在重连');
  assert.equal(feedback.nativeRetryText({message:'Reconnecting 9/5'},'en'),'Native execution is reconnecting');
 });
+
+
+test('current active terminal needs verification while historical outcomes stay confirmed',()=>{
+ for(const status of ['completed','interrupted','failed']){
+  const turn={id:'current',status,error:{message:'native error'}};
+  assert.equal(feedback.turnOutcome(turn,'en','current'),undefined);
+ }
+ assert.equal(feedback.turnOutcome({id:'old',status:'interrupted'},'en','new')?.kind,'interrupted');
+});

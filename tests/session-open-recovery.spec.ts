@@ -157,7 +157,7 @@ test('permission failures do not retry and leaving cancels transient recovery',a
   await page.clock.install();await page.clock.runFor(10_000);expect(state.opens).toBe(1);
   state.denied=false;await page.locator('.composer').getByRole('button',{name:'接续会话',exact:true}).click();
   await expect.poll(()=>state.opens).toBe(2);
-  await page.getByRole('button',{name:'＋ 新任务',exact:true}).click();
+  await page.getByRole('link',{name:'＋ 新任务',exact:true}).click();
   await expect(page).toHaveURL(/\/$/);await page.clock.runFor(10_000);expect(state.opens).toBe(2);
 });
 

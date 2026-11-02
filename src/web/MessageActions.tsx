@@ -38,6 +38,7 @@ export function MessageActions({threadId,turnId,canFork,memoryCitation,onChanged
     if(!canFork||!turnId)return;
     const previous=drafts.get(threadId)?.forkResults?.[turnId];
     if(previous&&previous.status!=='failed')return;
+    if(!window.confirm(t('session.fork.confirm')))return;
     save({status:'pending'});
     try{
       const response=await api('/sessions/'+encodeURIComponent(threadId)+'/fork',{lastTurnId:turnId,clientRequestId:crypto.randomUUID()},AbortSignal.timeout(45_000));

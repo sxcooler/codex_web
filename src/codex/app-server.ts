@@ -201,7 +201,7 @@ export class AppServer extends EventEmitter {
   }
 
   close(force=false): Promise<void> {
-    return this.closePromise ??= this.shutdown(force);
+    return this.closePromise ??= this.shutdown(force).catch(error=>{this.closePromise=undefined;throw error;});
   }
 
   private async shutdown(force:boolean): Promise<void> {

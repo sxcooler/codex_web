@@ -104,7 +104,7 @@ test('background startup survives launcher exit, authenticates control, reuses a
     await mkdir(join(root,'scripts/windows'),{recursive:true});
     await copyFile(new URL('../scripts/windows/background-host.ps1',import.meta.url),join(root,'scripts/windows/background-host.ps1'));
     await writeFile(join(root,'.local/web/config.json'),JSON.stringify({origin:`http://localhost:${port}`}));
-    await writeFile(join(root,'src/server/main.ts'),`import {createServer} from 'node:http'; import {existsSync} from 'node:fs'; export async function startServer(diagnosticsEnabled=false){ const app=createServer((req,res)=>res.end(diagnosticsEnabled?'diagnostics':'fixture')); await new Promise((resolve,reject)=>{app.once('error',reject);app.listen(${port},'127.0.0.1',resolve)}); const check=()=>{if(existsSync(new URL('../../busy',import.meta.url)))throw Error('busy');}; return {prepareUpdate:check,async prepareRestart(){await new Promise(resolve=>setTimeout(resolve,20));check();if(existsSync(new URL('../../nativebusy',import.meta.url)))throw Error('native busy');},close:()=>new Promise(resolve=>{app.closeAllConnections();app.close(resolve)})}; }`);
+    await writeFile(join(root,'src/server/main.ts'),`import {createServer} from 'node:http'; import {existsSync} from 'node:fs'; export async function startServer(diagnosticsEnabled=false){ const app=createServer((req,res)=>res.end(diagnosticsEnabled?'diagnostics':'fixture')); await new Promise((resolve,reject)=>{app.once('error',reject);app.listen(${port},'127.0.0.1',resolve)}); const check=()=>{if(existsSync(new URL('../../busy',import.meta.url)))throw Error('busy');}; return {prepareUpdate:check,async prepareRestart(){await new Promise(resolve=>setTimeout(resolve,20));check();if(existsSync(new URL('../../nativebusy',import.meta.url)))throw Object.assign(Error('native busy'),{code:'RUNTIME_UNAVAILABLE',inspection:{issues:[{threadId:'fixture-system-error',stage:'thread/turns/list',message:'Native systemError has not been verified as terminal and owned; token=FAKE_CONTROL_SECRET'}]},private:'FAKE_PRIVATE_MUST_NOT_APPEAR'});},close:()=>new Promise(resolve=>{app.closeAllConnections();app.close(resolve)})}; }`);
     const starts=await Promise.all([run('--background'),run('--background')]);
     for(const start of starts) assert.equal(start.code,0,start.output);
     const state=JSON.parse(await readFile(join(root,'.local/web/server-control.json'),'utf8'));
@@ -120,10 +120,24 @@ test('background startup survives launcher exit, authenticates control, reuses a
     const status=await run('--status'); assert.match(status.output,/Running:/);
     await writeFile(join(root,'busy'),'active');
     const refused=await run('--stop-if-idle'); assert.notEqual(refused.code,0,refused.output);
+    assert.match(refused.output,/busy/);
+    const prepareRefused=await fetch(`http://127.0.0.1:${state.port}/prepare-update`,{method:'POST',headers:{Authorization:`Bearer ${state.token}`}});
+    assert.equal(prepareRefused.status,409);assert.match(await prepareRefused.text(),/busy/);
     assert.equal((await fetch(`http://127.0.0.1:${port}`)).status,200,'new activity cancels delayed restart');
     await rm(join(root,'busy'));
     await writeFile(join(root,'nativebusy'),'native task');
-    assert.notEqual((await run('--stop-if-idle')).code,0,'native busy must never fall back to the older local check');
+    const nativeResponse=await fetch(`http://127.0.0.1:${state.port}/stop-idle`,{method:'POST',headers:{Authorization:`Bearer ${state.token}`}}),nativeError=await nativeResponse.json() as any;
+    assert.equal(nativeResponse.status,409);assert.equal(nativeError.code,'RUNTIME_UNAVAILABLE');assert.ok(nativeError.error.length<=1000);
+    const nativeRefused=await run('--stop-if-idle');assert.notEqual(nativeRefused.code,0,'native busy must never fall back to the older local check');
+    assert.match(nativeRefused.output,/native busy.*fixture-system-error.*thread\/turns\/list.*Native systemError/);
+    assert.doesNotMatch(nativeRefused.output,/FAKE_CONTROL_SECRET|FAKE_PRIVATE_MUST_NOT_APPEAR/);
+    assert.equal(JSON.parse(await readFile(join(root,'.local/web/server-control.json'),'utf8')).pid,state.pid,'refusal must preserve the worker');
+    assert.equal((await fetch(`http://127.0.0.1:${port}`)).status,200);
+    const lifecycle=await readFile(join(root,'.local/web/lifecycle.jsonl'),'utf8');
+    const lifecycleEvents=lifecycle.trim().split('\n').map(line=>JSON.parse(line)),refusalEvents=lifecycleEvents.filter(event=>event.event==='control_refused');
+    assert.ok(refusalEvents.some(event=>event.code==='RUNTIME_UNAVAILABLE'&&/fixture-system-error.*thread\/turns\/list.*Native systemError/.test(event.message)));
+    assert.doesNotMatch(lifecycle,/FAKE_CONTROL_SECRET|FAKE_PRIVATE_MUST_NOT_APPEAR/);
+    assert.ok(lifecycleEvents.filter(event=>event.pid===state.pid).every(event=>!['shutdown_begin','exit'].includes(event.event)),'refusal must not shut down or exit the owned worker');
     await rm(join(root,'nativebusy'));
     const stop=await run('--stop-if-idle'); assert.equal(stop.code,0,stop.output);
     await assert.rejects(fetch(`http://127.0.0.1:${port}`));
@@ -143,12 +157,12 @@ test('background startup survives launcher exit, authenticates control, reuses a
     await writeFile(controller,source.replace("'/stop-idle',",''));
     assert.equal((await run('--background')).code,0);
     await writeFile(join(root,'busy'),'active');
-    assert.notEqual((await run('--stop-if-idle')).code,0,'legacy server must still reject active tasks');
+    const legacyRefused=await run('--stop-if-idle');assert.notEqual(legacyRefused.code,0,'legacy server must still reject active tasks');assert.match(legacyRefused.output,/busy/);
     await rm(join(root,'busy'));
     const legacyStop=await run('--stop-if-idle');assert.equal(legacyStop.code,0,legacyStop.output);
     await writeFile(controller,source);
     await new Promise<void>(resolve=>occupied.listen(port,'127.0.0.1',resolve));
     const failed=await run('--background'); assert.notEqual(failed.code,0,failed.output); assert.equal(occupied.listening,true,'unrelated listener preserved');
     assert.match(failed.output,/did not become ready/);
-  } finally { await run('--stop'); if(occupied.listening)await new Promise<void>(resolve=>occupied.close(()=>resolve())); await rm(root,{recursive:true,force:true}); }
+  } finally { await run('--stop'); if(occupied.listening)await new Promise<void>(resolve=>occupied.close(()=>resolve())); await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:100}); }
 });

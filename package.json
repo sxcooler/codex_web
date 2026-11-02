@@ -1,6 +1,6 @@
 {
   "name": "codex-remote-web",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "type": "module",
   "engines": {
@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "start": "node src/server/main.ts",
+    "start": "node --report-exclude-env --report-exclude-network src/server/main.ts",
     "auth:setup": "node scripts/setup-auth.ts",
     "tailscale:setup": "node scripts/tailscale.ts --interactive",
     "test": "node --test tests/*.test.ts",

@@ -211,10 +211,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (mode === 'settings-conflict' && method === 'config/batchWrite') return send({id,error:{code:-32600,message:'FAKE_SECRET_MUST_NOT_LEAK',data:{config_write_error_code:'configVersionConflict'}}});
   if (method === 'config/read') return send({ id, result: { config: { model: mode === 'config-text-model' ? 'actual-text' : 'fixture', approval_policy: mode === 'null-config' ? null : 'on-request', approvals_reviewer: mode === 'null-config' ? null : 'user', sandbox_mode: ['custom-workspace', 'incomplete-workspace'].includes(mode) ? 'workspace-write' : 'read-only', ...(mode === 'incomplete-workspace' ? { sandbox_workspace_write: {} } : {}), ...(mode === 'custom-workspace' ? { sandbox_workspace_write: { writable_roots: [params.cwd + '/extra'], network_access: true, exclude_tmpdir_env_var: false, exclude_slash_tmp: true } } : {}) }, layers: [] } });
   if (method === 'configRequirements/read') return send({ id, result: { requirements: mode === 'managed' ? { allowedSandboxModes: ['read-only'], allowedApprovalPolicies: ['on-request'] } : null } });
-  if (method === 'thread/name/set') { threads.get(params.threadId).name = params.name; return send({id,result:{}}); }
+  if (method === 'thread/name/set') { if(mode==='fork-name-fail')return send({id,error:{code:-32600,message:'name write failed'}});threads.get(params.threadId).name = params.name; return send({id,result:{}}); }
   if (method === 'account/read') return send({ id, result: { account: { type: 'chatgpt', email: 'fixture@example.test', planType: 'plus' }, requiresOpenaiAuth: true } });
   if (method === 'thread/list') return send({ id, result: { data: [...threads.values()].filter(value=>archivedThreads.has(value.id)===!!params.archived&&(params.projectId!==null||value.projectId===null)).map((value) => ({ ...value, turns: [] })), nextCursor: null, backwardsCursor: null } });
-  if (method === 'fixture/native-thread') { const value={...thread(params.threadId),...params.thread};value.status=params.status;threads.set(value.id,value);return send({id,result:{}}); }
+  if (method === 'fixture/native-thread') { const value={...thread(params.threadId),...params.thread};for(const key of params.omit??[])delete value[key];value.status=params.status;threads.set(value.id,value);return send({id,result:{}}); }
   if (method === 'thread/loaded/list') {
     if(mode==='loaded-error')return send({id,error:{code:-32601,message:'unsupported'}});
     const ids=[...threads.keys()],offset=Number(params.cursor??0),next=offset+1;
@@ -242,6 +242,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const value = {...thread(`fork-${forks}`, source.cwd, structuredClone(source.turns.slice(0, mode === 'fork-future' ? undefined : end))), forkedFromId:source.id,projectId:source.projectId};
     threads.set(value.id,value);
     const result = settings(value);
+    if (mode !== 'fork-model-mismatch') result.model = value.model = params.model ?? result.model;
+    if (mode !== 'fork-effort-mismatch') result.reasoningEffort = value.reasoningEffort = params.config?.model_reasoning_effort ?? result.reasoningEffort;
     if (mode === 'fork-source-id') result.thread = source;
     if (mode.startsWith('fork-missing-')) delete result[mode.slice('fork-missing-'.length)];
     if (mode === 'fork-permission') result.sandbox = {type:'unsupported'};

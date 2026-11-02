@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {Runtime} from '../src/codex/runtime.ts';
+import {AppServer} from '../src/codex/app-server.ts';
 
 const fixture=fileURLToPath(new URL('./fixtures/runtime-server.mjs',import.meta.url));
 function runtimeFixture(t:any){
@@ -34,11 +35,44 @@ test('explicit native restart can close an idle child while a background list re
 });
 
 test('restart continues to protect a native write even when only reads may be interrupted',async t=>{
- const runtime=runtimeFixture(t);await runtime.models();const gate=holdRequest(t,runtime,'thread/name/set');
+ const runtime=runtimeFixture(t);await runtime.models();await runtime.open('existing');const gate=holdRequest(t,runtime,'thread/name/set');
  const write=(runtime as any).mutation('thread/name/set',{threadId:'existing',name:'Fixture name'}).catch((error:any)=>error);await gate.started;
  try{await assert.rejects(runtime.assertNativeIdle(),{code:'RUNTIME_THREAD_BUSY'});await assert.rejects(runtime.prepareRestart(),{code:'RUNTIME_THREAD_BUSY'});}
- finally{gate.release();await write;}
+ finally{gate.release();assert.equal((await write) instanceof Error,false);}
  await runtime.assertNativeIdle();
+});
+
+test('unconfirmed native shutdown retains ownership, blocks new work and permits final close retries',async t=>{
+ const runtime=runtimeFixture(t);await runtime.models();const server=(runtime as any).server,shutdown=server.shutdown.bind(server);let failures=0;
+ t.after(()=>shutdown(true));
+ t.mock.method(server,'shutdown',async(force:boolean)=>{if(failures++<2){const error=Error('close not confirmed');server.emit('failure',error);throw error;}return shutdown(force);});
+ await assert.rejects(runtime.reloadModels(),/close not confirmed/);
+ assert.ok((runtime as any).server===server,'Native ownership must survive a failed reload');
+ assert.ok((await server.request('fixture/stats',{})).modelLists,'failed close must retain a process that can still answer');
+ await assert.rejects(runtime.models(),{code:'RUNTIME_UPDATING'});
+ await assert.rejects(runtime.close(),/close not confirmed/);
+ assert.ok((runtime as any).server===server,'Native ownership must survive a failed final close');
+ await runtime.close();assert.equal((runtime as any).server,undefined);
+});
+
+test('the whole model catalog load remains busy after its native reads finish',async t=>{
+ const runtime=runtimeFixture(t);await runtime.models();const load=(runtime as any).loadModels.bind(runtime),started=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+ t.mock.method(runtime as any,'loadModels',async()=>{const result=await load();started.resolve();await release.promise;return result;});
+ const pending=runtime.models(true);await started.promise;
+ try{assert.throws(()=>runtime.assertIdle(),{code:'RUNTIME_THREAD_BUSY'});}
+ finally{release.resolve();await pending;}
+ runtime.assertIdle();
+});
+
+test('failed initialization retains ownership when startup cleanup cannot confirm shutdown',async t=>{
+ const runtime=runtimeFixture(t),shutdown=(AppServer.prototype as any).shutdown;let server:any,attempts=0;
+ t.mock.method(AppServer.prototype,'initialize',async function(this:AppServer){server=this;await Promise.resolve();const error=Error('initialize failed');this.emit('failure',error);throw error;});
+ t.mock.method(AppServer.prototype as any,'shutdown',async function(this:AppServer,force:boolean){if(this===server&&attempts++===0)throw Error('startup close not confirmed');return shutdown.call(this,force);});
+ t.after(()=>shutdown.call(server,true));
+ await assert.rejects(runtime.models(),{code:'RUNTIME_UNAVAILABLE'});
+ assert.ok((runtime as any).server===server,'Failed startup cleanup must retain its owned process');
+ await assert.rejects(runtime.models(),{code:'RUNTIME_UPDATING'});
+ await runtime.close();assert.equal((runtime as any).server,undefined);
 });
 
 test('restart protects an account reset submission through confirmation',async t=>{

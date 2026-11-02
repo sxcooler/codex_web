@@ -17,7 +17,7 @@ async function setup(page:Page, scenario='idle'){
     else if(path==='/api/models/reload'){calls.push(path);data={data:[]};}
     else if(path==='/api/server/restart'){
       if(scenario==='legacy')return route.fulfill({status:404,json:{error:'Not found'}});
-      if(route.request().method()==='POST'){calls.push(path);expect(route.request().postDataJSON()).toEqual({confirmed:true,mode:'normal',version:'a'.repeat(64)});restart={available:true,status:'scheduled',scheduledAt:new Date(Date.now()+90_000).toISOString()};}
+      if(route.request().method()==='POST'){calls.push(path);expect(route.request().postDataJSON()).toEqual({confirmed:true,mode:'normal',version:'a'.repeat(64)});restart={available:true,status:'scheduled',scheduledAt:new Date(Date.now()+5_000).toISOString()};}
       data=restart;
     }
     await route.fulfill({json:data});
@@ -37,6 +37,7 @@ for(const width of [390,1440])test(`settings uses an in-page confirmation and ch
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('此 Web 服务管理的 Codex 后台');
     await expect(dialog).not.toContainText('其他设备');
+    if(name==='重启 Web 服务')await expect(dialog).toContainText('预检通过后将在 5 秒后重启');
     await expect(dialog.getByRole('button',{name:'取消',exact:true})).toBeFocused();
     await expect(dialog.getByRole('button',{name:'重启',exact:true})).toBeEnabled();
     await page.screenshot({path:`.local/web/restart-dialog-${name==='重启Codex'?'codex':'web'}-${width}.png`});

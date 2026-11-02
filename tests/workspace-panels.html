@@ -25,10 +25,10 @@ try{
  if(new URLSearchParams(location.search).has('fetch')){
  document.querySelector('#result').dataset.mode='fetch';
  check(fetchCalls===0,'打开面板或切标签自动 fetch');dataTick++;render();await tick();check(fetchCalls===0,'会话事件自动 fetch');
- fetchHeld=true;const localReads=requests.length;button('↻ 刷新').click();button('↻ 刷新').click();await tick();check(fetchCalls===1&&button('↻ 刷新').disabled,'重复点击未合并');check(requests.length>localReads,'本地读取等待 fetch');
- button('note.txt').click();await tick();check(document.querySelector('.file-preview')?.textContent.includes('old content'),'fetch 期间无法读文件');button('Git 日志').click();await tick();const initialLogs=logCalls;check(!button('刷新日志'),'重复刷新按钮仍存在');check(fetchCalls===1,'切日志又发 fetch');
- finishFetch({remotes:[{name:'origin',status:'updated'},{name:'backup',status:'failed',error:'测试网络失败'}]});await tick();check(logCalls>initialLogs,'部分成功后未更新图谱');check(!document.querySelector('.fetch-result'),'其他标签显示旧 fetch 结果');button('文件').click();await tick();check(document.querySelector('.fetch-result[role=alert]')?.textContent.includes('backup'),'原标签未恢复部分失败提示');check(!button('↻ 刷新').disabled,'获取后按钮未恢复');
- button('文件').click();await tick();button('↻ 刷新').click();await tick();const finishOld=finishFetch;render('fetch-other','other-session');await tick();finishOld({remotes:[{name:'old-project',status:'failed',error:'旧项目失败'}]});await tick();check(!document.querySelector('.fetch-result'),'旧项目响应污染新项目');render();await tick();fetchHeld=false;button('文件').click();await tick();
+ button('Git 日志').click();await tick();fetchHeld=true;const initialLogs=logCalls;button('↻ 刷新').click();button('↻ 刷新').click();await tick();check(fetchCalls===1&&button('↻ 刷新').disabled,'重复点击未合并');
+ button('文件').click();await tick();const localReads=requests.length;button('note.txt').click();await tick();check(document.querySelector('.file-preview')?.textContent.includes('old content'),'fetch 期间无法读文件');check(requests.length>localReads,'本地读取等待 fetch');check(!button('刷新日志'),'重复刷新按钮仍存在');check(fetchCalls===1,'切标签又发 fetch');
+ finishFetch({remotes:[{name:'origin',status:'updated'},{name:'backup',status:'failed',error:'测试网络失败'}]});await tick();check(!document.querySelector('.fetch-result'),'其他标签显示旧 fetch 结果');button('Git 日志').click();await tick();check(logCalls>initialLogs,'部分成功后未更新图谱');check(document.querySelector('.fetch-result[role=alert]')?.textContent.includes('backup'),'原标签未恢复部分失败提示');check(!button('↻ 刷新').disabled,'获取后按钮未恢复');
+ button('↻ 刷新').click();await tick();const finishOld=finishFetch;render('fetch-other','other-session');await tick();finishOld({remotes:[{name:'old-project',status:'failed',error:'旧项目失败'}]});await tick();check(!document.querySelector('.fetch-result'),'旧项目响应污染新项目');render();await tick();fetchHeld=false;button('文件').click();await tick();
  }
  if(new URLSearchParams(location.search).has('images')){
  document.querySelector('#result').dataset.mode='images';

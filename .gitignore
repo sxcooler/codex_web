@@ -5,6 +5,7 @@ dist/
 !.env.example
 .codebase-memory/
 .superpowers/
+.playwright-mcp/
 *.log
 .worktrees/
 test-results/

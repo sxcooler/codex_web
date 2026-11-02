@@ -8,7 +8,7 @@
 
 **Tech Stack:** 现有 TypeScript／React／Fastify、Node test、Playwright 和 PowerShell，不增加依赖。
 
-**Spec:** [已确认 spec](../../../codex-drive/specs/2026-10-22-restart-activity-and-force.arch.md)。
+**Spec:** [已确认 spec](../../design/2026-10-22-restart-activity-and-force.arch.md)。
 
 ## 全局约束
 

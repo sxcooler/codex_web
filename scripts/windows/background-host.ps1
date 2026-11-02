@@ -24,7 +24,7 @@ function Write-HostRecord([string]$Event, [string]$Reason, $ExitCode) {
         @{time=(Get-Date -Format o);event=$Event;reason=$Reason;pid=$PID;parentPid=$parentPid;parentName=$parentName;exitCode=$ExitCode} | ConvertTo-Json -Compress | Add-Content -LiteralPath $log -Encoding UTF8 -ErrorAction Stop
     } catch { }
 }
-$workerArgs = @((Join-Path $projectRoot 'scripts/server-control.ts'), '--worker')
+$workerArgs = @('--report-exclude-env', '--report-exclude-network', (Join-Path $projectRoot 'scripts/server-control.ts'), '--worker')
 if ($Portable) { $workerArgs += '--portable' }
 if ($DiagnosticsEnabled) { $workerArgs += '--diagnostics' }
 Set-Location -LiteralPath $projectRoot

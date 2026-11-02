@@ -2,7 +2,7 @@
 
 > Created At：2026-10-22 14:55:15 +08:00（Asia/Shanghai）
 >
-> Status：IMPLEMENTED（代码及隔离验收完成，真实后端尚未重启）。用户确认“落 plan 然后实施”后按[实施计划](../../docs/superpowers/plans/2026-10-22-restart-activity-and-force.md)完成，见[验收记录](../../docs/verification/2026-10-22-restart-activity-and-force.md)。
+> Status：IMPLEMENTED（代码及隔离验收完成，真实后端尚未重启）。用户确认“落 plan 然后实施”后按[实施计划](../superpowers/plans/2026-10-22-restart-activity-and-force.md)完成，见[验收记录](../verification/2026-10-22-restart-activity-and-force.md)。
 >
 > Architecture Pattern：复用现有 Runtime、设置入口与原生 dialog，不新增服务或依赖。
 >
@@ -158,4 +158,4 @@ flowchart TD
 
 本 spec 先保存并经用户确认，随后落计划及实施。实现使用隔离 fixture 和演示数据验收，未执行真实服务重启／强制重启，未推送。新报告协议和前端必须一并部署，不能向旧后端单独交付新前端。
 
-关联：[语言控件与任务空闲重启](../../docs/design/2026-10-14-language-control-and-restart.md) · [重启记录反馈](../../docs/superpowers/plans/2026-10-15-operation-feedback.md) · [权限核对提示](../../docs/design/2026-10-14-session-ownership-notice.md)。部署新版后本 spec 取代旧弹窗“只允许空闲重启”的产品交互；旧运行实例继续遵守原有规则。
+关联：[语言控件与任务空闲重启](2026-10-14-language-control-and-restart.md) · [重启记录反馈](../superpowers/plans/2026-10-15-operation-feedback.md) · [权限核对提示](2026-10-14-session-ownership-notice.md)。部署新版后本 spec 取代旧弹窗“只允许空闲重启”的产品交互；旧运行实例继续遵守原有规则。

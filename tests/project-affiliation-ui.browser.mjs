@@ -31,7 +31,7 @@ try{
     await route.fulfill({json:data});
    });
    await page.goto(origin+'/sessions/thread-0');await page.locator('.session-title').waitFor();
-   if(width<1001)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();
+   if(width<=1280)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();
    const sidebar=page.locator('.sidebar');await sidebar.getByLabel(/^会话菜单/).first().click();
    assert.equal(await sidebar.getByLabel(/^移入项目/).count(),0,'Manual assignment picker removed');assert.equal(await sidebar.getByRole('button',{name:/移入项目|移出项目/}).count(),0,'Manual assignment buttons removed');
    const menu=sidebar.locator('.session-menu>div:visible');await menu.waitFor();
@@ -44,7 +44,7 @@ try{
    assert.equal(await menu.getByRole('button',{name:'归档会话',exact:true}).isVisible(),true);await page.screenshot({path:join(artifacts,`bottom-${width}.png`)});
    await page.keyboard.press('Escape');await sidebar.getByLabel(/^会话菜单/).first().click();
    page.once('dialog',dialog=>dialog.accept('菜单交互测试'));await menu.getByRole('button',{name:'重命名',exact:true}).click();await sidebar.getByLabel('会话菜单 菜单交互测试',{exact:true}).waitFor();
-   if(width<1001)await page.keyboard.press('Escape');
+   if(width<=1280)await page.keyboard.press('Escape');
    await page.getByRole('button',{name:'操作',exact:true}).click();assert.equal(await page.getByLabel('移入项目',{exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:/移入项目|移出项目/}).count(),0);
    assert.equal(await page.getByText('项目：codex_web',{exact:true}).count(),1,'Header retains Web affiliation while native ID is pending');
    await page.keyboard.press('Escape');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'No viewport overflow');

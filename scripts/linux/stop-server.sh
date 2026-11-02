@@ -13,7 +13,11 @@ read -r pid tick extra < "$data/server.pid"
 [[ -d /proc/$pid ]] || { rm -- "$data/server.pid"; printf 'Web already stopped.\n'; exit 0; }
 [[ -O /proc/$pid && $(start_tick "$pid") == "$tick" ]] || fail 'PID identity changed; nothing was stopped.'
 mapfile -d '' -t args < "/proc/$pid/cmdline"
-[[ ${#args[@]} == 2 && ${args[1]} == "$entry" && $(readlink -f "/proc/$pid/cwd") == "$repo" ]] || fail 'PID is not this workspace Web server; nothing was stopped.'
+[[ $(readlink -f "/proc/$pid/cwd") == "$repo" && (
+  ( ${#args[@]} == 2 && ${args[1]} == "$entry" ) ||
+  ( ( ${#args[@]} == 4 || ( ${#args[@]} == 5 && ${args[4]} == --diagnostics ) ) &&
+    ${args[1]} == --report-exclude-env && ${args[2]} == --report-exclude-network && ${args[3]} == "$entry" )
+) ]] || fail 'PID is not this workspace Web server; nothing was stopped.'
 kill -TERM "$pid"
 for ((i=0; i<150; i++)); do
   if [[ ! -d /proc/$pid ]] || [[ $(start_tick "$pid" || true) != "$tick" ]]; then

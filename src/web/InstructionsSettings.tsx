@@ -16,7 +16,7 @@ export function InstructionsSettings({projects,onDirtyChange,onLeave,actions,onR
  useLayoutEffect(()=>{onDirtyChange(dirty);return()=>onDirtyChange(false);},[dirty,onDirtyChange]);
  useEffect(()=>{if(error)errorBox.current?.focus();},[error]);
  const target={scope,...(scope==='project'?{projectId:project}:{})};
- const read=async(preserve=false,signal?:AbortSignal)=>{if(scope==='project'&&!project)return;setBusy(true);setError('');try{const next:InstructionDocument=await api('/codex/instructions?'+new URLSearchParams(target),undefined,signal);if(signal?.aborted)return;setDocument(next);if(!preserve)setContent(next.content);setBlocked(null);if(preserve)setNotice(msg("settings.instructions.rereadNotice"));}catch(e:any){if(!signal?.aborted)setError(e);}finally{if(!signal?.aborted)setBusy(false);}};
+ const read=async(preserve=false,signal?:AbortSignal)=>{if(scope==='project'&&!project){setBusy(false);return;}setBusy(true);setError('');try{const next:InstructionDocument=await api('/codex/instructions?'+new URLSearchParams(target),undefined,signal);if(signal?.aborted)return;setDocument(next);if(!preserve)setContent(next.content);setBlocked(null);if(preserve)setNotice(msg("settings.instructions.rereadNotice"));}catch(e:any){if(!signal?.aborted)setError(e);}finally{if(!signal?.aborted)setBusy(false);}};
  useEffect(()=>{setDocument(null);setContent('');setNotice('');setBlocked(null);const controller=new AbortController();void read(false,controller.signal);return()=>controller.abort();},[scope,project]);
  const comparison=useMemo(()=>document&&content!==document.content?textDiff(document.content,content):null,[document,content]);
  const tooLarge=new TextEncoder().encode(content).length>262144;

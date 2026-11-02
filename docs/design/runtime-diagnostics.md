@@ -14,6 +14,16 @@
 
 诊断规则：CPU 增量和事件循环延迟同时升高，优先调查 Web 同步处理；Web 正常而多个 RPC 长时间等待，优先调查共享 app-server；相同项目摘要的请求同时变慢再结合具体方法判断项目资源竞争。每种现象都需证据，不能从单张累计 CPU 截图下结论。
 
+## 默认崩溃证据
+
+不开 `--diagnostics` 也会记录 `.local/web/lifecycle.jsonl`（含一个轮转文件）：启动、就绪、正常关闭、未捕获异常和退出码。本地控制入口拒绝停止时也记录拒绝原因；有检查问题时保留首个线程 ID、检查阶段和原因，不记录完整请求。
+
+通过项目启动入口运行的 Web 进程默认将 Node 致命错误（包括 V8 OOM）和未捕获 JS 异常的诊断报告写入 `.local/web/crash-reports/report.*.json`，启动时保留最近 5 份。JS 异常的消息和栈沿用基础日志的凭据脱敏，报告排除环境变量及网络信息；目录为私有本地数据，不打包、不提交。它包含栈和堆统计，不是完整堆快照或 Windows 内存转储。详见 [Node 诊断报告](https://nodejs.org/api/report.html)。
+
+项目入口在 Web 自身 Node 参数中加入 `--report-exclude-env --report-exclude-network`，不设置会传给 MCP 子进程的全局 `NODE_OPTIONS`。自定义 Node 启动命令须保留这两个参数；缺少时只保留脱敏的 JS 异常报告，关闭原生致命错误自动报告，避免 OOM 路径忽略运行时排除属性而写入环境变量。
+
+系统强制结束进程、断电，或 Node 尚未执行初始化时失败，不能保证留下 JS 日志或 Node 报告；若后台宿主仍存活，会追加 worker 退出码。Windows 原生 `.dmp` 需要另外配置 [WER LocalDumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps)，默认未开启，本项目不会自动修改系统注册表。没有报告不能据此断言没有崩溃。
+
 ## 复现与保留证据
 
 更新代码后，等当前任务停稳，再使用下面对应入口带参数启动；不会自动停止现有服务。若实例正在运行但未开启诊断，后台/便携启动入口会提示先停止再重启，不会假装已开启。已经开启诊断的实例会保持原状态，直到停止。

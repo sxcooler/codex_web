@@ -41,7 +41,7 @@ try{
     await route.fulfill({json:data});
    });
    await page.goto(origin);
-   if(width<1001)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();
+   if(width<=1280)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();
    const sidebar=page.getByRole('complementary',{name:'左侧栏'});
    await sidebar.locator('.session-link').last().waitFor();assert.equal(await sidebar.locator('.session-link').count(),10);
    assert.equal(await sidebar.getByRole('combobox',{name:'会话分组方式'}).inputValue(),'project');
@@ -52,13 +52,13 @@ try{
    const none=sidebar.locator('.session-group').filter({has:page.getByRole('heading',{name:'无项目',exact:true})});
    assert.deepEqual(await none.locator('.session-link').allTextContents(),['根目录无项目任务','Desktop 无项目任务','缺少目录任务']);
    const known=sidebar.locator('.session-group').filter({has:page.getByRole('heading',{name:'Known',exact:true})});assert.equal(await known.locator('.session-link').count(),2);
-   if(width<1001)await page.keyboard.press('Escape');
+   if(width<=1280)await page.keyboard.press('Escape');
    await page.getByRole('button',{name:'刷新项目',exact:true}).click();
    await page.waitForFunction(()=>document.querySelector('[aria-label="刷新项目"]')?.textContent==='刷新');
-   if(width<1001)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();
+   if(width<=1280)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();
    assert.deepEqual(await sidebar.locator('.session-group h3').allTextContents(),['Known','无项目','External','git-task','sample-project','codex_web']);
    await none.locator(':scope > summary').click();assert.equal(await none.locator(':scope > summary').getAttribute('aria-expanded'),'false');
-   await page.reload();if(width<1001)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();
+   await page.reload();if(width<=1280)await page.getByRole('button',{name:'展开左侧栏',exact:true}).click();
    await page.getByRole('heading',{name:'无项目',exact:true}).waitFor();assert.equal(await none.locator(':scope > summary').getAttribute('aria-expanded'),'false');
    await none.locator(':scope > summary').click();assert.equal(await none.locator('.session-link').count(),3);
    await page.screenshot({path:`.local/session-project-groups-${width}.png`});

@@ -8,8 +8,11 @@ async function staleCompletion(t:any,source='history'){
   t.after(()=>runtime.close());
   const {threadId,turnId}=await runtime.create({cwd:fileURLToPath(new URL('..',import.meta.url)),clientRequestId:'create',prompt:'hold'});
   const native=(await runtime.snapshot(threadId)).thread;
-  const read=t.mock.method(runtime as any,'readThread',async()=>({...structuredClone(native),turns:native.turns.map((turn:any)=>({...turn,status:'completed'}))}));
-  if(source==='history')await runtime.snapshot(threadId);
+  const read=t.mock.method(runtime as any,'readThread',async()=>({...structuredClone(native),status:{type:'idle'},turns:native.turns.map((turn:any)=>({...turn,status:'completed'}))}));
+  if(source==='history'){
+    await runtime.snapshot(threadId);
+    (runtime as any).onNotification({method:'thread/status/changed',params:{threadId,status:{type:'active',activeFlags:[]}}});
+  }
   else {
     (runtime as any).onNotification({method:'turn/completed',params:{threadId,turn:{...native.turns[0],status:'completed'}}});
     (runtime as any).onNotification({method:'thread/status/changed',params:{threadId,status:{type:'active',activeFlags:[]}}});

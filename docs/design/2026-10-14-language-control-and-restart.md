@@ -10,7 +10,7 @@
 
 ## 重启
 
-2026-10-22：显式维护入口改为[活动清单与单弹窗重启](../../codex-drive/specs/2026-10-22-restart-activity-and-force.arch.md)，见[实施计划](../superpowers/plans/2026-10-22-restart-activity-and-force.md)和[验收](../verification/2026-10-22-restart-activity-and-force.md)。以下为空闲模式及历史实施边界；新版显式强制可以中断已确认范围内的本服务任务，检查不完整仍不允许执行。更新器与自动空闲释放继续使用严格保护。
+2026-10-22：显式维护入口改为[活动清单与单弹窗重启](2026-10-22-restart-activity-and-force.arch.md)，见[实施计划](../superpowers/plans/2026-10-22-restart-activity-and-force.md)和[验收](../verification/2026-10-22-restart-activity-and-force.md)。以下为空闲模式及历史实施边界；新版显式强制可以中断已确认范围内的本服务任务，检查不完整仍不允许执行。更新器与自动空闲释放继续使用严格保护。
 
 - 设置页预检、延迟重启的最终检查以及“重启 Codex”使用一致的任务判断。
 - 列表、历史、文件等只读查询不构成活动任务，不要求等待后台轮询结束；关闭过程中允许这些读取收到断连或运行时切换错误。

@@ -17,7 +17,7 @@ export type DraftProps={onDirtyChange:(dirty:boolean)=>void;onLeave:(proceed:()=
 
 export function Settings({onChanged,projects,route}:{onChanged:()=>void;projects:SettingsProject[];route:string}){
  const {t,text}=useLocale();
- const sections=[['general',t("settings.general")],['configuration',t("settings.configuration")],['personalization',t("settings.personalization")],['usage',t("settings.usage")],['plugins',t("settings.plugins.title")],['web','Codex Web']] as const;
+ const sections=[['general',t("settings.general")],['configuration',t("settings.configuration")],['personalization',t("settings.personalization")],['usage',t("settings.usage")],['plugins',t("extensions.title")],['web','Codex Web']] as const;
   const panes=usePanes(),requested=new URLSearchParams(route.split('?')[1]??'').get('section');
   const [section,label]=sections.find(([id])=>id===requested)??sections[0];
   const instructions=section==='personalization'&&new URLSearchParams(route.split('?')[1]??'').get('view')==='instructions',scroll=useRef<HTMLDivElement>(null);

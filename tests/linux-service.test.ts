@@ -19,16 +19,22 @@ async function fixture() {
   return root;
 }
 
-test('Linux foreground start is exclusive and stop verifies PID identity without killing unrelated Node', { skip: process.platform !== 'linux', timeout: 20_000 }, async () => {
+for(const mode of ['legacy','default','diagnostics'])test(`Linux ${mode} foreground start is exclusive and stop verifies PID identity without killing unrelated Node`, { skip: process.platform !== 'linux', timeout: 20_000 }, async () => {
   const root = await fixture();
   let service: ReturnType<typeof spawn> | undefined, other: ReturnType<typeof spawn> | undefined;
   try {
     await mkdir(join(root, 'src/server'), { recursive: true });
     await writeFile(join(root, 'src/server/main.ts'), `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(join(root, 'ready'))}, String(process.pid)); setInterval(()=>{},1000); process.on('SIGTERM',()=>process.exit(0));`);
-    service = spawn('bash', [join(root, 'scripts/linux/start-server.sh')], { stdio: 'ignore' });
+    if(mode==='legacy'){
+      const launcher=join(root,'scripts/linux/start-server.sh');
+      await writeFile(launcher,(await readFile(launcher,'utf8')).replaceAll('--report-exclude-env --report-exclude-network ',''));
+    }
+    service = spawn('bash', [join(root, 'scripts/linux/start-server.sh'),...(mode==='diagnostics'?['--diagnostics']:[])], { stdio: 'ignore' });
     for (let i=0; i<100 && !await readFile(join(root, 'ready')).catch(()=>null); i++) await delay(25);
     const pid = Number(await readFile(join(root, 'ready'), 'utf8'));
     assert.ok(alive(pid));
+    const args=(await readFile(`/proc/${pid}/cmdline`,'utf8')).split('\0').slice(0,-1);
+    assert.deepEqual(args.slice(1),[...(mode==='legacy'?[]:['--report-exclude-env','--report-exclude-network']),join(root,'src/server/main.ts'),...(mode==='diagnostics'?['--diagnostics']:[])]);
     const recordPath = join(root, '.local/web/server.pid');
     const record = await readFile(recordPath, 'utf8');
     await assert.rejects(exec('bash', [join(root, 'scripts/linux/start-server.sh')], { timeout: 2000 }));
@@ -49,6 +55,18 @@ test('Linux foreground start is exclusive and stop verifies PID identity without
     service?.kill(); other?.kill();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('Linux stop refuses unexpected Node flags even with this entry, cwd and PID record', { skip: process.platform !== 'linux' }, async () => {
+  const root=await fixture();let child:ReturnType<typeof spawn>|undefined;
+  try{
+    await mkdir(join(root,'src/server'),{recursive:true});
+    const entry=join(root,'src/server/main.ts');await writeFile(entry,'setInterval(()=>{},1000);');
+    child=spawn(process.execPath,['--no-warnings',entry],{cwd:root,stdio:'ignore'});assert.ok(child.pid);
+    const stat=await readFile(`/proc/${child.pid}/stat`,'utf8'),tick=stat.slice(stat.lastIndexOf(') ')+2).split(' ')[19];
+    await writeFile(join(root,'.local/web/server.pid'),`${child.pid} ${tick}\n`);
+    await assert.rejects(exec('bash',[join(root,'scripts/linux/stop-server.sh')]));assert.ok(alive(child.pid));
+  }finally{child?.kill();await rm(root,{recursive:true,force:true});}
 });
 
 test('Linux user systemd starts and stops the isolated workspace with its child process', { skip: process.platform !== 'linux' || process.env.LINUX_SERVICE_TEST_SYSTEMD !== '1', timeout: 25_000 }, async () => {

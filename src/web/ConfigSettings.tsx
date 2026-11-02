@@ -71,7 +71,7 @@ export function ConfigSettings({projects,onDirtyChange,onLeave,actions,mode='con
  const renderField=(key:typeof allKeys[number])=>{
   const field=snapshot!.fields[key];if(!field)return <div key={key} className="settings-row"><div><h4>{labels[key]}</h4><p>{t("settings.field.unavailable")}</p></div></div>;
   const network=key==='workspaceNetworkAccess',boolean=network||memoryKeys.includes(key as typeof memoryKeys[number]);
-  const writable=fieldWritable(key),disabled=busy||!fieldEditable(key);
+  const writable=fieldWritable(key),disabled=busy||!fieldEditable(key)||key==='model_reasoning_effort'&&!efforts.length;
   const value=memoryKeys.includes(key as typeof memoryKeys[number])||key==='service_tier'?resolved(key):current(key),shown=value===null?'':String(value);
   const options=key==='model'?models.map(m=>({value:m.model,label:m.displayName??m.model})):key==='model_reasoning_effort'?efforts.map(value=>({value,label:translations[value]??value})):key==='service_tier'?tiers:network?[{value:'false',label:t("settings.off")},{value:'true',label:t("settings.allowed")}]:(choices[key as keyof typeof choices]??[]).map(value=>({value,label:translations[value]??value}));
   const overridden=field.origin&&!['user','system','packagedDefaults'].includes(field.origin.type),isDefault=field.userValue===null&&field.effectiveValue===null&&typeof field.defaultValue==='boolean';

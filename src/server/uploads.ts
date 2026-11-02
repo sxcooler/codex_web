@@ -61,8 +61,8 @@ export async function createUploadService(options:{dataDir:string;maxFileBytes?:
         try{
           for await(const input of inputs){
             if(created.length>=limits.maxFiles)throw uploadError(400,`At most ${limits.maxFiles} files are allowed`);
-            const id=randomUUID(),relative=`${id}${IMAGE_MIMES.get(input.mime)??'.bin'}`,final=join(uploadDir,relative),temp=`${final}.tmp`;
-            paths.push(temp,final);
+            const id=randomUUID(),temp=join(uploadDir,`${id}.tmp`);
+            paths.push(temp);
             const hash=createHash('sha256');let size=0,head=Buffer.alloc(0);
             const handle=await open(temp,'wx',0o600);
             try{
@@ -78,6 +78,8 @@ export async function createUploadService(options:{dataDir:string;maxFileBytes?:
               await handle.sync();
             }finally{await handle.close();}
             const kind=await validate(input,temp,head);
+            const relative=`${id}${IMAGE_MIMES.get(input.mime)??extname(input.name)}`,final=join(uploadDir,relative);
+            paths.push(final);
             await rename(temp,final);
             created.push({item:{uploadId:id,name:safeName(input.name),mime:input.mime,size,kind},relative,sha:hash.digest('hex')});
           }

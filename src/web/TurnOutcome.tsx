@@ -4,8 +4,8 @@ import {useLocale} from './i18n/LocaleProvider.tsx';
 import {nativeRetryText,turnErrorText,turnOutcome} from './turnFeedback.ts';
 import {validItemTime} from '../codex/itemTimes.ts';
 
-export function TurnOutcome({turn,latest=false,duration}:{turn:Json;latest?:boolean;duration?:string}){
-  const {t,locale}=useLocale(),outcome=turnOutcome(turn,locale);
+export function TurnOutcome({turn,latest=false,duration,activeTurnId}:{turn:Json;latest?:boolean;duration?:string;activeTurnId?:string|null}){
+  const {t,locale}=useLocale(),outcome=turnOutcome(turn,locale,activeTurnId);
   const [copied,setCopied]=useState<'success'|'failed'>();
   if(!outcome)return duration?<p className="turn-duration muted small">{t('session.feedback.elapsed')} {duration}</p>:null;
   const error=turnErrorText(turn),raw=typeof turn.error==='string'?turn.error:turn.error?.message;

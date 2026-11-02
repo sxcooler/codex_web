@@ -38,7 +38,7 @@ for(const kind of ['async','sync'])for(const width of [1280,390])test(`${kind} q
   await link.click();
   await expect(page.locator('.git-panel .image-preview img')).toHaveJSProperty('naturalWidth',512);
   expect(imageRequests).toContain('frames/crop.png');
-  if(width<680)await page.getByRole('button',{name:'关闭侧栏',exact:true}).click({position:{x:4,y:50}});
+  if(width<=1280)await page.getByRole('button',{name:'关闭侧栏',exact:true}).click({position:{x:4,y:50}});
   await expect(card.getByRole('radio',{name:'敌人',exact:true})).not.toBeChecked();
   expect(posted).toHaveLength(0);
   await card.getByRole('radio',{name:'敌人',exact:true}).check();

@@ -9,6 +9,35 @@ import { createUploadService, registerUploadRoutes } from '../src/server/uploads
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 
+test('allowed uploads retain their original suffix and rejected files leave no stored path',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'uploads-suffix-'));
+  const service=await createUploadService({dataDir:dir});
+  try{
+    const samples=[
+      ['notes.txt','text/plain','text','.txt'],
+      ['notes.md','text/markdown','# md','.md'],
+      ['notes.MD','text/markdown','# upper','.MD'],
+      ['notes.markdown','text/markdown','# long suffix','.markdown'],
+      ['table.csv','text/csv','a,b\r\n1,2','.csv'],
+      ['data.json','application/json','{}','.json'],
+      ['report.pdf','application/pdf','%PDF-1.7\nfixture','.pdf'],
+    ];
+    for(const [name,mime,text,suffix] of samples){
+      const item=await service.store('owner',{name,mime,data:Buffer.from(text)}),stored=await service.read('owner',item.uploadId);
+      assert.equal(stored.relative_path,item.uploadId+suffix);assert.equal(stored.original_name,name);assert.deepEqual(stored.data,Buffer.from(text));
+      const {inputs}=await service.claim('owner',null,item.uploadId,[item.uploadId]);assert.equal(inputs[0].type,'text');
+      if(inputs[0].type==='text')assert.ok(inputs[0].text.includes(JSON.stringify(join(dir,'uploads',item.uploadId+suffix))));
+    }
+    const before=(await readdir(join(dir,'uploads'))).sort();
+    for(const [name,mime,text] of [['program.exe','text/plain','plain'],['program.EXE','application/octet-stream','MZexe'],['hidden.txt','text/plain','MZexe'],['page.md','text/markdown','<html>bad']]){
+      await assert.rejects(service.store('owner',{name,mime,data:Buffer.from(text)}),/not allowed/);
+      assert.deepEqual((await readdir(join(dir,'uploads'))).sort(),before);
+    }
+    await assert.rejects(service.storeMany('owner',[{name:'first.md',mime:'text/markdown',data:Buffer.from('# good')},{name:'second.exe',mime:'text/plain',data:Buffer.from('bad')}]),/not allowed/);
+    assert.deepEqual((await readdir(join(dir,'uploads'))).sort(),before);
+  }finally{service.close();await rm(dir,{recursive:true,force:true});}
+});
+
 test('default upload limits accept five 15 MiB files and reject larger files or a sixth attachment',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'uploads-defaults-'));
   const service=await createUploadService({dataDir:dir});
@@ -37,6 +66,28 @@ test('multipart rejects a truncated file and rolls back the entire batch', async
     const accepted=await app.inject({method:'POST',url:'/api/uploads',headers:{'content-type':'multipart/form-data; boundary=boundary'},payload:body(['abcd','efgh'])});
     assert.equal(accepted.statusCode,200,accepted.body);
     assert.deepEqual(accepted.json().uploads.map((x:any)=>x.size),[4,4]);
+  }finally{await app.close();service.close();await rm(dir,{recursive:true,force:true});}
+});
+
+test('Markdown paste multipart preserves UTF-8 and CRLF and claims only a file reference',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'uploads-pasted-markdown-'));
+  const service=await createUploadService({dataDir:dir}),app=Fastify();
+  try{
+    await registerUploadRoutes(app,service,{authenticated:()=>true,owner:()=> 'owner'});
+    const source='# 粘贴原文\r\n\r\n'+('中文😀 `code`\r\n'.repeat(700))+'\r\n最后一行  ';
+    const name='pasted-text-2026-10-29.md',boundary='markdown-paste-fixture';
+    const multipart=(text:string)=>Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: text/markdown\r\n\r\n${text}\r\n--${boundary}--\r\n`,'utf8');
+    const response=await app.inject({method:'POST',url:'/api/uploads',headers:{'content-type':`multipart/form-data; boundary=${boundary}`},payload:multipart(source)});
+    assert.equal(response.statusCode,200,response.body);
+    const item=response.json();assert.equal(item.name,name);assert.equal(item.mime,'text/markdown');assert.equal(item.kind,'file');assert.equal(item.size,Buffer.byteLength(source));
+    const stored=await service.read('owner',item.uploadId);assert.deepEqual(stored.data,Buffer.from(source));assert.equal(stored.sha256,createHash('sha256').update(source).digest('hex'));
+    const claimed=await service.claim('owner',null,'markdown-request',[item.uploadId]);assert.equal(claimed.inputs.length,1);
+    const input=claimed.inputs[0];assert.equal(input.type,'text');
+    if(input.type==='text'){assert.deepEqual(input.text_elements,[]);assert.ok(input.text.includes(name));assert.ok(input.text.includes(JSON.stringify(stored.path)));assert.ok(!input.text.includes(source));}
+    const download=await app.inject({method:'GET',url:'/api/uploads/'+item.uploadId});
+    assert.equal(download.headers['content-type'],'text/markdown');assert.equal(download.headers['x-content-type-options'],'nosniff');assert.match(String(download.headers['content-disposition']),/attachment;.*\.md/);assert.deepEqual(download.rawPayload,Buffer.from(source));
+    const rejected=await app.inject({method:'POST',url:'/api/uploads',headers:{'content-type':`multipart/form-data; boundary=${boundary}`},payload:multipart('<script>'+('x'.repeat(5000)))});
+    assert.equal(rejected.statusCode,400,rejected.body);assert.match(rejected.body,/content is not allowed/);assert.equal((await readdir(join(dir,'uploads'))).length,1);
   }finally{await app.close();service.close();await rm(dir,{recursive:true,force:true});}
 });
 

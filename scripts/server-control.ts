@@ -5,7 +5,7 @@ import { createServer, request } from 'node:http';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import {Lifecycle} from '../src/server/lifecycle.ts';
+import {Lifecycle,redactLifecycleText} from '../src/server/lifecycle.ts';
 import type {RestartScope} from '../src/codex/runtime.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -26,7 +26,13 @@ export async function managedServer(stop: boolean | 'idle' | 'prepare' | 'restar
       let text = '';
       res.on('data', chunk => { text += chunk; if (text.length > 2048) res.destroy(); });
       res.on('error', () => resolve(null));
-      res.on('end', () => { try { const result = JSON.parse(text);if(stop==='restart'&&res.statusCode===409){reject(Object.assign(Error(result.error??'Restart scope changed; no process was stopped'),{code:result.code}));return;} resolve(res.statusCode === 200 && result.token === state.token && result.root === root ? state : null); } catch { resolve(null); } });
+      res.on('end', () => {
+        if((stop==='idle'||stop==='prepare')&&res.statusCode===409){
+          let result:any;try{result=JSON.parse(text);}catch{}
+          reject(Object.assign(Error(typeof result?.error==='string'?result.error:'Idle preparation refused; no process was stopped'),{code:result?.code}));return;
+        }
+        try { const result = JSON.parse(text);if(stop==='restart'&&res.statusCode===409){reject(Object.assign(Error(result.error??'Restart scope changed; no process was stopped'),{code:result.code}));return;} resolve(res.statusCode === 200 && result.token === state.token && result.root === root ? state : null); } catch { resolve(null); }
+      });
     });
     req.on('error', () => resolve(null)); req.on('timeout', () => req.destroy()); req.end(stop==='restart'?JSON.stringify(scope):undefined);
   });
@@ -38,9 +44,9 @@ export async function stopServer(onlyIfIdle = false,scope?:RestartScope) {
   let stopped: Instance | null;
   try { stopped=await managedServer(scope?'restart':onlyIfIdle ? 'idle' : true,scope); }
   catch(error:any){
-    if(scope)throw error;
+    if(scope||error.code!=='CONTROL_IDLE_UNSUPPORTED')throw error;
     // Bootstrap an older server only through its authenticated idle check and admission lock.
-    if(error.code!=='CONTROL_IDLE_UNSUPPORTED'||!await managedServer('prepare'))throw new Error('Legacy idle check refused shutdown; no process was stopped.');
+    if(!await managedServer('prepare'))throw new Error('Legacy idle check refused shutdown; no process was stopped.');
     stopped=await managedServer(true);
   }
   if (!stopped) throw new Error('Shutdown refused or unconfirmed. Check for active sessions; no other process was stopped.');
@@ -88,7 +94,16 @@ export async function runServer(portable = false, diagnosticsEnabled = false) {
         const prepare=(app as any).prepareRestart;if(typeof prepare!=='function')throw Error('Scoped restart is unavailable');await prepare.call(app,scope);
       }catch(error:any){res.writeHead(409,{'Content-Type':'application/json'}).end(JSON.stringify({error:String(error.message??error).slice(0,1000),code:error.code}));return;}
     }
-    if(req.url==='/prepare-update'||req.url==='/stop-idle'){try{const prepare=(app as any)[req.url==='/stop-idle'?'prepareRestart':'prepareUpdate'];if(typeof prepare!=='function')throw Error('Idle preparation unavailable');await prepare.call(app);}catch{res.writeHead(409).end();return;}}
+    if(req.url==='/prepare-update'||req.url==='/stop-idle'){
+      try{const prepare=(app as any)[req.url==='/stop-idle'?'prepareRestart':'prepareUpdate'];if(typeof prepare!=='function')throw Error('Idle preparation unavailable');await prepare.call(app);}
+      catch(error:any){
+        const issue=error?.inspection?.issues?.[0],code=error?.code;
+        const message=redactLifecycleText([typeof error?.message==='string'?error.message:'Idle preparation refused',issue?.threadId,issue?.stage,issue?.message].filter(value=>typeof value==='string').join(' | '),1000)!;
+        const refused=Object.assign(Error(message),{code:typeof code==='number'&&Number.isSafeInteger(code)||typeof code==='string'&&/^[A-Z0-9_]{1,64}$/.test(code)?code:undefined});
+        lifecycle.record('control_refused',{reason:req.url==='/stop-idle'?'control_stop_idle':'control_prepare_update'},refused);
+        res.writeHead(409,{'Content-Type':'application/json'}).end(JSON.stringify({error:refused.message,code:refused.code}));return;
+      }
+    }
     if(['/stop','/stop-idle','/stop-restart'].includes(req.url??'')){
       const reason=req.url==='/stop-restart'?'control_stop_restart':req.url==='/stop-idle'?'control_stop_idle':'control_stop';let requested=false;
       const stop=()=>{if(requested)return;requested=true;lifecycle.record('control_stop',{reason});void shutdown(reason).catch(error=>{console.error(error);process.exitCode=1;});};
@@ -123,7 +138,7 @@ export async function startBackground(portable = false, diagnosticsEnabled = fal
   // ponytail: Linux rotates on launch; use logrotate if uninterrupted runs need bounded logs.
   for (const log of logs) if ((await stat(log).catch(() => null))?.size! >= 1048576) await rename(log, log + '.1');
   const entry = fileURLToPath(import.meta.url);
-  const args = [entry, '--worker', ...(portable ? ['--portable'] : []),...(diagnosticsEnabled?['--diagnostics']:[])];
+  const args = ['--report-exclude-env','--report-exclude-network',entry, '--worker', ...(portable ? ['--portable'] : []),...(diagnosticsEnabled?['--diagnostics']:[])];
   if (windows) {
     // Use the built-in shell to detach a hidden window; no PowerShell 7 dependency.
     const shell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');

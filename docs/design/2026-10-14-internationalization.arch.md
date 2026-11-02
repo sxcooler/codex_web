@@ -191,4 +191,4 @@ stateDiagram-v2
 
 ## 11. 实施落地（2026-10-14）
 
-推荐方案已按[实施计划](../../docs/superpowers/plans/2026-10-14-internationalization.md)落地，实际范围、失败分母、浏览器状态保持、原文边界及本机静态更新见[验收记录](../../docs/verification/2026-10-14-internationalization.md)。本文件前述源码观察保留为设计时基线，当前实现以 src/web/i18n/ 和验收记录为准。
+推荐方案已按[实施计划](../superpowers/plans/2026-10-14-internationalization.md)落地，实际范围、失败分母、浏览器状态保持、原文边界及本机静态更新见[验收记录](../verification/2026-10-14-internationalization.md)。本文件前述源码观察保留为设计时基线，当前实现以 src/web/i18n/ 和验收记录为准。

@@ -307,11 +307,13 @@ Git 仍用参数数组、`--no-ext-diff --no-textconv --no-color -- <path>`，�
 
 输入框附件支持选择、拖放、粘贴图片；附件列表展示缩略图/文件名/大小、上传中/失败/就绪，失败单独重试。所有附件就绪才允许发送。移除仅撤销草稿引用，不删除已经发送的历史资源。
 
-`POST /api/uploads` 使用 multipart，返回 `{uploadId,name,mime,size,kind:'file'|'image'}`；限制：每文件 15MiB、每消息最多 5 个、单次合计 75MiB、私有附件总量 1GiB。流式写入临时文件并计算 SHA-256，成功后原子改名；文件名用随机 ID，用户文件名只作显示。验证扩展名、MIME 与 magic bytes；首版图片仅 PNG/JPEG/WebP，拒绝 SVG/HTML/可执行文件与压缩包。图片解码后像素上限 40MP，拒绝解码炸弹。
+`POST /api/uploads` 使用 multipart，返回 `{uploadId,name,mime,size,kind:'file'|'image'}`；限制：每文件 15MiB、每消息最多 5 个、单次合计 75MiB、私有附件总量 1GiB。流式写入 `UUID.tmp` 并计算 SHA-256，完成验证后才形成最终文件名并原子改名；存储名主体用随机 ID，图片沿用 MIME 对应的规范扩展名，普通允许文件保留原扩展名及大小写（如 `UUID.md`、`UUID.MD`、`UUID.pdf`），原始文件名只作显示/下载名称。验证扩展名、MIME 与 magic bytes；首版图片仅 PNG/JPEG/WebP，拒绝 SVG/HTML/可执行文件与压缩包。危险类型继续拒绝，不增加 `.exe.bin` 接收或改名规则。图片解码后像素上限 40MP，拒绝解码炸弹。
 
 消息 POST 增加 `attachmentIds:string[]`。后端验证登录所有者/草稿关系、资源存在、限额与模型 inputModalities，不能接受客户端自带磁盘路径。图片转为官方 `localImage`（后端绝对路径）；普通文件在当前 UserInput 没有通用 file 类型，使用文本片段告诉 Codex 原文件名和受控保存路径，让原生工具按任务读取。不能虚构 `type:'file'`，也不自动把二进制嵌进 prompt。
 
 SQLite `uploads(id PRIMARY KEY, original_name, mime, size, sha256, relative_path, created_at, claimed_thread_id NULL, claimed_request_id NULL)`。提交用幂等 ID 原子认领；结果未知保留附件，先读原生历史核对再重试。无引用草稿 24h 后清理；已发送附件持续保留，因为原生会话/VS Code 可能引用该本地路径。达到总量只拒绝新上传，不静默删除历史附件。备份说明同时包含上传目录。
+
+2026-10-29 的既有数据维护仅迁移当时两份已发送 Markdown 的数据库主路径：新增同目录 `UUID.md` 硬链接，核对文件大小及 SHA-256 后事务性条件更新 `relative_path`；旧 `UUID.bin` 保留为历史消息兼容入口。内容、上传 ID、原始名称和绑定关系不变，不做通用启动自动迁移；旧兼容名不会被当前草稿清理任务自动回收。
 
 预览走登录保护的 `GET /api/uploads/:id`，校验资源引用、`nosniff`、安全 Content-Disposition、`Cache-Control:no-store`；非图片一律下载，不能直接作为网页执行。绝对路径只传到原生 Agent，不展示成可任意访问的 HTTP 路径。
 

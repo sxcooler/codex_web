@@ -1,0 +1,7 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>File panel scope QA</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>#root{max-width:650px;margin:auto}#right-sidebar{height:calc(100dvh - 30px)}</style><div id="root"></div>
+<script type="module">
+import '/src/web/style.css';import React from 'react';import{createRoot}from'react-dom/client';import{GitPanel}from'/src/web/GitPanel.tsx';import{LocaleProvider}from'/src/web/i18n/LocaleProvider.tsx';
+const root=createRoot(document.querySelector('#root'));window.renderPanel=(options={})=>{const{locale='zh-CN',...props}=options;root.render(React.createElement(LocaleProvider,{key:locale,initial:{locale,preference:locale,persisted:true}},React.createElement(GitPanel,{key:props.projectId??'scope',id:'session',projectId:'scope',projectRoot:'C:/work',visible:true,tick:0,...props})));};
+window.renderPanel(Object.fromEntries(new URLSearchParams(location.search)));
+</script></html>

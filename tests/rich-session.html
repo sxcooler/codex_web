@@ -1,0 +1,34 @@
+<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/icon.svg"><title>Rich session integration fixture</title><div id="root"></div>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {LocaleProvider} from '/src/web/i18n/LocaleProvider.tsx';
+import {PaneLayout} from '/src/web/PaneLayout.tsx';
+import {Session} from '/src/web/SessionView.tsx';
+import '/src/web/style.css';
+const locale=new URL(location.href).searchParams.get('locale')==='en'?'en':'zh-CN';
+const marker='\uE200visualize\uE202{"path":"C:/fixture/preview.html","title":"Session preview"}\uE201';
+const source=['# Session integration',':::task-stub{title="Suggested fix"}','Add missing validation.',':::',marker,'```text',marker,':::task-stub{title="Code example"}','Never create a draft from this example.',':::','```','<script>window.messageExecuted=true;<\/script>'].join('\n\n');
+const audioBytes=new Uint8Array(46),view=new DataView(audioBytes.buffer);
+for(const [offset,value] of [[0,'RIFF'],[8,'WAVE'],[12,'fmt '],[36,'data']])for(let i=0;i<value.length;i++)audioBytes[offset+i]=value.charCodeAt(i);
+view.setUint32(4,38,true);view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,8000,true);view.setUint32(28,16000,true);view.setUint16(32,2,true);view.setUint16(34,16,true);view.setUint32(40,2,true);
+window.testState={calls:[],unexpected:[],snapshotFails:false,source:'<!doctype html><button onclick="window.previewExecuted=true">Click example</button><script>window.previewExecuted=true;<\/script>',snapshot:{thread:{id:'rich-session',name:'Rich session integration',cwd:'C:/fixture',turns:[{id:'turn-1',status:'completed',items:[{id:'tool-1',type:'mcpToolCall',tool:'fixture-tool',status:'completed',mcpAppUi:{resourceUri:'ui://fixture/widget'},result:{content:[{type:'text',text:'Literal tool receipt: '+marker},{type:'audio',mimeType:'audio/wav',data:btoa(String.fromCharCode(...audioBytes))},{type:'resource_link',uri:'https://example.invalid/private',name:'Unresolved resource'},{type:'resource',resource:{uri:'internal-resource',mimeType:'text/plain',text:'Embedded resource text'}}],structuredContent:{ok:true}}},{id:'agent-1',type:'agentMessage',text:source}]}]},phase:'IDLE',pending:[]}};
+const state=window.testState,response=(data,status=200)=>new Response(JSON.stringify(data),{status});
+window.EventSource=class extends EventTarget{constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){}};
+window.fetch=async(path,options={})=>{
+ const url=String(path);state.calls.push({url,method:options.method||'GET',body:options.body});
+ if(url==='/api/sessions/rich-session/rich-preview')return state.snapshotFails?response({error:'Fixture snapshot unavailable'},503):response({path:'C:/fixture/preview.html',source:state.source,digest:'a'.repeat(64),readAt:'2026-10-28T12:00:00.000Z'});
+ if(url==='/api/auth/session')return response({authenticated:true,csrfToken:'fixture'});
+ if(url==='/api/account/usage')return response({accountId:null});
+ if(url==='/api/models')return response({data:[{id:'fixture',model:'fixture',displayName:'Fixture model',supportedReasoningEfforts:['high']}]});
+ if(url.startsWith('/api/permission-modes'))return response({current:'ask',modes:[{id:'ask',available:true}]});
+ if(url==='/api/sessions/rich-session'||url.startsWith('/api/sessions/rich-session?'))return response(state.snapshot);
+ if(url.endsWith('/status?verify=true'))return response(state.snapshot);
+ if(url.endsWith('/open')||url.endsWith('/cancel-release')||url.endsWith('/release-on-leave'))return response({});
+ state.unexpected.push(url);throw Error('Unexpected fixture API '+url);
+};
+window.copyAttempts=[];Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copyAttempts.push(text);if(window.copyFails)throw Error('Fixture clipboard failure');}},configurable:true});
+const noop=async()=>{};
+localStorage.setItem('codex-web:panels:v1',JSON.stringify({version:1,left:false,right:false,composerCollapsed:false}));
+createRoot(document.getElementById('root')).render(React.createElement(LocaleProvider,{initial:{locale,preference:locale,persisted:true}},React.createElement(PaneLayout,{className:'shell'},React.createElement('div',{className:'workspace'},React.createElement('div',{className:'workspace-content'},React.createElement(Session,{id:'rich-session',onChanged:noop,onReleased:noop,onNotificationHandled:noop}))))));
+</script></html>

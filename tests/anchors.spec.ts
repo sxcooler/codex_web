@@ -55,20 +55,20 @@ for (const width of [1280, 390]) test(`Codex document anchors and line reference
   await atTop('下一步');
   expect(reads).toContain('docs/next.md');
   // Reopening an already loaded document must jump again, including in the mobile drawer.
-  if (width < 680) await page.locator('[data-panel-toggle="right"][aria-expanded="true"]').click();
+  if (width <= 1280) await page.locator('[data-panel-toggle="right"][aria-expanded="true"]').click();
   await chatLink.click();
   await atTop('最近交付');
-  if (width < 680) await page.locator('[data-panel-toggle="right"][aria-expanded="true"]').click();
+  if (width <= 1280) await page.locator('[data-panel-toggle="right"][aria-expanded="true"]').click();
   await page.getByRole('link', { name: '正文行号', exact: true }).click();
   await expect(page.getByRole('button', { name: '预览', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const paragraph=preview.locator('p').filter({hasText:'段落 38：检查长文档内的定位。'}).first();
   await expect.poll(async()=>Math.abs((await paragraph.boundingBox())!.y-(await preview.boundingBox())!.y)).toBeLessThan(40);
-  if (width < 680) await page.locator('[data-panel-toggle="right"][aria-expanded="true"]').click();
+  if (width <= 1280) await page.locator('[data-panel-toggle="right"][aria-expanded="true"]').click();
   await page.getByRole('link', { name: '标题行号', exact: true }).click();
   await expect(page.getByRole('button', { name: '预览', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await atTop('最近交付');
   await page.screenshot({path:join(tmpdir(),`codex-line-preview-${width}.png`)});
-  if (width < 680) await page.locator('[data-panel-toggle="right"][aria-expanded="true"]').click();
+  if (width <= 1280) await page.locator('[data-panel-toggle="right"][aria-expanded="true"]').click();
   await page.getByRole('link', { name: '代码块行号', exact: true }).click();
   const code=preview.locator('[data-streamdown="code-block"]');
   await expect.poll(async()=>Math.abs((await code.boundingBox())!.y-(await preview.boundingBox())!.y)).toBeLessThan(40);

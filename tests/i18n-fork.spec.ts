@@ -1,5 +1,6 @@
 import {test,expect} from '@playwright/test';
 for(const [status,code] of [[400,'REQUEST_VALIDATION_FAILED'],[401,'AUTH_REQUIRED'],[403,'REQUEST_FORBIDDEN']] as const)test(`coded ${status} fork rejection permits only explicit retry across languages`,async({page})=>{
+ page.on('dialog',dialog=>dialog.accept());
  const posts:any[]=[];
  await page.route('**/api/**',async route=>{posts.push(route.request().postDataJSON());await route.fulfill({status,json:{error:'Original rejected request',code}});});
  await page.goto('/tests/i18n-fork.html');await page.getByRole('button',{name:'分支到新聊天',exact:true}).click();

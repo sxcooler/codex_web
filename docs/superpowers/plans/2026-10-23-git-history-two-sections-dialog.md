@@ -8,7 +8,7 @@
 
 **Tech Stack:** 现有 React／TypeScript／CSS、类型安全中英文目录、Playwright、Node test、Vite，无新依赖。
 
-**Spec:** [已确认 spec](../../../codex-drive/specs/2026-10-23-git-history-two-sections-dialog.arch.md)。
+**Spec:** [已确认 spec](../../design/2026-10-23-git-history-two-sections-dialog.arch.md)。
 
 ## 全局约束
 

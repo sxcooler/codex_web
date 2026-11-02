@@ -7,7 +7,7 @@ import { AppServer } from '../src/codex/app-server.ts';
 
 const fixture = fileURLToPath(new URL('./fixtures/rpc-server.mjs', import.meta.url));
 test('native history diagnostics retain only exact error class code method and thread correlation',async t=>{
- const events:any[]=[],server=start(t,{diagnostic:(event:any)=>events.push(event)}),threadId='d5f13aa2-13c1-4119-a795-0006b4e326a6';
+ const events:any[]=[],server=start(t,{diagnostic:(event:any)=>events.push(event)}),threadId='11111111-1111-4111-8111-111111111111';
  const message=`thread ${threadId} is not materialized yet; thread/turns/list is unavailable before first user message`;
  for(const [code,text,method,kind] of [[-32600,message,'thread/turns/list','history-not-materialized'],[-32603,message,'thread/turns/list','rpc-error'],[-32601,'list_turns is not supported yet','thread/read','history-unsupported']]){
   await assert.rejects(server.request(method as string,{threadId,prompt:'secret-prompt',fixtureError:{code,message:text,data:{credential:'secret-credential'}}}));
@@ -209,6 +209,8 @@ test('close kills only its unresponsive child after the graceful deadline', { ti
   const server = start(t);
   await server.request('hang', {});
   await assert.rejects(server.close(), /5.*(second|000)|shutdown.*timed out/i);
+  await (server as any).ended;
+  await server.close();
 });
 
 test('explicit forced close waits for its owned unresponsive child to actually exit',{timeout:9000},async t=>{

@@ -30,6 +30,7 @@ try{
  const buttons=()=>[...document.querySelectorAll('button')];
  buttons().find(b=>b.textContent==='复制代码').click();await until(()=>copies.length===1,'Code copy failed');check(copies[0]===code+'\n','Code copy changed source');
  buttons().find(b=>b.textContent==='复制 Markdown').click();await until(()=>copies.length===2,'Message copy failed');check(copies[1]===source,'Message copy must retain original Markdown');
+ await until(()=>!buttons().find(b=>b.textContent==='复制 Markdown').disabled,'Message copy did not finish');
  copyFails=true;buttons().find(b=>b.textContent==='复制 Markdown').click();await until(()=>document.body.textContent.includes('复制失败'),'Clipboard failure needs visible feedback');copyFails=false;
  check(document.documentElement.scrollWidth<=innerWidth,'Page overflows horizontally');
  const parts=['**还在生成',fence+'js\nconst answer =',fence+'js\nconst answer = 42;\n'+fence,'[链接](https://openai'];

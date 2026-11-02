@@ -1,6 +1,6 @@
 # 国际化实施与验收
 
-本轮按[架构方案](../../codex-drive/specs/2026-10-14-internationalization.arch.md)的推荐选项实施；[plan](../superpowers/plans/2026-10-14-internationalization.md)在修改产品代码前保存。基线提交为 `54758aa`，独立工作树与所有临时输出位于被忽略的 `.worktrees/` / `.local/`。未新增依赖。
+本轮按[架构方案](../design/2026-10-14-internationalization.arch.md)的推荐选项实施；[plan](../superpowers/plans/2026-10-14-internationalization.md)在修改产品代码前保存。基线提交为 `54758aa`，独立工作树与所有临时输出位于被忽略的 `.worktrees/` / `.local/`。未新增依赖。
 
 ## 实施范围
 

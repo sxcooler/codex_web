@@ -777,6 +777,19 @@ test('leave reconciles missing terminal events instead of waiting forever', asyn
   assert.equal((await runtime.requestRelease(threadId)).handoffReady, true);
 });
 
+test('leave verifies terminal history when a buffered same-turn delta arrives during the read',async t=>{
+  const runtime=start(t,60_000,'missed-completion');
+  const {threadId}=await runtime.create({cwd,clientRequestId:'buffered-leave'});
+  const {turnId}=await runtime.send(threadId,{text:'stream',clientRequestId:'buffered-stream'});
+  const read=(runtime as any).readThread.bind(runtime);let injected=false;
+  t.mock.method(runtime as any,'readThread',async(...args:any[])=>{
+    const thread=await read(...args);
+    if(!injected){injected=true;(runtime as any).onNotification({method:'item/agentMessage/delta',params:{threadId,turnId,itemId:'buffered-tail',delta:'tail'}});}
+    return thread;
+  });
+  assert.equal((await runtime.requestRelease(threadId)).handoffReady,true);
+});
+
 test('refresh reconciles a terminal system error without reloading or interrupting any thread',async t=>{
   const runtime=start(t);
   const active=await runtime.create({cwd,clientRequestId:'other',prompt:'hold'});

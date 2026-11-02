@@ -15,7 +15,7 @@ const linuxArchiveHash = '2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc6117
 const nodeHash = windows ? '5c976096e04e5c2c1f091938926234cc9fbebfe9787ddd149351b3b0ecc707b5' : '89af8424dd53e560b1933f87ba650d8bf57c83ca5a04600eefb31f416aabbae7';
 export const runtimeFiles = ['src/server', 'src/codex', 'src/projects.ts', 'scripts/setup-auth.ts', 'scripts/portable.ts', 'scripts/tailscale.ts', 'scripts/server-control.ts', 'scripts/update-portable.ts','scripts/portable-manifest.ts', 'scripts/windows', 'scripts/linux', 'dist'];
 export function sourceAllowed(path: string): boolean {
-  return !path.toLowerCase().split('/').some(part => ['.git', '.local', '.worktrees', '.superpowers', '.codebase-memory', 'node_modules', 'dist', 'releases', 'output', 'test-results', 'playwright-report'].includes(part))
+  return !path.toLowerCase().split('/').some(part => ['.git', '.local', '.worktrees', '.superpowers', '.playwright-mcp', '.codebase-memory', 'node_modules', 'dist', 'releases', 'output', 'test-results', 'playwright-report'].includes(part))
     && !/(^|\/)\.env(?!\.example$)|\.(?:sqlite(?:-wal|-shm)?|db|log|pem|key|pfx)$/i.test(path)
     && !/^(auth|vapid|credentials)\.json$/i.test(basename(path));
 }
@@ -35,23 +35,16 @@ async function copy(source: string, target: string, allowed = (_path: string) =>
   await cp(source, target, { recursive: true, filter: async path => { if (!allowed(path)) return false; if ((await lstat(path)).isSymbolicLink()) throw new Error('Symbolic link in package input'); return true; } });
 }
 export async function copyPortableDocs(source: string, target: string, tracked: string[]) {
-  const architecture = 'codex-drive/specs/2026-10-14-internationalization.arch.md';
-  const packagedArchitecture = 'docs/design/2026-10-14-internationalization.arch.md';
   // Installed updaters accept docs/ and README_EN.md, but not new top-level names.
   for (const path of tracked) {
-    if (!sourceAllowed(path) || !(['README.md','README_CN.md',architecture].includes(path) || path.startsWith('docs/'))) continue;
-    const destination=path===architecture?packagedArchitecture:path==='README_CN.md'?'README_EN.md':path;
+    if (!sourceAllowed(path) || !(['README.md','README_CN.md'].includes(path) || path.startsWith('docs/'))) continue;
+    const destination=path==='README_CN.md'?'README_EN.md':path;
     await copy(join(source,path),join(target,destination));
     if (path.endsWith('.md')) {
       const document=join(target,destination);
-      let content=await readFile(document,'utf8');
-      for(const [original,packaged] of [[architecture,packagedArchitecture],['README_CN.md','README_EN.md']]){
-        const oldLink=relative(dirname(path),original).split(sep).join('/');
-        const newLink=relative(dirname(destination),packaged).split(sep).join('/');
-        content=original===architecture?content.replaceAll(oldLink,newLink):content
-          .replaceAll(`](${oldLink})`,`](${newLink})`)
-          .replaceAll(`](${oldLink}#`,`](${newLink}#`);
-      }
+      const oldLink=relative(dirname(path),'README_CN.md').split(sep).join('/');
+      const newLink=relative(dirname(destination),'README_EN.md').split(sep).join('/');
+      const content=(await readFile(document,'utf8')).replaceAll(`](${oldLink})`,`](${newLink})`).replaceAll(`](${oldLink}#`,`](${newLink}#`);
       await writeFile(document,content);
     }
   }
@@ -116,11 +109,11 @@ async function main() {
     await mkdir(join(portable, 'runtime'));
     await writeFile(join(portable, 'runtime', executable), binary); await writeFile(join(portable, 'runtime', 'NODE-LICENSE.txt'), license);
     if (windows) {
-      for (const [name, arg] of [['Start',''],['Stop','--stop'],['Status','--status']]) await writeFile(join(portable, name + '.cmd'), `@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\n"%~dp0runtime\\node.exe" "%~dp0scripts\\portable.ts" ${arg} %*\r\nset "codexExit=%errorlevel%"\r\n${name==='Start'?'if not "%codexExit%"=="0" pause':'pause'}\r\nexit /b %codexExit%\r\n`);
+      for (const [name, arg] of [['Start',''],['Stop','--stop'],['Status','--status']]) await writeFile(join(portable, name + '.cmd'), `@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\n"%~dp0runtime\\node.exe" --report-exclude-env --report-exclude-network "%~dp0scripts\\portable.ts" ${arg} %*\r\nset "codexExit=%errorlevel%"\r\n${name==='Start'?'if not "%codexExit%"=="0" pause':'pause'}\r\nexit /b %codexExit%\r\n`);
     }
     else {
       await chmod(join(portable, 'runtime', executable), 0o755);
-      for (const [name,arg] of [['Start',''],['Stop','--stop'],['Status','--status']]) await writeFile(join(portable, name + '.sh'), `#!/usr/bin/env bash\nset -euo pipefail\ncd -- "$(dirname -- "\${BASH_SOURCE[0]}\")"\nexec ./runtime/node ./scripts/portable.ts ${arg} "$@"\n`, { mode: 0o755 });
+      for (const [name,arg] of [['Start',''],['Stop','--stop'],['Status','--status']]) await writeFile(join(portable, name + '.sh'), `#!/usr/bin/env bash\nset -euo pipefail\ncd -- "$(dirname -- "\${BASH_SOURCE[0]}\")"\nexec ./runtime/node --report-exclude-env --report-exclude-network ./scripts/portable.ts ${arg} "$@"\n`, { mode: 0o755 });
     }
     if(windows)await writeFile(join(portable,'Update.cmd'),'@echo off\r\nsetlocal\r\n"%~dp0runtime\\node.exe" "%~dp0scripts\\update-portable.ts" %*\r\nexit /b %errorlevel%\r\n');
     else await writeFile(join(portable,'Update.sh'),'#!/usr/bin/env bash\nset -euo pipefail\ncd -- "$(dirname -- "${BASH_SOURCE[0]}")"\nexec ./runtime/node ./scripts/update-portable.ts "$@"\n',{mode:0o755});

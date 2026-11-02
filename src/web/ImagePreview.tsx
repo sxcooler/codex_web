@@ -19,10 +19,10 @@ function NativeImage({src,label}:{src:string;label:string}){
   </figure>;
 }
 
-export function ImagePreview({id,path,version,revision,repository}:{id:string;path:string;version:string;revision?:string;repository?:string}){
+export function ImagePreview({id,path,version,revision,repository,fileBase='/sessions/'+encodeURIComponent(id)+'/files'}:{id:string;path:string;version:string;revision?:string;repository?:string;fileBase?:string}){
   const {t}=useLocale();
   const [status,setStatus]=useState<'loading'|'ready'|'error'>('loading');
-  const src='/api/sessions/'+encodeURIComponent(id)+'/files/image?path='+encodeURIComponent(path)+'&v='+encodeURIComponent(version)+(revision?'&revision='+encodeURIComponent(revision)+(repository!==undefined?'&repository='+encodeURIComponent(repository):''):'');
+  const src='/api'+fileBase+'/image?path='+encodeURIComponent(path)+'&v='+encodeURIComponent(version)+(revision?'&revision='+encodeURIComponent(revision)+(repository!==undefined?'&repository='+encodeURIComponent(repository):''):'');
   return <div className="image-preview">
     {status==='loading'?<p className="muted" role="status">{t('panels.image.loading')}</p>:null}
     {status==='error'?<p className="notice error" role="alert">{t('panels.image.unavailable')}</p>:null}

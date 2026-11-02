@@ -1,14 +1,17 @@
-import {test,expect,type Page,type Route} from '@playwright/test';
+import {test,expect,type Page,type Route,type Dialog} from '@playwright/test';
 
 const agent=(id:string,text:string,memoryCitation?:unknown)=>({id,type:'agentMessage',text,memoryCitation});
 const citation={entries:[{path:'MEMORY.md',lineStart:3,lineEnd:5,note:'保留原有草稿'},{path:'<img src=x onerror=alert(1)>',lineStart:8,lineEnd:8,note:'<script>window.citationExecuted=true</script> & "安全文本"'},null,{path:'bad',lineStart:'3',lineEnd:5,note:'invalid'}],threadIds:['original-thread']};
 const completed={id:'selected-turn',status:'completed',items:[{...agent('progress','中间说明'),phase:'commentary'},{type:'commandExecution',id:'cmd',command:'echo test',status:'completed'},{...agent('final','**最终回答**',citation),phase:'final_answer'},{...agent('async','异步问题'),delivery:'async',questions:[{title:'是否继续',options:['是','否']}]}]};
-async function fixture(page:Page,options:{turns?:any[];fork?:(route:Route)=>Promise<void>;listFails?:()=>boolean}={}){
+async function fixture(page:Page,options:{turns?:any[];fork?:(route:Route)=>Promise<void>;listFails?:()=>boolean;locale?:'zh-CN'|'en';forkNames?:string[];onDialog?:(dialog:Dialog)=>Promise<void>}={}){
   const posts:any[]=[],requests:string[]=[],errors:string[]=[];
+  const forked=new Map<string,string>();
   page.on('pageerror',error=>errors.push(error.message));
+  page.on('dialog',options.onDialog??(dialog=>dialog.accept()));
+  if(options.locale)await page.addInitScript(locale=>localStorage.setItem('codex-web:locale:v1',locale),options.locale);
   await page.addInitScript(()=>{
     (window as any).sources=[];(window as any).copies=[];
-    Object.defineProperty(navigator,'clipboard',{value:{writeText:async(text:string)=>(window as any).copies.push(text)}});
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>(window as any).copies.push(text)}});
     window.EventSource=class extends EventTarget{closed=false;constructor(){super();(window as any).sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}} as any;
   });
   await page.route('**/api/**',async route=>{
@@ -17,11 +20,13 @@ async function fixture(page:Page,options:{turns?:any[];fork?:(route:Route)=>Prom
     else if(path==='/api/projects')data={projects:[]};
     else if(path==='/api/sessions'){
       if(options.listFails?.())return route.fulfill({status:503,json:{error:'list unavailable'}});
-      data={data:[{id:'source-thread',name:'源会话'},{id:'new-thread',name:'新分支'}],nextCursor:null};
+      data={data:[{id:'source-thread',name:'源会话'},...(options.forkNames?[...forked].map(([id,name])=>({id,name})):[{id:'new-thread',name:'新分支'}])],nextCursor:null};
     }else if(path==='/api/sessions/source-thread/fork'){
       posts.push(route.request().postDataJSON());
+      if(options.forkNames){const id=posts.length===1?'new-thread':'new-thread-'+posts.length;forked.set(id,options.forkNames[posts.length-1]);return route.fulfill({json:{threadId:id,status:'idle'}});}
       return options.fork?options.fork(route):route.fulfill({json:{threadId:'new-thread',status:'idle'}});
     }else if(path==='/api/sessions/source-thread')data={thread:{id:'source-thread',name:'源会话',turns:options.turns??[completed]},history:{nextCursor:'older'},phase:'IDLE',pending:[],epoch:'actions',revision:0,syncCursor:'actions:0'};
+    else if(forked.has(path.slice('/api/sessions/'.length))){const id=path.slice('/api/sessions/'.length);data={thread:{id,name:forked.get(id),turns:[]},phase:'IDLE',pending:[]};}
     else if(path==='/api/sessions/new-thread')data={thread:{id:'new-thread',name:'新分支',turns:[]},phase:'IDLE',pending:[]};
     else if(path.endsWith('/history'))data={turns:[{id:'older-turn',status:'completed',items:[agent('older','历史回答',citation)]}],nextCursor:null};
     else if(path==='/api/models')data={data:[]};
@@ -31,10 +36,95 @@ async function fixture(page:Page,options:{turns?:any[];fork?:(route:Route)=>Prom
     await route.fulfill({json:data});
   });
   await page.goto('/sessions/source-thread');
-  await expect(page.getByRole('button',{name:'复制 Markdown'}).first()).toBeVisible();
+  await expect(page.locator('article.message').first()).toBeVisible();
   return {posts,requests,errors};
 }
 const message=(page:Page,text:string)=>page.locator('article.message').filter({hasText:text});
+
+async function delayedClipboard(page:Page){
+  await page.evaluate(()=>{
+    (window as any).clipboardPending=[];
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:(text:string)=>{
+      (window as any).copies.push(text);
+      return new Promise<void>((resolve,reject)=>(window as any).clipboardPending.push({resolve,reject}));
+    }}});
+  });
+}
+
+for(const {width,locale} of [{width:390,locale:'zh-CN'},{width:1440,locale:'en'}] as const)test.describe(`message actions ${width}px ${locale}`,()=>{
+  test.use({viewport:{width,height:900},hasTouch:width===390,isMobile:width===390});
+  const copyName=locale==='en'?'Copy Markdown':'复制 Markdown',forkName=locale==='en'?'Fork to a new chat':'分支到新聊天';
+  test('delayed copy feedback stays stable and never creates a fork',async({page},testInfo)=>{
+    const {posts,errors}=await fixture(page,{locale});await delayedClipboard(page);await page.evaluate(()=>document.fonts.ready);
+    const row=message(page,'最终回答').locator('.message-actions'),copy=row.getByRole('button',{name:copyName,exact:true}),fork=row.getByRole('button',{name:forkName,exact:true}),status=row.locator('.markdown-copy [role=status]');
+    const before=await Promise.all([copy.boundingBox(),fork.boundingBox()]);
+    const stable=async()=>{for(const [index,button] of [copy,fork].entries()){const box=await button.boundingBox();expect(box).not.toBeNull();for(const key of ['x','y','width','height'] as const)expect(Math.abs(box![key]-before[index]![key]),JSON.stringify({button:index,key,before:before[index],after:box})).toBeLessThanOrEqual(1);}};
+    if(width===390){expect(await page.evaluate(()=>matchMedia('(pointer: coarse)').matches)).toBe(true);for(const box of before){expect(box!.height).toBeGreaterThanOrEqual(44);expect(box!.width).toBeGreaterThanOrEqual(44);}}
+    await copy.evaluate(button=>{(button as HTMLButtonElement).click();(button as HTMLButtonElement).click();});
+    await expect(status).toHaveText(locale==='en'?'Copying…':'正在复制…');
+    await expect(copy).toBeDisabled();await expect(copy).toHaveAttribute('aria-busy','true');
+    expect(await page.evaluate(()=>(window as any).copies)).toEqual(['**最终回答**']);await stable();
+    await page.screenshot({path:testInfo.outputPath('copy-pending.png')});
+    await page.evaluate(()=>(window as any).clipboardPending[0].resolve());
+    await expect(status).toHaveText(locale==='en'?'Copied':'已复制');await expect(copy).toBeEnabled();await stable();
+    await copy.focus();await copy.press('Enter');
+    await expect(status).toHaveText(locale==='en'?'Copying…':'正在复制…');await expect(copy).toBeDisabled();await stable();
+    await page.evaluate(()=>(window as any).clipboardPending[1].reject(Error('clipboard rejected')));
+    await expect(status).toHaveText(locale==='en'?'Copy failed. Select and copy the text.':'复制失败，请选择文本复制');
+    await expect(copy).toBeEnabled();await stable();await expect(page).toHaveURL(/source-thread$/);
+    await page.screenshot({path:testInfo.outputPath('copy-failed.png')});
+    expect(posts).toHaveLength(0);expect(errors).toEqual([]);
+  });
+
+  test('fork cancellation sends nothing and keyboard acceptance sends once',async({page})=>{
+    const dialogs:string[]=[],answers=[false,true];
+    const {posts}=await fixture(page,{locale,onDialog:async dialog=>{expect(dialog.type()).toBe('confirm');dialogs.push(dialog.message());await (answers.shift()?dialog.accept():dialog.dismiss());}});
+    const fork=page.getByRole('button',{name:forkName,exact:true});
+    await fork.focus();await fork.press('Enter');
+    await expect.poll(()=>dialogs.length).toBe(1);
+    expect(dialogs[0]).toBe(locale==='en'?'Create a new conversation from this reply?':'从这条回复创建新的分支会话？');
+    expect(posts).toHaveLength(0);await expect(page).toHaveURL(/source-thread$/);await expect(fork).toBeEnabled();await expect(fork).toBeFocused();
+    await fork.press('Space');await expect(page).toHaveURL(/new-thread$/);
+    expect(dialogs).toHaveLength(2);expect(posts).toHaveLength(1);
+  });
+});
+
+test('a late copy result cannot replace feedback for updated message text',async({page})=>{
+  const {posts,errors}=await fixture(page);await delayedClipboard(page);
+  const copy=message(page,'最终回答').getByRole('button',{name:'复制 Markdown',exact:true});await copy.click();
+  await expect(message(page,'最终回答').locator('.markdown-copy [role=status]')).toHaveText('正在复制…');
+  await page.evaluate(turn=>(window as any).sources.findLast((source:any)=>!source.closed).dispatchEvent(new MessageEvent('change',{data:JSON.stringify({id:'actions:1',threadId:'source-thread',revision:1,kind:'turn',patch:{turn}})})),{...completed,items:completed.items.map(item=>item.id==='final'?{...item,text:'更新后的回答'}:item)});
+  const updated=message(page,'更新后的回答'),button=updated.getByRole('button',{name:'复制 Markdown',exact:true}),status=updated.locator('.markdown-copy [role=status]');
+  await expect(button).toBeEnabled();await expect(status).toBeEmpty();await button.click();await expect(status).toHaveText('正在复制…');
+  await page.evaluate(()=>(window as any).clipboardPending[0].resolve());
+  await expect(status).toHaveText('正在复制…');await expect(button).toBeDisabled();
+  await page.evaluate(()=>(window as any).clipboardPending[1].resolve());await expect(status).toHaveText('已复制');
+  expect(await page.evaluate(()=>(window as any).copies)).toEqual(['**最终回答**','更新后的回答']);expect(posts).toHaveLength(0);expect(errors).toEqual([]);
+});
+
+for(const width of [390,1440])for(const locale of ['zh-CN','en'] as const)test(`numbered fork titles remain in the header and sidebar after refresh at ${width}px ${locale}`,async({page},testInfo)=>{
+  await page.setViewportSize({width,height:900});
+  const names=['源会话（1）','源会话（2）'];
+  const {posts,errors}=await fixture(page,{locale,forkNames:names});
+  for(const [index,name] of names.entries()){
+    if(index)await page.goto('/sessions/source-thread');
+    const button=page.getByRole('button',{name:locale==='en'?'Fork to a new chat':'分支到新聊天',exact:true});
+    await button.focus();await expect(button).toBeFocused();await button.press('Enter');
+    const id=index?'new-thread-2':'new-thread';
+    await expect(page).toHaveURL(new RegExp('/sessions/'+id+'$'));
+    await expect(page.locator('h1.session-title')).toHaveText(name);
+    await page.reload();
+    await expect(page.locator('h1.session-title')).toHaveText(name);
+    if(index)await page.screenshot({path:testInfo.outputPath('numbered-fork-header.png')});
+    if(width===390)await page.locator('[data-panel-toggle="left"]').click();
+    await expect(page.locator('.recent .session-link.selected')).toHaveText(name);
+    await expect(page.locator('.recent .session-link.selected')).toHaveAttribute('href','/sessions/'+id);
+    await expect(page.getByRole('link',{name:'源会话',exact:true})).toBeVisible();
+    if(index)await page.screenshot({path:testInfo.outputPath('numbered-fork-sidebar.png')});
+    if(width===390)await page.keyboard.press('Escape');
+  }
+  expect(posts).toHaveLength(2);expect(errors).toEqual([]);
+});
 
 test('fork appears only on the final ordinary assistant of completed turns',async({page})=>{
   await fixture(page,{turns:[completed,{id:'running',status:'inProgress',items:[agent('live','正在生成',citation)]},{id:'failed',status:'failed',items:[agent('failed-agent','失败回答')]}]});
@@ -119,13 +209,13 @@ for(const outcome of ['success','partial'])test(`late ${outcome} response does n
   const {posts}=await fixture(page,{fork:route=>new Promise<void>(resolve=>{respond=async()=>{await route.fulfill(outcome==='success'?{json:{threadId:'new-thread',status:'idle'}}:{status:504,json:{error:'readback failed',code:'RUNTIME_RESULT_UNKNOWN',partial:{threadId:'new-thread'}}});resolve();};})});
   await page.locator('#message').fill('离开后保留');
   await page.getByRole('button',{name:'分支到新聊天',exact:true}).click();await expect.poll(()=>posts.length).toBe(1);
-  await page.getByRole('button',{name:'＋ 新任务',exact:true}).click();await expect(page).toHaveURL(/\/$/);
+  await page.getByRole('link',{name:'＋ 新任务',exact:true}).click();await expect(page).toHaveURL(/\/$/);
   await page.getByRole('link',{name:'源会话',exact:true}).click();
   await expect(page.getByRole('button',{name:'分支到新聊天',exact:true})).toBeDisabled();
   await page.locator('#message').fill('返回后新草稿');
   await respond();await expect(page.getByRole('button',{name:'打开已创建的会话'})).toBeVisible();
   await expect(page).toHaveURL(/source-thread$/);await expect(page.locator('#message')).toHaveValue('返回后新草稿');
-  await page.getByRole('button',{name:'＋ 新任务',exact:true}).click();await page.getByRole('link',{name:'源会话',exact:true}).click();
+  await page.getByRole('link',{name:'＋ 新任务',exact:true}).click();await page.getByRole('link',{name:'源会话',exact:true}).click();
   await expect(page.getByRole('button',{name:'打开已创建的会话'})).toBeVisible();expect(posts).toHaveLength(1);
 });
 

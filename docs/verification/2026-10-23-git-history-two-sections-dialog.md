@@ -1,6 +1,6 @@
 # Git 日志两区与直接预览验收
 
-日期：2026-10-23。基线 `da21751`；对应 [spec](../../codex-drive/specs/2026-10-23-git-history-two-sections-dialog.arch.md) 与 [plan](../superpowers/plans/2026-10-23-git-history-two-sections-dialog.md)。
+日期：2026-10-23。基线 `da21751`；对应 [spec](../design/2026-10-23-git-history-two-sections-dialog.arch.md) 与 [plan](../superpowers/plans/2026-10-23-git-history-two-sections-dialog.md)。
 
 ## 最终行为
 
